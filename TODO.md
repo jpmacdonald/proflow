@@ -7,25 +7,47 @@
 - [x] Loading spinner and error modal overlays
 
 ## High Priority
-- [ ] Playlist generation flow (`g`): confirm modal, respect ignored/completed, produce playlist output
-- [ ] ProPresenter export pipeline: wire builder/convert to write `.pro` / `.proplaylist` from item/editor data
-- [ ] Cache/persist file index & match results to avoid cold-start rescans
-- [ ] Command/help modal with key cheatsheet per mode
-- [ ] Add “Create New File” entry in matching files list (parity with `c`)
-- [ ] Item filtering toggles for boilerplate “Other” items (configurable list, show/hide)
 
-## UI / UX
+### Error Handling
+- [ ] Expand `Error` enum with specific variants (network, parse, file, config)
+- [ ] Add retry/backoff for Planning Center API failures
+- [ ] Clearer error messages with actionable context (e.g., "Check PCO_APP_ID env var")
+- [ ] Propagate errors idiomatically with `?` instead of silent `.ok()` swallows
+
+### Fuzzy Search & Ranking
+- [ ] Persist file index to disk (SQLite or bincode cache) to avoid cold-start rescans
+- [ ] Store item→file selection history in cache so previously matched files rank first
+- [ ] Boost files that have been matched to *any* item with similar title across sessions
+- [ ] Add configurable ranking weights (exact match, prefix, fuzzy, frequency)
+- [ ] Async index building so UI doesn't block on large libraries
+
+### Playlist & Export
+- [ ] Playlist generation flow (`g`): confirm modal, respect ignored/completed, produce `.proplaylist`
+- [ ] ProPresenter export pipeline: wire builder/convert to write `.pro` files from editor data
+- [ ] Validate generated files against real ProPresenter imports
+
+### UI / UX
+- [ ] Command/help modal with key cheatsheet per mode
+- [ ] Add "Create New File" entry in matching files list (parity with `c`)
+- [ ] Item filtering toggles for boilerplate "Other" items (configurable list, show/hide)
 - [ ] Better empty-state/missing-match guidance (modal or inline message)
 - [ ] Richer status bar (active library path, API state, current plan info)
-- [ ] Optional modal file picker when many matches
 
-## Editor
+## Code Quality
+
+### Refactoring
+- [ ] Modularize `app.rs` (~2000 lines) into focused submodules (input, state, commands)
+- [ ] Replace `match _ => {}` arms with `if let` or early returns where appropriate
+- [ ] Reduce `.clone()` calls by using references and borrowing where possible
+- [ ] Use newtypes for IDs (`ServiceId`, `PlanId`, `ItemId`) instead of raw `String`
+- [ ] Remove leading underscores on genuinely unused struct fields; gate with `#[allow(dead_code)]` if intentional
+
+### Editor
 - [ ] Smart title template insertion when creating Title/Other items (cursor placement)
 - [ ] Additional templates by category (song/scripture/graphic)
 - [ ] Wrap guide presets or per-item wrap defaults
 
-## Planning Center
-- [ ] Retry/backoff and clearer error messages for API failures
+### Planning Center
 - [ ] Tests around item parsing (scripture + arrangement lyrics)
 - [ ] Manual reclassification of items (hotkey to change Category)
 
