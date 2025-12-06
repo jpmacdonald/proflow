@@ -44,6 +44,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_error_message(f, error);
     }
 
+    // Draw help modal if shown
+    if app.show_help {
+        draw_help_modal(f, app);
+    }
+
     // Draw command/status bar at the bottom (except in splash screen)
     if app.mode != AppMode::Splash {
         draw_command_bar(f, app, chunks[1]);
@@ -351,4 +356,128 @@ fn draw_error_message(f: &mut Frame, message: &str) {
         .alignment(Alignment::Center);
     
     f.render_widget(hint, inner_area[2]);
+}
+
+// Draw the help modal with keybindings
+fn draw_help_modal(f: &mut Frame, app: &App) {
+    let size = f.size();
+    
+    // Calculate modal dimensions
+    let width = 60.min(size.width.saturating_sub(4));
+    let height = 24.min(size.height.saturating_sub(4));
+    
+    let area = Rect {
+        x: (size.width.saturating_sub(width)) / 2,
+        y: (size.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    
+    // Create the modal block
+    let block = Block::default()
+        .title(Span::styled(" Help - Keybindings ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    
+    // Inner area for content
+    let inner_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1)])
+        .margin(1)
+        .split(area)[0];
+    
+    // Build help content based on current mode
+    let help_lines = build_help_content(app);
+    
+    let help_text: Vec<Line> = help_lines.iter()
+        .map(|(key, desc, is_header)| {
+            if *is_header {
+                Line::from(vec![
+                    Span::styled(*key, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(format!("{:>12}", key), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::raw("  "),
+                    Span::styled(*desc, Style::default().fg(Color::White)),
+                ])
+            }
+        })
+        .collect();
+    
+    let paragraph = Paragraph::new(help_text)
+        .wrap(Wrap { trim: true });
+    
+    f.render_widget(paragraph, inner_area);
+}
+
+// Build help content based on current mode
+fn build_help_content(app: &App) -> Vec<(&'static str, &'static str, bool)> {
+    let mut lines = vec![
+        ("── Global ──", "", true),
+        ("F1 / ?", "Show this help", false),
+        (":", "Enter command mode", false),
+        (":q / :quit", "Quit application", false),
+        (":reload", "Reload data from API", false),
+        ("Esc", "Go back / dismiss modal", false),
+        ("", "", false),
+    ];
+    
+    match app.mode {
+        AppMode::ServiceList => {
+            lines.extend([
+                ("── Services & Plans ──", "", true),
+                ("↑/↓ or j/k", "Navigate items", false),
+                ("←/→ or h/l", "Switch between panes", false),
+                ("Tab", "Switch focus", false),
+                ("Enter", "Select plan", false),
+            ]);
+        }
+        AppMode::ItemList => {
+            lines.extend([
+                ("── Items & Files ──", "", true),
+                ("↑/↓ or j/k", "Navigate items", false),
+                ("Tab / →", "Switch to file list", false),
+                ("Enter", "Select file for item", false),
+                ("Del / Backspace", "Toggle ignore item", false),
+                ("c", "Open editor for item", false),
+                ("g", "Generate playlist", false),
+            ]);
+        }
+        AppMode::Editor => {
+            lines.extend([
+                ("── Editor ──", "", true),
+                ("↑/↓/←/→", "Move cursor", false),
+                ("Shift+Arrows", "Select text", false),
+                ("Ctrl+A", "Select all", false),
+                ("Ctrl+C/X/V", "Copy/Cut/Paste", false),
+                ("Alt+←/→", "Adjust wrap column", false),
+                ("", "", false),
+                ("── Commands ──", "", true),
+                (":v1, :v2...", "Insert verse marker", false),
+                (":c, :c1...", "Insert chorus marker", false),
+                (":br", "Insert bridge marker", false),
+                (":split", "Split at cursor", false),
+                (":wrap", "Apply word wrap", false),
+                (":wrap N", "Set wrap column to N", false),
+                (":export/:save", "Export as .pro file", false),
+            ]);
+        }
+        AppMode::Splash => {
+            lines.extend([
+                ("── Splash ──", "", true),
+                ("Any key", "Continue to app", false),
+            ]);
+        }
+    }
+    
+    // Add dismiss hint at the end
+    lines.push(("", "", false));
+    lines.push(("Press Esc, F1 or ? to close", "", true));
+    
+    lines
 }

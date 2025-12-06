@@ -95,6 +95,7 @@ pub struct App {
     async_task_rx: mpsc::Receiver<AppUpdate>,
     pub is_loading: bool,
     pub error_message: Option<String>,
+    pub show_help: bool,
     pub library_path: Option<PathBuf>,
     pub initialized: bool,
     pub file_index: Option<FileIndex>,
@@ -201,6 +202,7 @@ impl App {
             async_task_rx,
             is_loading: false,
             error_message: None,
+            show_help: false,
             library_path,
             initialized: false,
             file_index: None,
@@ -220,12 +222,26 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        // First, check if we need to dismiss an error message
+        // First, check if help modal is shown
+        if self.show_help {
+            if key.code == KeyCode::Esc || key.code == KeyCode::F(1) || key.code == KeyCode::Char('?') {
+                self.show_help = false;
+            }
+            return; // Don't process other keys while help is displayed
+        }
+
+        // Check if we need to dismiss an error message
         if self.error_message.is_some() {
             if key.code == KeyCode::Esc {
                 self.error_message = None;
             }
             return; // Don't process other keys while error is displayed
+        }
+
+        // Global help shortcut (? or F1)
+        if key.code == KeyCode::F(1) || (key.code == KeyCode::Char('?') && self.mode != AppMode::Editor) {
+            self.show_help = true;
+            return;
         }
 
         // Then, handle global commands
@@ -865,7 +881,8 @@ impl App {
     }
 
     fn execute_editor_command(&mut self) {
-        match self.editor.command_buffer.as_str() {
+        let cmd = self.editor.command_buffer.clone();
+        match cmd.as_str() {
             // "v1" => {
             //     self.insert_verse_marker("Verse 1");
             // }
@@ -881,14 +898,62 @@ impl App {
                 // Apply word wrapping at the current wrap column
                 self.editor.content = self.wrap_text(&self.editor.content, self.editor.wrap_column);
             }
-            cmd if cmd.starts_with("wrap ") => {
-                match cmd[5..].parse::<usize>() {
-                    Ok(col) => self.editor.wrap_column = col,
-                    Err(_) => {} // Invalid wrap column, do nothing
+            "export" | "save" => {
+                self.export_editor_to_pro();
+            }
+            _ if cmd.starts_with("wrap ") => {
+                if let Ok(col) = cmd[5..].parse::<usize>() {
+                    self.editor.wrap_column = col;
                 }
+            }
+            _ if cmd.starts_with("export ") || cmd.starts_with("save ") => {
+                // Export with custom filename
+                let filename = cmd.split_whitespace().nth(1).unwrap_or("presentation").to_string();
+                self.export_editor_to_pro_with_name(&filename);
             }
             _ => {}
         }
+    }
+
+    fn export_editor_to_pro(&mut self) {
+        // Get the item title as the presentation name
+        let name = self.get_current_item_title()
+            .unwrap_or_else(|| "Untitled".to_string());
+        self.export_editor_to_pro_with_name(&name);
+    }
+
+    fn export_editor_to_pro_with_name(&mut self, name: &str) {
+        use crate::propresenter::export::export_to_pro_file;
+        
+        // Determine output path
+        let output_path = self.get_pro_output_path(name);
+        
+        match export_to_pro_file(name, &self.editor.content, &output_path) {
+            Ok(()) => {
+                self.error_message = Some(format!("Exported: {}", output_path.display()));
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Export failed: {}", e));
+            }
+        }
+    }
+
+    fn get_current_item_title(&self) -> Option<String> {
+        let item_idx = self.item_list_state.selected()?;
+        self.items.get(item_idx).map(|i| i.title.clone())
+    }
+
+    fn get_pro_output_path(&self, name: &str) -> std::path::PathBuf {
+        // Use library path or fall back to current directory
+        let base_path = self.library_path.clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        
+        // Sanitize filename
+        let safe_name: String = name.chars()
+            .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+            .collect();
+        
+        base_path.join(format!("{}.pro", safe_name))
     }
 
     // Extract text wrapping logic to a separate function
@@ -1301,12 +1366,86 @@ impl App {
             .count();
             
         if uncompleted_count > 0 {
-            // TODO: Show confirmation modal
-            self.error_message = Some(format!("Warning: {} items are not matched or marked to ignore!", uncompleted_count));
-        } else {
-            // TODO: Generate playlist using item data and matched files from maps, skipping ignored items
-            self.error_message = Some("Playlist generation not implemented yet.".to_string());
+            self.error_message = Some(format!(
+                "Warning: {} items are not matched or marked to ignore! Press 'g' again to force generate.", 
+                uncompleted_count
+            ));
+            return;
         }
+
+        self.generate_playlist();
+    }
+
+    fn generate_playlist(&mut self) {
+        use crate::propresenter::playlist::{build_playlist, write_playlist_file, PlaylistEntry};
+        
+        // Collect entries for non-ignored items with matched files
+        let entries: Vec<PlaylistEntry> = self.items.iter()
+            .filter(|item| {
+                let is_ignored = *self.item_ignored.get(&item.id).unwrap_or(&false);
+                !is_ignored
+            })
+            .filter_map(|item| {
+                // Get the matched file path
+                let matched_path = self.item_matched_file.get(&item.id)?.as_ref()?;
+                Some(PlaylistEntry {
+                    name: item.title.clone(),
+                    presentation_path: matched_path.clone(),
+                    arrangement_uuid: None,
+                })
+            })
+            .collect();
+
+        if entries.is_empty() {
+            self.error_message = Some("No matched files to add to playlist.".to_string());
+            return;
+        }
+
+        // Generate playlist name from plan date/title
+        let playlist_name = self.get_current_plan_title()
+            .unwrap_or_else(|| "Service Playlist".to_string());
+
+        // Determine output path
+        let output_path = self.get_playlist_output_path(&playlist_name);
+
+        // Build and write the playlist
+        let playlist = build_playlist(&playlist_name, &entries);
+        
+        match write_playlist_file(&playlist, &output_path) {
+            Ok(()) => {
+                self.error_message = Some(format!(
+                    "Playlist saved: {} ({} items)", 
+                    output_path.display(), 
+                    entries.len()
+                ));
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to write playlist: {}", e));
+            }
+        }
+    }
+
+    fn get_current_plan_title(&self) -> Option<String> {
+        let plan_idx = self.plan_list_state.selected()?;
+        let service_id = self.active_service_id.as_ref()?;
+        
+        self.plans.iter()
+            .filter(|p| &p.service_id == service_id)
+            .nth(plan_idx)
+            .map(|p| format!("{} - {}", p.title, p.date.format("%Y-%m-%d")))
+    }
+
+    fn get_playlist_output_path(&self, name: &str) -> std::path::PathBuf {
+        // Use library path or fall back to current directory
+        let base_path = self.library_path.clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        
+        // Sanitize filename
+        let safe_name: String = name.chars()
+            .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+            .collect();
+        
+        base_path.join(format!("{}.proplaylist", safe_name))
     }
 
     /// Write text to system clipboard (silently ignores errors)

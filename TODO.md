@@ -5,13 +5,17 @@
 - [x] Sophisticated file matcher (normalization, liturgical boosts, hymn numbers, selection memory)
 - [x] Ignore toggle for items (Delete/Backspace) with visuals and completion interplay
 - [x] Loading spinner and error modal overlays
+- [x] Playlist generation (`g` key) - produces `.proplaylist` files
+- [x] ProPresenter export - `:export` command in editor writes `.pro` files
+- [x] Help modal (`F1` or `?`) with context-sensitive keybindings
+- [x] API retry/backoff for Planning Center failures (exponential backoff, 3 retries)
 
 ## High Priority
 
 ### Error Handling
-- [ ] Expand `Error` enum with specific variants (network, parse, file, config)
-- [ ] Add retry/backoff for Planning Center API failures
-- [ ] Clearer error messages with actionable context (e.g., "Check PCO_APP_ID env var")
+- [x] Expand `Error` enum with specific variants (network, parse, file, config)
+- [x] Add retry/backoff for Planning Center API failures
+- [x] Clearer error messages with actionable context (e.g., "Check PCO_APP_ID env var")
 - [ ] Propagate errors idiomatically with `?` instead of silent `.ok()` swallows
 
 ### Fuzzy Search & Ranking
@@ -22,12 +26,12 @@
 - [ ] Async index building so UI doesn't block on large libraries
 
 ### Playlist & Export
-- [ ] Playlist generation flow (`g`): confirm modal, respect ignored/completed, produce `.proplaylist`
-- [ ] ProPresenter export pipeline: wire builder/convert to write `.pro` files from editor data
+- [x] Playlist generation flow (`g`): confirm modal, respect ignored/completed, produce `.proplaylist`
+- [x] ProPresenter export pipeline: wire builder/convert to write `.pro` files from editor data
 - [ ] Validate generated files against real ProPresenter imports
 
 ### UI / UX
-- [ ] Command/help modal with key cheatsheet per mode
+- [x] Command/help modal with key cheatsheet per mode
 - [ ] Add "Create New File" entry in matching files list (parity with `c`)
 - [ ] Item filtering toggles for boilerplate "Other" items (configurable list, show/hide)
 - [ ] Better empty-state/missing-match guidance (modal or inline message)

@@ -5,19 +5,21 @@ Terminal UI to map Planning Center plans to existing ProPresenter library files 
 ## Current Capabilities
 
 - Splash screen → Services/Plans → Items/Matching Files → Editor flow.
-- Planning Center: fetches service types and plans when `PCO_APP_ID`/`PCO_SECRET` are set; otherwise uses built-in dummy data so the UI can be exercised offline.
+- Planning Center: fetches service types and plans when `PCO_APP_ID`/`PCO_SECRET` are set; otherwise uses built-in dummy data so the UI can be exercised offline. Includes retry/backoff for API failures.
 - ProPresenter library discovery: auto-detects `Documents/ProPresenter/Libraries/Default`, `PROPRESENTER_PATH`, or `LIBRARY_DIR`. Builds a `.pro` index on first entry past the splash.
 - **Persistent file index caching**: saves index and selection history to `.proflow_cache.json` in the library directory, avoiding cold-start rescans and remembering previously matched files across sessions.
 - File matching: normalization + fuzzy scoring with hymn-number detection, composite title handling, liturgical boosts, and selection frequency boosting.
 - Item actions: mark complete, ignore (Delete/Backspace), select a matching file, or open an editor buffer (`c`) with optional preloaded song lyrics.
-- Editor: basic text editing, selection, clipboard, wrap guide (Alt+←/→), verse markers via `:` commands, and wrap/split helpers.
+- **Playlist generation** (`g`): generates `.proplaylist` files from matched items, respecting ignored items.
+- **ProPresenter export** (`:export` in editor): converts editor content with verse markers to `.pro` files.
+- Editor: basic text editing, selection, clipboard, wrap guide (Alt+←/→), verse markers via `:` commands, wrap/split helpers, and export.
+- **Help modal** (`F1` or `?`): context-sensitive keybinding reference for each mode.
 - Status overlays: loading spinner and dismissible error modal.
 
 ## Known Gaps
 
-- Playlist generation (`g`) is stubbed (shows warning).
-- No ProPresenter export/playlist writing yet; builder/convert types exist but are not wired to UI.
-- Help/modal UX is minimal; no mouse support.
+- No mouse support.
+- Validation of exported `.pro` files against real ProPresenter imports pending.
 
 ## Setup
 
@@ -40,11 +42,11 @@ Terminal UI to map Planning Center plans to existing ProPresenter library files 
 ## UI & Keys (quick reference)
 
 - **Navigation**: arrows / `h` `j` `k` `l`, `Tab` to switch panes.
-- **Global**: `:` enters command mode; `:q` quit, `:reload` refresh data.
+- **Global**: `F1` or `?` for help modal; `:` enters command mode; `:q` quit, `:reload` refresh data.
 - **Service/Plans**: Enter to drill into a plan.
-- **Items pane**: Enter/Tab to focus files; Delete/Backspace toggles ignore; `c` open editor; `g` (stub) playlist.
+- **Items pane**: Enter/Tab to focus files; Delete/Backspace toggles ignore; `c` open editor; `g` generate playlist.
 - **Files pane**: Enter selects file for the current item (marks complete, records preference for future ranking).
-- **Editor**: Esc back; Shift+arrows for selection; Ctrl/Cmd+C/X/V clipboard; Alt+←/→ wrap column; `:split`, `:wrap`/`wrap 90`, verse markers like `:v1`, `:c`.
+- **Editor**: Esc back; Shift+arrows for selection; Ctrl/Cmd+C/X/V clipboard; Alt+←/→ wrap column; `:split`, `:wrap`/`wrap 90`, verse markers like `:v1`, `:c`; `:export` or `:save` to write `.pro` file.
 
 ## Architecture Notes
 

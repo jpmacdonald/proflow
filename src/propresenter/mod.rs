@@ -1,15 +1,17 @@
 //! ProPresenter file format support.
 //!
 //! This module provides types and utilities for reading, writing, and
-//! manipulating ProPresenter presentation files (.pro).
+//! manipulating ProPresenter presentation files (.pro) and playlist files (.proplaylist).
 
 pub mod analyze;
 pub mod builder;
 pub mod convert;
 pub mod data_model;
 pub mod deserialize;
+pub mod export;
 pub mod generated;
 pub mod parser;
+pub mod playlist;
 pub mod rtf;
 pub mod serialize;
 pub mod uuid;

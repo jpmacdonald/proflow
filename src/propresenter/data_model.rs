@@ -250,6 +250,12 @@ pub struct Color {
     pub alpha: f64,
 }
 
+impl Default for Color {
+    fn default() -> Self {
+        Self { red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0 }
+    }
+}
+
 /// Represents an element that can appear on a slide
 #[derive(Debug, Clone)]
 pub enum Element {

@@ -3,12 +3,18 @@ use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration as StdDuration;
 use futures::future;
+use tokio::time::sleep;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::planning_center::types::*;
 
 const BASE_URL: &str = "https://api.planningcenteronline.com/services/v2";
+
+/// Retry configuration for API requests
+const MAX_RETRIES: u32 = 3;
+const INITIAL_BACKOFF_MS: u64 = 500;
+const MAX_BACKOFF_MS: u64 = 10_000;
 
 /// Client for accessing Planning Center Online API
 ///
@@ -39,51 +45,85 @@ impl PlanningCenterClient {
         !self.app_id.is_empty() && !self.secret.is_empty()
     }
 
-    /// Make an authenticated GET request to the PCO API
+    /// Make an authenticated GET request to the PCO API with retry/backoff
     async fn get(&self, path: &str) -> Result<Value> {
-        let url = format!("{}{}", BASE_URL, path);
-        let resp = self.client
-            .get(&url)
-            .basic_auth(&self.app_id, Some(&self.secret))
-            .header("Content-Type", "application/json")
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("Request to {} failed: {}", path, e)))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(Error::pco_status(
-                format!("Request to {} returned {}", path, status),
-                status.as_u16(),
-            ));
-        }
-
-        resp.json().await
-            .map_err(|e| Error::parse(format!("Invalid JSON from {}: {}", path, e), None))
+        self.get_with_retry(path, &[]).await
     }
 
-    /// Make an authenticated GET request with query parameters
+    /// Make an authenticated GET request with query parameters and retry/backoff
     async fn get_with_query(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
-        let url = format!("{}{}", BASE_URL, path);
-        let resp = self.client
-            .get(&url)
-            .basic_auth(&self.app_id, Some(&self.secret))
-            .header("Content-Type", "application/json")
-            .query(query)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("Request to {} failed: {}", path, e)))?;
+        self.get_with_retry(path, query).await
+    }
 
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(Error::pco_status(
-                format!("Request to {} returned {}", path, status),
-                status.as_u16(),
-            ));
+    /// Internal method that performs the actual request with retry logic
+    async fn get_with_retry(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
+        let url = format!("{}{}", BASE_URL, path);
+        let mut last_error: Option<Error> = None;
+        let mut backoff_ms = INITIAL_BACKOFF_MS;
+
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                tracing::info!("Retrying request to {} (attempt {}/{})", path, attempt + 1, MAX_RETRIES + 1);
+                sleep(StdDuration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);
+            }
+
+            let request = self.client
+                .get(&url)
+                .basic_auth(&self.app_id, Some(&self.secret))
+                .header("Content-Type", "application/json");
+            
+            let request = if query.is_empty() {
+                request
+            } else {
+                request.query(query)
+            };
+
+            match request.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    
+                    // Don't retry client errors (4xx) except 429 (rate limit)
+                    if status.is_client_error() && status.as_u16() != 429 {
+                        return Err(Error::pco_status(
+                            format!("Request to {} returned {}", path, status),
+                            status.as_u16(),
+                        ));
+                    }
+                    
+                    // Retry on server errors (5xx) or rate limiting (429)
+                    if status.is_server_error() || status.as_u16() == 429 {
+                        last_error = Some(Error::pco_status(
+                            format!("Request to {} returned {}", path, status),
+                            status.as_u16(),
+                        ));
+                        continue;
+                    }
+                    
+                    if !status.is_success() {
+                        return Err(Error::pco_status(
+                            format!("Request to {} returned {}", path, status),
+                            status.as_u16(),
+                        ));
+                    }
+
+                    return resp.json().await
+                        .map_err(|e| Error::parse(format!("Invalid JSON from {}: {}", path, e), None));
+                }
+                Err(e) => {
+                    // Network errors are retryable
+                    if e.is_timeout() || e.is_connect() {
+                        last_error = Some(Error::Network(format!("Request to {} failed: {}", path, e)));
+                        continue;
+                    }
+                    // Other errors are not retryable
+                    return Err(Error::Network(format!("Request to {} failed: {}", path, e)));
+                }
+            }
         }
 
-        resp.json().await
-            .map_err(|e| Error::parse(format!("Invalid JSON from {}: {}", path, e), None))
+        // All retries exhausted
+        Err(last_error.unwrap_or_else(|| Error::Network(format!("Request to {} failed after {} retries", path, MAX_RETRIES))))
     }
 
     /// Get upcoming services and plans using concurrent API calls
