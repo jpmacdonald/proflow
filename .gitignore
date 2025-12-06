@@ -1,0 +1,105 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+*.so
+*.dll
+*.dylib
+
+# Cargo lock file (keep this for applications, uncomment for libraries)
+# Cargo.lock
+
+# Debug files
+*.log
+*.log.*
+
+# Local configuration
+.env
+.env.*
+config.toml
+
+# Editor files
+## VSCode
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.default
+!.vscode/tasks.json.default
+!.vscode/launch.json.default
+
+## Cursor
+.cursor/
+*.cursor-*.log
+
+## Vim/Neovim
+*.swp
+*.swo
+*~
+.netrwhist
+
+## JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+out/
+
+# Operating system files
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+## Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+## Linux
+.directory
+.Trash-*
+
+# Build artifacts
+build/
+dist/
+*.exe
+*.out
+pkg/
+
+# Clipboard files (for clipboard testing)
+*.clipboard-temp
+
+# Terminal logs
+*.terminal-log
+*.ttyrecord
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+.temp/
+.tmp/
+tmp/
+
+# Dependency directories
+vendor/
+node_modules/
+jspm_packages/
+
+# Backup files
+**/*~
+**/*.bak
+**/*.bakup 
