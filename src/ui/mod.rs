@@ -39,14 +39,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_loading_indicator(f);
     }
 
-    // Draw error message if present
+    // Draw status/info modal (blocking)
+    if let Some(status) = &app.status_message {
+        draw_status_message(f, status);
+        return;
+    }
+    // Draw error message if present (blocking)
     if let Some(error) = &app.error_message {
         draw_error_message(f, error);
+        return;
     }
 
     // Draw help modal if shown
     if app.show_help {
         draw_help_modal(f, app);
+    }
+
+    // Draw version picker if active
+    if app.version_picker_active {
+        draw_version_picker(f, app);
     }
 
     // Draw command/status bar at the bottom (except in splash screen)
@@ -77,12 +88,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 // Draw the command bar (which shows help/status by default or command input when active)
 fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
-    let title = if app.is_global_command_mode { "Command" } else { "Commands/Status" };
+    let title = if app.is_global_command_mode { 
+        "Command" 
+    } else if app.file_search_active { 
+        "Search Files" 
+    } else { 
+        "Commands/Status" 
+    };
+    
+    let border_color = if app.file_search_active { Color::Cyan } else { Color::Yellow };
     
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(Span::styled(title, Style::default().fg(Color::Yellow)));
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(title, Style::default().fg(border_color)));
     
     f.render_widget(block, area);
     
@@ -95,7 +114,24 @@ fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
         .margin(1)  // Add a margin of 1 to account for the border
         .split(area)[0];
     
-    if app.is_global_command_mode {
+    if app.mode == AppMode::Editor && app.editor.is_command_mode {
+        // Editor-local command input
+        let command = Paragraph::new(format!(" :{}", app.editor.command_buffer))
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(command, inner_area);
+    } else if app.mode == AppMode::Editor && app.editor.is_command_mode {
+        // Editor-local command input
+        let command = Paragraph::new(format!(" :{}", app.editor.command_buffer))
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(command, inner_area);
+        // Place cursor after command text
+        f.set_cursor(inner_area.left() + app.editor.command_buffer.len() as u16 + 2, inner_area.top());
+    } else if app.file_search_active {
+        // Show file search input
+        let search = Paragraph::new(format!(" /{}", app.file_search_query))
+            .style(Style::default().fg(Color::Cyan));
+        f.render_widget(search, inner_area);
+    } else if app.is_global_command_mode {
         // Show command input with more left padding
         let command = Paragraph::new(format!(" :{}", app.global_command_buffer))
             .style(Style::default().fg(Color::Yellow));
@@ -113,29 +149,38 @@ fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
             ]),
             AppMode::ItemList => create_help_text(&[
                 ("ESC", "Back"),
-                ("Tab/Enter", "Switch focus"),
-                ("c", "Create"),
+                ("Enter", "Match"),
+                ("e", "Edit"),
+                ("t", "Type"),
+                ("Space", "Skip"),
                 ("g", "Generate"),
-                (":reload", "Reload data"),
-                (":q", "Quit"),
             ]),
             AppMode::Editor => {
                 let status = format!(
-                    "Line: {}, Col: {} | Wrap: {}",
+                    "Ln {}, Col {} | Wrap: {}",
                     app.editor.cursor_y + 1,
                     app.editor.cursor_x + 1,
                     app.editor.wrap_column
                 );
 
-                let mut text = create_help_text(&[
-                    ("ESC", "Back"),
-                    ("Ctrl+C/X/V", "Copy/Cut/Paste"),
-                    ("Ctrl+A", "Select All"),
-                    ("Alt+←/→", "Adjust Wrap"),
-                ]);
+                // Context-sensitive hints based on slide type
+                let hints: &[(&str, &str)] = match app.current_slide_type {
+                    crate::app::SlideType::Scripture => &[
+                        ("ESC", "Back"),
+                        ("Tab", "Versions"),
+                        (":wrap", "Word wrap"),
+                        (":export", "Save"),
+                    ],
+                    _ => &[
+                        ("ESC", "Back"),
+                        ("Tab", "Markers"),
+                        (":wrap", "Word wrap"),
+                        (":export", "Save"),
+                    ],
+                };
                 
-                // Add the status at the end
-                text.push(Span::styled(status, Style::default().fg(Color::Gray)));
+                let mut text = create_help_text(hints);
+                text.push(Span::styled(format!(" | {}", status), Style::default().fg(Color::Gray)));
                 
                 text
             }
@@ -358,6 +403,60 @@ fn draw_error_message(f: &mut Frame, message: &str) {
     f.render_widget(hint, inner_area[2]);
 }
 
+// Draw a status/info modal (blocking)
+fn draw_status_message(f: &mut Frame, message: &str) {
+    let size = f.size();
+    use unicode_width::UnicodeWidthStr;
+
+    let msg_width = message.width();
+    
+    // Create a centered box sized to message width
+    let width = msg_width
+        .saturating_add(6)
+        .min(size.width.saturating_sub(4) as usize)
+        .max(40);
+    let height = 5;
+    
+    let area = Rect {
+        x: (size.width.saturating_sub(width as u16)) / 2,
+        y: (size.height.saturating_sub(height)) / 2,
+        width: width as u16,
+        height,
+    };
+    
+    let block = Block::default()
+        .title(Span::styled("Info", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    
+    let text = Paragraph::new(message)
+        .style(Style::default().fg(Color::White))
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    
+    let inner_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .margin(1)
+        .split(area);
+    
+    f.render_widget(text, inner_area[1]);
+    
+    let hint = Paragraph::new("Press Esc to dismiss")
+        .style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Center);
+    
+    f.render_widget(hint, inner_area[2]);
+}
+
 // Draw the help modal with keybindings
 fn draw_help_modal(f: &mut Frame, app: &App) {
     let size = f.size();
@@ -442,9 +541,11 @@ fn build_help_content(app: &App) -> Vec<(&'static str, &'static str, bool)> {
                 ("── Items & Files ──", "", true),
                 ("↑/↓ or j/k", "Navigate items", false),
                 ("Tab / →", "Switch to file list", false),
+                ("/", "Search all files", false),
                 ("Enter", "Select file for item", false),
-                ("Del / Backspace", "Toggle ignore item", false),
-                ("c", "Open editor for item", false),
+                ("Space", "Toggle ignore item", false),
+                ("e", "Edit item (load .pro or create)", false),
+                ("t", "Cycle slide type", false),
                 ("g", "Generate playlist", false),
             ]);
         }
@@ -457,13 +558,14 @@ fn build_help_content(app: &App) -> Vec<(&'static str, &'static str, bool)> {
                 ("Ctrl+C/X/V", "Copy/Cut/Paste", false),
                 ("Alt+←/→", "Adjust wrap column", false),
                 ("", "", false),
+                ("── Scripture ──", "", true),
+                ("1-4", "Switch Bible version", false),
+                ("", "", false),
                 ("── Commands ──", "", true),
                 (":v1, :v2...", "Insert verse marker", false),
                 (":c, :c1...", "Insert chorus marker", false),
                 (":br", "Insert bridge marker", false),
-                (":split", "Split at cursor", false),
                 (":wrap", "Apply word wrap", false),
-                (":wrap N", "Set wrap column to N", false),
                 (":export/:save", "Export as .pro file", false),
             ]);
         }
@@ -480,4 +582,58 @@ fn build_help_content(app: &App) -> Vec<(&'static str, &'static str, bool)> {
     lines.push(("Press Esc, F1 or ? to close", "", true));
     
     lines
+}
+
+// Draw the Bible version picker modal
+fn draw_version_picker(f: &mut Frame, app: &App) {
+    use crate::bible::BibleVersion;
+    
+    let size = f.size();
+    
+    // Calculate modal dimensions
+    let width = 30.min(size.width.saturating_sub(4));
+    let height = 10.min(size.height.saturating_sub(4));
+    
+    let area = Rect {
+        x: (size.width.saturating_sub(width)) / 2,
+        y: (size.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    
+    // Create the modal block
+    let block = Block::default()
+        .title(Span::styled(" Select Bible Version ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+    
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    
+    // Inner area for content
+    let inner_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1)])
+        .margin(1)
+        .split(area)[0];
+    
+    // Build version list
+    let versions = BibleVersion::all();
+    let version_lines: Vec<Line> = versions.iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let is_selected = i == app.version_picker_selection;
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let style = if is_selected {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            Line::from(Span::styled(format!("{}{}", prefix, v.name()), style))
+        })
+        .collect();
+    
+    let paragraph = Paragraph::new(version_lines);
+    f.render_widget(paragraph, inner_area);
 }

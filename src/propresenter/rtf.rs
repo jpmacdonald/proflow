@@ -1,11 +1,79 @@
-//! Simple RTF to plain text conversion.
+//! RTF conversion utilities for ProPresenter.
 //!
-//! This is a basic implementation that handles common RTF patterns
-//! without requiring external dependencies.
+//! Handles both reading RTF (from .pro files) and writing RTF (for export).
 
 #![allow(dead_code)]
 
 use regex::Regex;
+
+/// Superscript digit characters for detection
+const SUPERSCRIPT_CHARS: &[char] = &['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+
+/// Check if a char is a superscript digit
+fn is_superscript(c: char) -> bool {
+    SUPERSCRIPT_CHARS.contains(&c)
+}
+
+/// Convert superscript character to regular digit
+fn superscript_to_digit(c: char) -> char {
+    match c {
+        '⁰' => '0', '¹' => '1', '²' => '2', '³' => '3', '⁴' => '4',
+        '⁵' => '5', '⁶' => '6', '⁷' => '7', '⁸' => '8', '⁹' => '9',
+        _ => c,
+    }
+}
+
+/// Convert plain text to RTF format
+/// 
+/// Handles:
+/// - Unicode superscript digits → RTF \super tags
+/// - Newlines → \par
+/// - Basic escaping
+pub fn text_to_rtf(text: &str) -> String {
+    let mut rtf = String::from(r"{\rtf1\ansi\deff0{\fonttbl{\f0 Helvetica;}}");
+    rtf.push_str(r"\f0\fs144 "); // Font size 72pt = 144 half-points
+    
+    let mut in_super = false;
+    let mut chars = text.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if is_superscript(c) {
+            // Start superscript if not already
+            if !in_super {
+                rtf.push_str(r"{\super ");
+                in_super = true;
+            }
+            rtf.push(superscript_to_digit(c));
+        } else {
+            // End superscript if we were in one
+            if in_super {
+                rtf.push('}');
+                in_super = false;
+            }
+            
+            match c {
+                '\n' => rtf.push_str(r"\par "),
+                '\\' => rtf.push_str(r"\\"),
+                '{' => rtf.push_str(r"\{"),
+                '}' => rtf.push_str(r"\}"),
+                _ => rtf.push(c),
+            }
+        }
+    }
+    
+    // Close any open superscript
+    if in_super {
+        rtf.push('}');
+    }
+    
+    rtf.push('}');
+    rtf
+}
+
+/// Convert plain text to RTF bytes (for ProPresenter)
+pub fn text_to_rtf_bytes(text: &str) -> Vec<u8> {
+    text_to_rtf(text).into_bytes()
+}
 
 /// Convert RTF data to plain text
 ///

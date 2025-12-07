@@ -4,6 +4,9 @@ use arboard::Clipboard;
 use ratatui::style::Color;
 use std::path::PathBuf;
 use crate::utils::file_matcher::{find_matches_for_items, FileIndex, FileEntry};
+use crate::bible::{BibleService, BibleVersion, ScriptureHeader, parse_scripture_ref};
+use unicode_width::UnicodeWidthStr;
+use regex::Regex;
 use tokio::sync::mpsc;
 use std::collections::HashMap;
 
@@ -28,19 +31,97 @@ pub enum AppMode {
     Editor,       // Editor view
 }
 
-#[derive(Debug, Clone)]
+/// The detected/assigned slide type for an item
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SlideType {
+    #[default]
+    Text,        // Generic text slides
+    Scripture,   // Bible verses
+    Lyrics,      // Song lyrics with verse/chorus markers
+    Title,       // Nametags, sermon titles
+    Graphic,     // Image-based slides (offertory, announcements)
+}
+
+impl SlideType {
+    pub fn all() -> &'static [SlideType] {
+        &[Self::Scripture, Self::Lyrics, Self::Title, Self::Graphic, Self::Text]
+    }
+    
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Scripture => "Scripture",
+            Self::Lyrics => "Lyrics",
+            Self::Title => "Title",
+            Self::Graphic => "Graphic",
+            Self::Text => "Text",
+        }
+    }
+    
+    /// Cycle to next type (for 't' key override)
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Scripture => Self::Lyrics,
+            Self::Lyrics => Self::Title,
+            Self::Title => Self::Graphic,
+            Self::Graphic => Self::Text,
+            Self::Text => Self::Scripture,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EditorState {
     pub content: Vec<String>,
+    #[serde(default)]
     pub cursor_x: usize,
+    #[serde(default)]
     pub cursor_y: usize,
+    #[serde(default)]
     pub scroll_offset: usize,
+    #[serde(default = "default_wrap_column")]
     pub wrap_column: usize,
+    #[serde(default = "default_wrap_auto")]
+    pub wrap_auto: bool,
+    #[serde(skip)]
+    pub last_viewport_width: Option<usize>,
+    #[serde(skip)]
     pub command_buffer: String,
+    #[serde(skip)]
     pub is_command_mode: bool,
+    #[serde(skip, default = "default_viewport_height")]
     pub viewport_height: usize,
+    #[serde(skip)]
     pub selection_active: bool,
+    #[serde(skip)]
     pub selection_start_x: usize,
+    #[serde(skip)]
     pub selection_start_y: usize,
+}
+
+fn default_wrap_column() -> usize { 80 }
+fn default_wrap_auto() -> bool { true }
+fn default_viewport_height() -> usize { 20 }
+
+fn sanitize_filename(name: &str) -> String {
+    use regex::Regex;
+    let verse_re = Regex::new(r"(\d+):(\d+)").unwrap();
+    // Replace verse refs ":" with "v"
+    let mut s = verse_re.replace_all(name, "$1v$2").to_string();
+    // Replace remaining colons with " - "
+    s = s.replace(":", " - ");
+    // Allow alnum, space, dash, underscore, comma, dot, parentheses
+    s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | ',' | '.' | '(' | ')') {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // Define a struct to represent a verse group
@@ -58,7 +139,9 @@ impl Default for EditorState {
             cursor_x: 0,
             cursor_y: 0,
             scroll_offset: 0,
-            wrap_column: 80,
+            wrap_column: default_wrap_column(),
+            wrap_auto: default_wrap_auto(),
+            last_viewport_width: None,
             command_buffer: String::new(),
             is_command_mode: false,
             viewport_height: 20, // Default value until UI updates it
@@ -84,6 +167,8 @@ pub struct App {
     pub item_list_state: ListState,
     pub matching_files: Vec<FileEntry>,
     pub file_list_state: ListState,
+    pub file_search_active: bool,   // Whether file search mode is active
+    pub file_search_query: String,  // Search query in command bar
     pub editor: EditorState,
     pub verse_groups: Vec<VerseGroup>,
     pub global_command_buffer: String,
@@ -95,10 +180,27 @@ pub struct App {
     async_task_rx: mpsc::Receiver<AppUpdate>,
     pub is_loading: bool,
     pub error_message: Option<String>,
+    pub status_message: Option<String>,
     pub show_help: bool,
     pub library_path: Option<PathBuf>,
     pub initialized: bool,
     pub file_index: Option<FileIndex>,
+    // Bible lookup
+    pub bible_service: Option<BibleService>,
+    pub version_picker_active: bool,
+    pub version_picker_selection: usize,
+    // Slide type detection/override
+    pub item_slide_type: HashMap<String, SlideType>,
+    pub current_slide_type: SlideType,
+    // Editor side pane
+    pub editor_side_pane_idx: usize,
+    pub editor_side_pane_focused: bool,
+    // Scripture header for display
+    pub current_scripture_header: Option<ScriptureHeader>,
+    pub last_wrap_width: Option<usize>,
+    pub pending_playlist_confirmation: Option<usize>,
+    // Template cache for slide styling
+    pub template_cache: Option<crate::propresenter::template::TemplateCache>,
 }
 
 impl App {
@@ -202,10 +304,48 @@ impl App {
             async_task_rx,
             is_loading: false,
             error_message: None,
+            status_message: None,
             show_help: false,
-            library_path,
+            file_search_active: false,
+            file_search_query: String::new(),
+            library_path: library_path.clone(),
             initialized: false,
             file_index: None,
+            bible_service: {
+                // Bible data is in the app's data directory, not ProPresenter library
+                let bible_path = std::env::var("CARGO_MANIFEST_DIR")
+                    .map(|d| PathBuf::from(d).join("data").join("bibles"))
+                    .unwrap_or_else(|_| {
+                        // Fall back to relative path from executable
+                        std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                            .map(|p| p.join("data").join("bibles"))
+                            .unwrap_or_else(|| PathBuf::from("data/bibles"))
+                    });
+                Some(BibleService::new(bible_path))
+            },
+            version_picker_active: false,
+            version_picker_selection: 0, // Default to NRSVue
+            item_slide_type: HashMap::new(),
+            current_slide_type: SlideType::Text,
+            editor_side_pane_idx: 0,
+            editor_side_pane_focused: false,
+            current_scripture_header: None,
+            last_wrap_width: None,
+            pending_playlist_confirmation: None,
+            template_cache: {
+                // Search for templates in library and data/templates
+                let mut paths = Vec::new();
+                if let Some(ref lib) = library_path {
+                    paths.push(lib.clone());
+                }
+                // Also check data/templates in the crate directory
+                if let Ok(d) = std::env::var("CARGO_MANIFEST_DIR") {
+                    paths.push(PathBuf::from(d).join("data").join("templates"));
+                }
+                Some(crate::propresenter::template::TemplateCache::new(paths))
+            },
         };
         
         // Don't initialize data right away - wait for splash screen to be dismissed
@@ -222,6 +362,12 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Handle version picker if active
+        if self.version_picker_active {
+            self.handle_version_picker_input(key);
+            return;
+        }
+        
         // First, check if help modal is shown
         if self.show_help {
             if key.code == KeyCode::Esc || key.code == KeyCode::F(1) || key.code == KeyCode::Char('?') {
@@ -230,17 +376,45 @@ impl App {
             return; // Don't process other keys while help is displayed
         }
 
-        // Check if we need to dismiss an error message
+        // Check if we need to dismiss an error or status message
         if self.error_message.is_some() {
             if key.code == KeyCode::Esc {
                 self.error_message = None;
             }
             return; // Don't process other keys while error is displayed
         }
+        if self.pending_playlist_confirmation.is_some() {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.pending_playlist_confirmation = None;
+                    self.status_message = None;
+                    self.generate_playlist(true);
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.pending_playlist_confirmation = None;
+                    self.status_message = None;
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.status_message.is_some() {
+            if key.code == KeyCode::Esc {
+                self.status_message = None;
+            }
+            return;
+        }
 
         // Global help shortcut (? or F1)
         if key.code == KeyCode::F(1) || (key.code == KeyCode::Char('?') && self.mode != AppMode::Editor) {
             self.show_help = true;
+            return;
+        }
+
+        // Editor-local command mode with ':'
+        if self.mode == AppMode::Editor && key.code == KeyCode::Char(':') {
+            self.editor.is_command_mode = true;
+            self.editor.command_buffer.clear();
             return;
         }
 
@@ -250,7 +424,7 @@ impl App {
             return;
         }
 
-        // Check for global shortcuts
+        // Check for global shortcuts (non-editor)
         if key.code == KeyCode::Char(':') {
             self.is_global_command_mode = true;
             self.global_command_buffer.clear();
@@ -469,22 +643,32 @@ impl App {
     }
 
     fn handle_item_list_input(&mut self, key: KeyEvent) {
+        // Handle file search mode (uses command bar)
+        if self.file_search_active {
+            self.handle_file_search_input(key);
+            return;
+        }
+
+        let files_focused = self.file_list_state.selected().is_some();
+        
         match key.code {
             KeyCode::Esc => {
-                self.mode = AppMode::ServiceList;
+                if files_focused {
+                    self.file_list_state.select(None);
+                } else {
+                    self.mode = AppMode::ServiceList;
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 match self.file_list_state.selected() {
                     Some(selected) if selected > 0 => {
-                        // File list is focused
                         self.file_list_state.select(Some(selected - 1));
                     }
                     None => {
-                        // Item list is focused
                         match self.item_list_state.selected() {
                             Some(selected) if selected > 0 => {
                                 self.item_list_state.select(Some(selected - 1));
-                                self.update_matching_files(); // Update matches for new selection
+                                self.update_matching_files();
                             }
                             _ => {}
                         }
@@ -495,15 +679,13 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 match self.file_list_state.selected() {
                     Some(selected) if selected < self.matching_files.len().saturating_sub(1) => {
-                        // File list is focused
                         self.file_list_state.select(Some(selected + 1));
                     }
                     None => {
-                        // Item list is focused
                         match self.item_list_state.selected() {
                             Some(selected) if selected < self.items.len().saturating_sub(1) => {
                                 self.item_list_state.select(Some(selected + 1));
-                                self.update_matching_files(); // Update matches for new selection
+                                self.update_matching_files();
                             }
                             _ => {}
                         }
@@ -512,94 +694,137 @@ impl App {
                 }
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                // Switch focus between item list and file list
-                match (self.file_list_state.selected(), !self.matching_files.is_empty()) {
-                    (None, true) => {
-                        // Focus file list
-                        self.file_list_state.select(Some(0));
-                    }
-                    (Some(_), _) => {
-                        // Return focus to item list
+                if !files_focused && !self.matching_files.is_empty() {
+                    self.file_list_state.select(Some(0));
+                } else if files_focused {
                     self.file_list_state.select(None);
-                    }
-                    _ => {}
                 }
             }
             KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
-                // Return focus to item list
                 self.file_list_state.select(None);
             }
-            KeyCode::Delete | KeyCode::Backspace => {
-                // Toggle ignored status on the selected item
-                if self.file_list_state.selected().is_none() {
-                    // Only if item list is focused
+            KeyCode::Char('/') => {
+                // Activate file search mode (like k9s)
+                self.file_search_active = true;
+                self.file_search_query.clear();
+            }
+            KeyCode::Char(' ') => {
+                // Space = toggle ignore (won't do) for current item
+                if !files_focused {
                     if let Some(selected_idx) = self.item_list_state.selected() {
                         if let Some(item) = self.items.get(selected_idx) {
                             let item_id = item.id.clone();
-                            
-                            // Toggle the ignored status
                             let currently_ignored = *self.item_ignored.get(&item_id).unwrap_or(&false);
-                            self.item_ignored.insert(item_id.clone(), !currently_ignored);
+                            let new_ignored = !currently_ignored;
+                            self.item_ignored.insert(item_id.clone(), new_ignored);
                             
-                            // If we're marking as ignored, make sure it's not also marked as completed
-                            if !currently_ignored {
-                                self.item_completion.insert(item_id, false);
+                            // Save to cache
+                            if let Some(index) = &mut self.file_index {
+                                index.save_item_ignored(&item_id, new_ignored);
                             }
                             
-                            // Move to the next item if possible
+                            if new_ignored {
+                                self.item_completion.insert(item_id.clone(), false);
+                                if let Some(index) = &mut self.file_index {
+                                    index.save_item_completion(&item_id, false);
+                                }
+                            }
+                            
                             if let Some(next_idx) = self.find_next_uncompleted_item(selected_idx) {
                                 self.item_list_state.select(Some(next_idx));
-                                        self.update_matching_files();
-                                    }
-                                }
+                                self.update_matching_files();
                             }
                         }
                     }
-            KeyCode::Enter => {
-                // If file list is focused, select file for item
-                if self.file_list_state.selected().is_some() {
-                    self.select_file_for_item();
-                } else {
-                    // If item list is focused, switch focus to file list if files exist
-                    if !self.matching_files.is_empty() {
-                            self.file_list_state.select(Some(0));
-                    }
                 }
             }
-            KeyCode::Char('c') => {
-                // Create/edit mode - open editor for selected item
+            KeyCode::Enter => {
+                if files_focused {
+                    self.select_file_for_item();
+                } else if !self.matching_files.is_empty() {
+                    self.file_list_state.select(Some(0));
+                }
+            }
+            KeyCode::Char('e') if !files_focused => {
+                // Edit key: open editor
+                // - If item has matched .pro file → load its content
+                // - If item has saved editor state → restore it
+                // - Otherwise → create new with lyrics if available
+                self.open_editor_for_item();
+            }
+            KeyCode::Char('g') if !files_focused => {
+                self.try_generate_playlist();
+            }
+            KeyCode::Char('t') if !files_focused => {
+                // Cycle slide type for current item
                 if let Some(idx) = self.item_list_state.selected() {
                     if let Some(item) = self.items.get(idx) {
                         let item_id = item.id.clone();
-                        
-                        // Use existing editor state or create new one
-                        let state = self.item_editor_state.get(&item_id)
-                            .and_then(|s| s.clone())
-                            .unwrap_or_else(|| {
-                                let mut new_state = EditorState::default();
-                                
-                                // Initialize with lyrics if available
-                                if let Some(lyrics) = item.song.as_ref().and_then(|s| s.lyrics.as_ref()) {
-                                    new_state.content = lyrics.lines().map(String::from).collect();
-                                    // Ensure trailing newline
-                                    if new_state.content.last().map_or(false, |l| !l.is_empty()) {
-                                        new_state.content.push(String::new());
-                                    }
-                                }
-                                
-                                self.item_editor_state.insert(item_id, Some(new_state.clone()));
-                                new_state
-                            });
-                        
-                        self.editor = state;
-                        self.mode = AppMode::Editor;
+                        let current = self.get_slide_type_for_item(item);
+                        let next = current.next();
+                        self.item_slide_type.insert(item_id, next);
                     }
                 }
             }
-            KeyCode::Char('g') => {
-                self.try_generate_playlist();
+            _ => {}
+        }
+    }
+
+    /// Handle input while in file search mode
+    fn handle_file_search_input(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                // Cancel search, restore original matches
+                self.file_search_active = false;
+                self.file_search_query.clear();
+                self.update_matching_files();
+            }
+            KeyCode::Enter => {
+                // Confirm search, keep results, exit search mode
+                self.file_search_active = false;
+                // Select file if one is highlighted
+                if self.file_list_state.selected().is_some() {
+                    self.select_file_for_item();
+                    self.file_search_query.clear();
+                    self.update_matching_files();
+                }
+            }
+            KeyCode::Backspace => {
+                self.file_search_query.pop();
+                self.update_file_search();
+            }
+            KeyCode::Up => {
+                if let Some(selected) = self.file_list_state.selected() {
+                    if selected > 0 {
+                        self.file_list_state.select(Some(selected - 1));
+                    }
+                }
+            }
+            KeyCode::Down => {
+                if let Some(selected) = self.file_list_state.selected() {
+                    if selected < self.matching_files.len().saturating_sub(1) {
+                        self.file_list_state.select(Some(selected + 1));
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                self.file_search_query.push(c);
+                self.update_file_search();
             }
             _ => {}
+        }
+    }
+
+    /// Update file list based on search query (searches ALL files)
+    fn update_file_search(&mut self) {
+        if self.file_search_query.is_empty() {
+            self.update_matching_files();
+            return;
+        }
+
+        if let Some(index) = &self.file_index {
+            self.matching_files = index.find_matches(&self.file_search_query, 20);
+            self.file_list_state.select(if self.matching_files.is_empty() { None } else { Some(0) });
         }
     }
 
@@ -655,10 +880,67 @@ impl App {
     }
 
     fn handle_editor_normal_input(&mut self, key: KeyEvent) {
+        // Tab to switch pane focus
+        if key.code == KeyCode::Tab {
+            self.editor_side_pane_focused = !self.editor_side_pane_focused;
+            return;
+        }
+        
+        // If side pane is focused, handle its keys
+        if self.editor_side_pane_focused {
+            self.handle_side_pane_input(key);
+            return;
+        }
+        
+        // Handle side pane shortcuts based on slide type (number keys work even when not focused)
+        match (key.code, self.current_slide_type) {
+            // Scripture mode: 1-4 to switch Bible versions
+            (KeyCode::Char('1'), SlideType::Scripture) => { self.switch_bible_version(0); return; }
+            (KeyCode::Char('2'), SlideType::Scripture) => { self.switch_bible_version(1); return; }
+            (KeyCode::Char('3'), SlideType::Scripture) => { self.switch_bible_version(2); return; }
+            (KeyCode::Char('4'), SlideType::Scripture) => { self.switch_bible_version(3); return; }
+            _ => {}
+        }
+        
         match key.code {
             KeyCode::Esc => {
                 // Clear selection when escaping
                 self.editor.selection_active = false;
+                
+                // Check if editor has meaningful content (not just empty lines)
+                let has_content = self.editor.content.iter()
+                    .any(|line| !line.trim().is_empty());
+                
+                if let Some(item_idx) = self.item_list_state.selected() {
+                    if let Some(item) = self.items.get(item_idx) {
+                        let item_id = item.id.clone();
+                        
+                        if has_content {
+                            // Save editor state - this is a custom creation
+                            self.item_editor_state.insert(item_id.clone(), Some(self.editor.clone()));
+                            
+                            // Clear any matched file - custom creation and file match are mutually exclusive
+                            self.item_matched_file.insert(item_id.clone(), None);
+                            
+                            // Mark as complete since we have content
+                            self.item_completion.insert(item_id.clone(), true);
+                            
+                            // Persist to cache
+                            if let Some(index) = &mut self.file_index {
+                                index.save_editor_state(&item_id, &self.editor);
+                                index.item_file_selections.remove(&item_id);
+                                index.save_item_completion(&item_id, true);
+                            }
+                        } else {
+                            // No content - clear editor state
+                            self.item_editor_state.insert(item_id.clone(), None);
+                            if let Some(index) = &mut self.file_index {
+                                index.editor_states.remove(&item_id);
+                                index.persist();
+                            }
+                        }
+                    }
+                }
                 self.mode = AppMode::ItemList;
             }
             // Select All (Cmd+A or Ctrl+A)
@@ -714,14 +996,16 @@ impl App {
             }
             // Terminal-friendly keybindings for wrap guide
             KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => {
-                // Move wrap guide left
                 if self.editor.wrap_column > 0 {
+                    self.editor.wrap_auto = false; // user is taking manual control
                     self.editor.wrap_column -= 1;
+                    self.apply_wrap_to_editor();
                 }
             }
             KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
-                // Move wrap guide right
+                self.editor.wrap_auto = false; // user is taking manual control
                 self.editor.wrap_column += 1;
+                self.apply_wrap_to_editor();
             }
             // Handle keyboard selection with Shift+Arrow keys
             KeyCode::Left => {
@@ -895,15 +1179,23 @@ impl App {
                 }
             }
             "wrap" => {
-                // Apply word wrapping at the current wrap column
-                self.editor.content = self.wrap_text(&self.editor.content, self.editor.wrap_column);
+                self.apply_wrap_to_editor();
+            }
+            "wrap auto" => {
+                self.editor.wrap_auto = true;
+                self.apply_wrap_to_editor();
+            }
+            "q" | "quit" => {
+                self.quit();
             }
             "export" | "save" => {
                 self.export_editor_to_pro();
             }
             _ if cmd.starts_with("wrap ") => {
                 if let Ok(col) = cmd[5..].parse::<usize>() {
+                    self.editor.wrap_auto = false; // explicit manual wrap
                     self.editor.wrap_column = col;
+                    self.apply_wrap_to_editor();
                 }
             }
             _ if cmd.starts_with("export ") || cmd.starts_with("save ") => {
@@ -912,6 +1204,305 @@ impl App {
                 self.export_editor_to_pro_with_name(&filename);
             }
             _ => {}
+        }
+    }
+
+    /// Open editor for the currently selected item
+    fn open_editor_for_item(&mut self) {
+        let Some(idx) = self.item_list_state.selected() else { return };
+        let Some(item) = self.items.get(idx) else { return };
+        
+        let item_id = item.id.clone();
+        let title = item.title.clone();
+        let _category = item.category.clone();
+        
+        // Determine slide type
+        let slide_type = self.get_slide_type_for_item(item);
+        self.current_slide_type = slide_type;
+        self.editor_side_pane_idx = 0;
+        
+        // Priority 1: Existing editor state (user's custom creation)
+        if let Some(Some(state)) = self.item_editor_state.get(&item_id) {
+            self.editor = state.clone();
+            self.mode = AppMode::Editor;
+            return;
+        }
+        
+        // Priority 2: Matched .pro file - extract its content
+        if let Some(Some(matched_path)) = self.item_matched_file.get(&item_id) {
+            use crate::propresenter::extract::extract_text_from_pro;
+            use std::path::Path;
+            
+            let path = Path::new(matched_path);
+            if path.exists() && path.extension().map_or(false, |e| e == "pro") {
+                match extract_text_from_pro(path) {
+                    Ok(lines) => {
+                        let mut state = EditorState::default();
+                        state.content = if lines.is_empty() { 
+                            vec![String::new()] 
+                        } else { 
+                            lines 
+                        };
+                        self.editor = state;
+                        self.mode = AppMode::Editor;
+                        return;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to load .pro: {}", e));
+                        // Fall through to create new
+                    }
+                }
+            }
+        }
+        
+        // Priority 3: Scripture item - show version picker then load
+        if slide_type == SlideType::Scripture {
+            // Try to detect version from title
+            if let Some(version) = BibleVersion::from_text(&title) {
+                self.version_picker_selection = BibleVersion::all()
+                    .iter()
+                    .position(|v| *v == version)
+                    .unwrap_or(0);
+            }
+            // Load scripture directly (version can be changed in side pane)
+            self.load_scripture_into_editor();
+            return;
+        }
+        
+        // Priority 4: Song lyrics from Planning Center
+        let lyrics = item.song.as_ref().and_then(|s| s.lyrics.as_ref());
+        let mut new_state = EditorState::default();
+        if let Some(lyrics) = lyrics {
+            new_state.content = lyrics.lines().map(String::from).collect();
+            if new_state.content.last().map_or(false, |l| !l.is_empty()) {
+                new_state.content.push(String::new());
+            }
+        }
+        
+        self.editor = new_state;
+        self.mode = AppMode::Editor;
+    }
+    
+    /// Detect the slide type for an item based on category and title
+    fn detect_slide_type(&self, category: &Category, title: &str) -> SlideType {
+        let title_lower = title.to_lowercase();
+        
+        // Check for explicit scripture indicators
+        if title_lower.starts_with("scripture") || 
+           (title_lower.contains("scripture") && parse_scripture_ref(title).is_some()) ||
+           parse_scripture_ref(title).is_some() {
+            return SlideType::Scripture;
+        }
+        
+        // Song category = Lyrics
+        if matches!(category, Category::Song) {
+            return SlideType::Lyrics;
+        }
+        
+        // Title/nametag patterns
+        if matches!(category, Category::Title) ||
+           title_lower.contains("sermon") ||
+           title_lower.contains("(robert)") || title_lower.contains("(hope)") ||  // Name patterns
+           title_lower.starts_with("welcome") {
+            return SlideType::Title;
+        }
+        
+        // Graphic patterns
+        if matches!(category, Category::Graphic) ||
+           title_lower.contains("pre-service") || title_lower.contains("preservice") ||
+           title_lower.contains("post-service") || title_lower.contains("postservice") ||
+           title_lower.contains("announcement") ||
+           (title_lower.contains("offertory") && !title_lower.contains(":")) {  // Offertory without song
+            return SlideType::Graphic;
+        }
+        
+        // Default to Text
+        SlideType::Text
+    }
+    
+    /// Get slide type for item (cached/overridden or detected)
+    pub fn get_slide_type_for_item(&self, item: &Item) -> SlideType {
+        self.item_slide_type.get(&item.id)
+            .copied()
+            .unwrap_or_else(|| self.detect_slide_type(&item.category, &item.title))
+    }
+    
+    /// Check if an item is a scripture reading
+    fn is_scripture_item(&self, category: &Category, title: &str) -> bool {
+        matches!(self.detect_slide_type(category, title), SlideType::Scripture)
+    }
+    
+    /// Handle input when side pane is focused
+    fn handle_side_pane_input(&mut self, key: KeyEvent) {
+        match self.current_slide_type {
+            SlideType::Scripture => {
+                // Navigate versions
+                let versions = BibleVersion::all();
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if self.version_picker_selection > 0 {
+                            self.version_picker_selection -= 1;
+                            self.reload_scripture();
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.version_picker_selection < versions.len() - 1 {
+                            self.version_picker_selection += 1;
+                            self.reload_scripture();
+                        }
+                    }
+                    KeyCode::Enter => {
+                        self.reload_scripture();
+                        self.editor_side_pane_focused = false;
+                    }
+                    KeyCode::Esc => {
+                        self.editor_side_pane_focused = false;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                // Navigate markers
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if self.editor_side_pane_idx > 0 {
+                            self.editor_side_pane_idx -= 1;
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.editor_side_pane_idx < self.verse_groups.len() - 1 {
+                            self.editor_side_pane_idx += 1;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        // Insert selected marker
+                        if let Some(group) = self.verse_groups.get(self.editor_side_pane_idx) {
+                            let marker = group.name.clone();
+                            self.insert_verse_marker(&marker);
+                        }
+                        self.editor_side_pane_focused = false;
+                    }
+                    KeyCode::Esc => {
+                        self.editor_side_pane_focused = false;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    
+    /// Switch Bible version and reload scripture
+    fn switch_bible_version(&mut self, version_idx: usize) {
+        let versions = BibleVersion::all();
+        if version_idx < versions.len() {
+            self.version_picker_selection = version_idx;
+            // Reload scripture with new version
+            self.reload_scripture();
+        }
+    }
+    
+    /// Reload current scripture with selected version
+    fn reload_scripture(&mut self) {
+        let Some(idx) = self.item_list_state.selected() else { return };
+        let Some(item) = self.items.get(idx) else { return };
+        
+        let title = &item.title;
+        let version = BibleVersion::all()[self.version_picker_selection];
+        
+        // Parse scripture reference from title
+        let Some(reference) = parse_scripture_ref(title) else {
+            self.error_message = Some(format!("Could not parse: {}", title));
+            return;
+        };
+        
+        // Look up verses
+        let Some(bible) = &mut self.bible_service else {
+            self.error_message = Some("Bible data not available".to_string());
+            return;
+        };
+        
+        match bible.lookup(&reference, version) {
+            Ok((header, lines)) => {
+                self.current_scripture_header = Some(header);
+                self.editor.content = lines;
+                self.editor.cursor_x = 0;
+                self.editor.cursor_y = 0;
+                self.editor.scroll_offset = 0;
+                self.apply_wrap_to_editor();
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed: {}", e));
+            }
+        }
+    }
+    
+    /// Handle version picker input
+    fn handle_version_picker_input(&mut self, key: KeyEvent) {
+        let versions = BibleVersion::all();
+        
+        match key.code {
+            KeyCode::Esc => {
+                self.version_picker_active = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.version_picker_selection > 0 {
+                    self.version_picker_selection -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.version_picker_selection < versions.len() - 1 {
+                    self.version_picker_selection += 1;
+                }
+            }
+            KeyCode::Enter => {
+                self.load_scripture_into_editor();
+                self.version_picker_active = false;
+            }
+            _ => {}
+        }
+    }
+    
+    /// Load scripture verses into the editor
+    fn load_scripture_into_editor(&mut self) {
+        let Some(idx) = self.item_list_state.selected() else { return };
+        let Some(item) = self.items.get(idx) else { return };
+        
+        let title = &item.title;
+        let version = BibleVersion::all()[self.version_picker_selection];
+        
+        // Parse scripture reference from title
+        let Some(reference) = parse_scripture_ref(title) else {
+            self.error_message = Some(format!("Could not parse scripture reference: {}", title));
+            self.current_scripture_header = None;
+            self.mode = AppMode::Editor;
+            self.editor = EditorState::default();
+            return;
+        };
+        
+        // Look up verses
+        let Some(bible) = &mut self.bible_service else {
+            self.error_message = Some("Bible data not available".to_string());
+            self.current_scripture_header = None;
+            self.mode = AppMode::Editor;
+            self.editor = EditorState::default();
+            return;
+        };
+        
+        match bible.lookup(&reference, version) {
+            Ok((header, lines)) => {
+                self.current_scripture_header = Some(header);
+                let mut state = EditorState::default();
+                state.content = lines;
+                self.editor = state;
+                self.mode = AppMode::Editor;
+                self.apply_wrap_to_editor();
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to load scripture: {}", e));
+                self.current_scripture_header = None;
+                self.mode = AppMode::Editor;
+                self.editor = EditorState::default();
+            }
         }
     }
 
@@ -930,7 +1521,7 @@ impl App {
         
         match export_to_pro_file(name, &self.editor.content, &output_path) {
             Ok(()) => {
-                self.error_message = Some(format!("Exported: {}", output_path.display()));
+                self.status_message = Some(format!("Exported: {}", output_path.display()));
             }
             Err(e) => {
                 self.error_message = Some(format!("Export failed: {}", e));
@@ -948,47 +1539,98 @@ impl App {
         let base_path = self.library_path.clone()
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         
-        // Sanitize filename
-        let safe_name: String = name.chars()
-            .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
-            .collect();
-        
+        let safe_name = sanitize_filename(name);
         base_path.join(format!("{}.pro", safe_name))
     }
 
     // Extract text wrapping logic to a separate function
     fn wrap_text(&self, content: &[String], wrap_column: usize) -> Vec<String> {
-        content
-            .iter()
-            .flat_map(|line| {
-                if line.len() <= wrap_column {
-                    // Short lines don't need wrapping
-                    return vec![line.clone()];
-                }
+        use unicode_width::UnicodeWidthStr;
 
-                let mut result = Vec::new();
-                let mut current_line = String::new();
-                let words = line.split_whitespace();
-                
-                for word in words {
-                    if current_line.is_empty() {
-                        current_line = word.to_string();
-                    } else if current_line.len() + word.len() + 1 <= wrap_column {
-                        current_line.push(' ');
-                        current_line.push_str(word);
-                    } else {
-                        result.push(current_line);
-                        current_line = word.to_string();
-                    }
+        let width = wrap_column.max(1);
+        let mut out: Vec<String> = Vec::new();
+        let mut paragraph: Vec<String> = Vec::new();
+
+        // helper to flush current paragraph as wrapped lines
+        let flush_paragraph = |para: &mut Vec<String>, out: &mut Vec<String>| {
+            if para.is_empty() {
+                return;
+            }
+            // collapse existing line breaks inside paragraph to avoid compounded wrapping
+            let joined = para
+                .iter()
+                .flat_map(|l| l.split_whitespace())
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let mut line = String::new();
+            let mut line_width = 0usize;
+            for word in joined.split_whitespace() {
+                let w = word.width();
+                if line.is_empty() {
+                    line.push_str(word);
+                    line_width = w;
+                } else if line_width + 1 + w <= width {
+                    line.push(' ');
+                    line.push_str(word);
+                    line_width += 1 + w;
+                } else {
+                    out.push(line);
+                    line = word.to_string();
+                    line_width = w;
                 }
-                
-                if !current_line.is_empty() {
-                    result.push(current_line);
-                }
-                
-                result
-            })
-            .collect()
+            }
+            if !line.is_empty() {
+                out.push(line);
+            }
+            para.clear();
+        };
+
+        for line in content {
+            if line.trim().is_empty() {
+                // blank line: flush paragraph then keep the blank
+                flush_paragraph(&mut paragraph, &mut out);
+                out.push(String::new());
+            } else {
+                paragraph.push(line.clone());
+            }
+        }
+        flush_paragraph(&mut paragraph, &mut out);
+
+        if out.is_empty() {
+            out.push(String::new());
+        }
+        out
+    }
+
+    /// Apply wrapping to the current editor content and clamp cursor
+    pub fn apply_wrap_to_editor(&mut self) {
+        self.maybe_update_wrap_column_from_viewport();
+        self.editor.content = self.wrap_text(&self.editor.content, self.editor.wrap_column);
+        // Clamp cursor to valid positions
+        if self.editor.content.is_empty() {
+            self.editor.content.push(String::new());
+        }
+        self.editor.cursor_y = self.editor.cursor_y.min(self.editor.content.len().saturating_sub(1));
+        let line_len = self.editor.content.get(self.editor.cursor_y).map(|l| l.len()).unwrap_or(0);
+        self.editor.cursor_x = self.editor.cursor_x.min(line_len);
+    }
+
+    /// If wrap_auto is enabled, align wrap column to current viewport width (minus a small margin)
+    fn maybe_update_wrap_column_from_viewport(&mut self) {
+        if !self.editor.wrap_auto {
+            return;
+        }
+        if let Some(width) = self.editor.last_viewport_width {
+            // leave 2 cols for margin; clamp to at least 10 to avoid extreme wrapping
+            let target = width.saturating_sub(2).max(10);
+            if Some(target) != self.last_wrap_width {
+                self.last_wrap_width = Some(target);
+                self.editor.wrap_column = target;
+                // when width changes, re-wrap once
+                self.editor.content = self.wrap_text(&self.editor.content, self.editor.wrap_column);
+            }
+        }
     }
 
     fn load_items_for_plan(&mut self, plan_id: &str) {
@@ -1028,16 +1670,30 @@ impl App {
             Item { id: "dummy_text".to_string(), _position: 4, title: "Dummy Text".to_string(), _description: None, category: Category::Text, _note: None, song: None, _scripture: None },
             Item { id: "dummy_other".to_string(), _position: 5, title: "Dummy Other".to_string(), _description: None, category: Category::Other, _note: None, song: None, _scripture: None },
         ];
-        // Initialize dummy state in HashMaps
+        
+        // Initialize state, restoring from cache where available
         self.item_completion.clear();
         self.item_ignored.clear();
         self.item_matched_file.clear();
         self.item_editor_state.clear();
+        
         for item in &self.items {
-            self.item_completion.insert(item.id.clone(), false);
-            self.item_ignored.insert(item.id.clone(), false);
-            self.item_matched_file.insert(item.id.clone(), None);
-            self.item_editor_state.insert(item.id.clone(), None);
+            let (completion, ignored, editor_state, matched_file) = 
+                if let Some(index) = &self.file_index {
+                    (
+                        index.get_item_completion(&item.id).unwrap_or(false),
+                        index.get_item_ignored(&item.id).unwrap_or(false),
+                        index.get_editor_state(&item.id).cloned(),
+                        index.get_selection_for_item(&item.id).cloned(),
+                    )
+                } else {
+                    (false, false, None, None)
+                };
+            
+            self.item_completion.insert(item.id.clone(), completion);
+            self.item_ignored.insert(item.id.clone(), ignored);
+            self.item_matched_file.insert(item.id.clone(), matched_file);
+            self.item_editor_state.insert(item.id.clone(), editor_state);
         }
 
         if !self.items.is_empty() {
@@ -1233,25 +1889,28 @@ impl App {
                 }
             }
             
-            // Self.matching_files 
-            self.matching_files = all_matches;
-            
-            // If we found matches but there's a previous selection for this item,
-            // try to restore that selection
-            if !self.matching_files.is_empty() && self.matching_files.len() > 1 {
-                if let Some(selected_path) = index.get_selection_for_item(&item_id) {
-                    // Find the index of the previously selected file
-                    if let Some(selected_idx) = self.matching_files.iter().position(|e| 
+            // If we have a previous selection for this item, ensure it's always first
+            if let Some(selected_path) = index.get_selection_for_item(&item_id) {
+                // Check if it's already in matches
+                if let Some(selected_idx) = all_matches.iter().position(|e| 
+                    e.full_path.to_string_lossy() == *selected_path
+                ) {
+                    // Move to front
+                    if selected_idx > 0 {
+                        let selected_entry = all_matches.remove(selected_idx);
+                        all_matches.insert(0, selected_entry);
+                    }
+                } else {
+                    // Previous selection not in fuzzy results - find it in the index and add it
+                    if let Some(entry) = index.entries.iter().find(|e| 
                         e.full_path.to_string_lossy() == *selected_path
                     ) {
-                        // Reorder to put the selected item first
-                        if selected_idx > 0 {
-                            let selected_entry = self.matching_files.remove(selected_idx);
-                            self.matching_files.insert(0, selected_entry);
-                        }
+                        all_matches.insert(0, entry.clone());
                     }
                 }
             }
+            
+            self.matching_files = all_matches;
         } else {
             // Fall back to old method if no index
         if self.library_path.is_none() {
@@ -1366,35 +2025,136 @@ impl App {
             .count();
             
         if uncompleted_count > 0 {
-            self.error_message = Some(format!(
-                "Warning: {} items are not matched or marked to ignore! Press 'g' again to force generate.", 
+            self.pending_playlist_confirmation = Some(uncompleted_count);
+            self.status_message = Some(format!(
+                "Warning: {} items are not matched/ignored. Continue? (y/n)",
                 uncompleted_count
             ));
             return;
         }
 
-        self.generate_playlist();
+        self.generate_playlist(false);
     }
 
-    fn generate_playlist(&mut self) {
+    fn generate_playlist(&mut self, allow_incomplete: bool) {
         use crate::propresenter::playlist::{build_playlist, write_playlist_file, PlaylistEntry};
+        use crate::propresenter::export::build_presentation_from_content;
+        use crate::propresenter::convert::convert_presentation_to_rv_data;
+        use crate::propresenter::serialize::encode_presentation;
+        use crate::propresenter::template::{TemplateType, build_presentation_from_template};
+        use prost::Message;
         
         // Collect entries for non-ignored items with matched files
-        let entries: Vec<PlaylistEntry> = self.items.iter()
-            .filter(|item| {
-                let is_ignored = *self.item_ignored.get(&item.id).unwrap_or(&false);
-                !is_ignored
-            })
-            .filter_map(|item| {
-                // Get the matched file path
-                let matched_path = self.item_matched_file.get(&item.id)?.as_ref()?;
-                Some(PlaylistEntry {
+        let mut entries: Vec<PlaylistEntry> = Vec::new();
+
+        for item in self.items.iter() {
+            if *self.item_ignored.get(&item.id).unwrap_or(&false) {
+                continue;
+            }
+
+            // Check for matched external .pro file
+            if let Some(Some(matched_path)) = self.item_matched_file.get(&item.id) {
+                // Read the .pro file and embed it
+                match std::fs::read(matched_path) {
+                    Ok(data) => {
+                        entries.push(PlaylistEntry {
+                            name: item.title.clone(),
+                            presentation_path: matched_path.clone(),
+                            arrangement_uuid: None,
+                            embedded_data: Some(data),
+                        });
+                    }
+                    Err(e) => {
+                        // Fallback: reference external path
+                        eprintln!("Warning: Could not read {}: {}", matched_path, e);
+                        entries.push(PlaylistEntry {
+                            name: item.title.clone(),
+                            presentation_path: matched_path.clone(),
+                            arrangement_uuid: None,
+                            embedded_data: None,
+                        });
+                    }
+                }
+                continue;
+            }
+
+            // If no matched file but we have editor content, create embedded presentation
+            if let Some(Some(state)) = self.item_editor_state.get(&item.id) {
+                let has_content = state.content.iter().any(|l| !l.trim().is_empty());
+                if !has_content {
+                    if allow_incomplete {
+                        continue;
+                    } else {
+                        self.error_message = Some(format!("Item '{}' has no content to export.", item.title));
+                        return;
+                    }
+                }
+
+                // Determine template type based on slide type
+                let slide_type = self.item_slide_type.get(&item.id).copied().unwrap_or(SlideType::Text);
+                let template_type = match slide_type {
+                    SlideType::Scripture => Some(TemplateType::Scripture),
+                    SlideType::Lyrics => Some(TemplateType::Song),
+                    SlideType::Title => Some(TemplateType::Info),
+                    _ => None,
+                };
+
+                // Try to use template if available
+                let data = if let Some(tt) = template_type {
+                    if let Some(ref mut cache) = self.template_cache {
+                        if let Some(template) = cache.get(tt) {
+                            // Use template-based generation
+                            if let Some(presentation) = build_presentation_from_template(&item.title, template, &state.content) {
+                                let mut buf = Vec::new();
+                                presentation.encode(&mut buf).ok();
+                                Some(buf)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Fallback to default presentation builder if no template
+                let data = match data {
+                    Some(d) if !d.is_empty() => d,
+                    _ => {
+                        match build_presentation_from_content(&item.title, &state.content) {
+                            Ok(presentation) => {
+                                let rv_presentation = convert_presentation_to_rv_data(presentation);
+                                encode_presentation(&rv_presentation)
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("Export failed for '{}': {}", item.title, e));
+                                return;
+                            }
+                        }
+                    }
+                };
+
+                entries.push(PlaylistEntry {
                     name: item.title.clone(),
-                    presentation_path: matched_path.clone(),
+                    presentation_path: String::new(), // Not used for embedded
                     arrangement_uuid: None,
-                })
-            })
-            .collect();
+                    embedded_data: Some(data),
+                });
+                continue;
+            }
+
+            // No match and no editor content
+            if allow_incomplete {
+                continue;
+            } else {
+                self.error_message = Some(format!("Item '{}' is not matched or created.", item.title));
+                return;
+            }
+        }
 
         if entries.is_empty() {
             self.error_message = Some("No matched files to add to playlist.".to_string());
@@ -1411,11 +2171,11 @@ impl App {
         // Build and write the playlist
         let playlist = build_playlist(&playlist_name, &entries);
         
-        match write_playlist_file(&playlist, &output_path) {
+        match write_playlist_file(&playlist, &entries, &output_path) {
             Ok(()) => {
-                self.error_message = Some(format!(
-                    "Playlist saved: {} ({} items)", 
-                    output_path.display(), 
+                self.status_message = Some(format!(
+                    "Playlist saved: {} ({} items)",
+                    output_path.display(),
                     entries.len()
                 ));
             }
@@ -1962,17 +2722,30 @@ impl App {
                             Ok(items) => {
                                 self.items = items;
                                 
-                                // Initialize state for items
+                                // Initialize state for items, restoring from cache where available
                                 self.item_completion.clear();
                                 self.item_ignored.clear();
                                 self.item_matched_file.clear();
                                 self.item_editor_state.clear();
                                 
                                 for item in &self.items {
-                                    self.item_completion.insert(item.id.clone(), false);
-                                    self.item_ignored.insert(item.id.clone(), false);
-                                    self.item_matched_file.insert(item.id.clone(), None);
-                                    self.item_editor_state.insert(item.id.clone(), None);
+                                    // Restore completion/ignored/editor state from cache
+                                    let (completion, ignored, editor_state, matched_file) = 
+                                        if let Some(index) = &self.file_index {
+                                            (
+                                                index.get_item_completion(&item.id).unwrap_or(false),
+                                                index.get_item_ignored(&item.id).unwrap_or(false),
+                                                index.get_editor_state(&item.id).cloned(),
+                                                index.get_selection_for_item(&item.id).cloned(),
+                                            )
+                                        } else {
+                                            (false, false, None, None)
+                                        };
+                                    
+                                    self.item_completion.insert(item.id.clone(), completion);
+                                    self.item_ignored.insert(item.id.clone(), ignored);
+                                    self.item_matched_file.insert(item.id.clone(), matched_file);
+                                    self.item_editor_state.insert(item.id.clone(), editor_state);
                                 }
                                 
                                 if !self.items.is_empty() {
@@ -2058,23 +2831,36 @@ impl App {
             None => return,
         };
         
-        // Record the selection in our item_matched_file hashmap
         let item_id = selected_item.id.clone();
         let file_path = selected_file.full_path.to_string_lossy().to_string();
+        
+        // IMPORTANT: Clear editor state when selecting a file match
+        // (file match and custom creation are mutually exclusive)
+        self.item_editor_state.insert(item_id.clone(), None);
+        if let Some(index) = &mut self.file_index {
+            index.editor_states.remove(&item_id);
+        }
+        
+        // Record the selection in our item_matched_file hashmap
         self.item_matched_file.insert(item_id.clone(), Some(file_path.clone()));
         
         // Mark the item as completed
         self.item_completion.insert(item_id.clone(), true);
         
-        // Record the selection in the file index for better future ranking
+        // Record the selection and completion in the file index for persistence
         if let Some(index) = &mut self.file_index {
             index.record_selection(&item_id, &selected_file.full_path);
+            index.save_item_completion(&item_id, true);
+            index.persist();
         }
         
-        // Move to the next item if possible
+        // Move to the next item if possible, otherwise deselect file list
         if let Some(next_idx) = self.find_next_uncompleted_item(selected_item_idx) {
             self.item_list_state.select(Some(next_idx));
             self.update_matching_files();
+        } else {
+            // No more uncompleted items - return focus to items list
+            self.file_list_state.select(None);
         }
     }
 

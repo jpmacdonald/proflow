@@ -4,29 +4,52 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame, symbols,
+    layout::Alignment,
 };
+use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, VerseGroup};
+use crate::app::{App, VerseGroup, SlideType};
+use crate::bible::BibleVersion;
 
 pub fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
-    // Create a layout for the editor area - with wrap guide line
-    let editor_layout = Layout::default()
-        .direction(Direction::Vertical)
+    // Split into main editor and side pane
+    let main_layout = Layout::default()
+        .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Min(1),
+            Constraint::Min(40),       // Main editor
+            Constraint::Length(22),    // Side pane
         ])
         .split(area);
     
-    // Draw a block around the whole editor
-    let editor_block = Block::default()
-        .title(Span::styled("Editor", Style::default().fg(Color::Yellow)))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+    let editor_area = main_layout[0];
+    let side_pane_area = main_layout[1];
     
-    f.render_widget(editor_block.clone(), editor_layout[0]);
+    // Track viewport width for auto wrap (and trigger wrap on change)
+    let new_width = editor_area.width as usize;
+    if app.editor.last_viewport_width != Some(new_width) {
+        app.editor.last_viewport_width = Some(new_width);
+        app.apply_wrap_to_editor();
+    }
+
+    // Draw the side pane based on slide type
+    draw_side_pane(f, app, side_pane_area);
+    
+    // Build editor title - include scripture reference if available
+    let title = match (&app.current_slide_type, &app.current_scripture_header) {
+        (SlideType::Scripture, Some(header)) => format!("Editor [{}] │ {}", app.current_slide_type.name(), header.display()),
+        _ => format!("Editor [{}]", app.current_slide_type.name()),
+    };
+    
+    let border_color = if app.editor_side_pane_focused { Color::DarkGray } else { Color::Yellow };
+    let editor_block = Block::default()
+        .title(Span::styled(title, Style::default().fg(Color::Yellow)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    
+    f.render_widget(editor_block.clone(), editor_area);
     
     // Get the inner area for the editor content
-    let inner_area = editor_block.inner(editor_layout[0]);
+    let inner_area = editor_block.inner(editor_area);
     
     // Update the viewport height so scrolling works correctly
     app.editor.viewport_height = inner_area.height as usize;
@@ -76,8 +99,10 @@ pub fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
     }
     
     // Render the editor content
+    // NO auto-wrap - user controls wrapping with :wrap command
+    // This ensures cursor position matches display position
     let paragraph = Paragraph::new(styled_content)
-        .wrap(Wrap { trim: false })
+        .wrap(Wrap { trim: false }) // soft-wrap for display; hard-wrap still controlled by :wrap
         .scroll((0, 0));
     
     f.render_widget(paragraph, inner_area);
@@ -85,41 +110,25 @@ pub fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
     // Draw the wrap guide if we're in the editor
     draw_wrap_guide(f, app, inner_area);
     
-    // Draw verse reference box in the bottom right
-    draw_verse_reference(f, app, inner_area);
-    
-    // Show cursor only when we're in the main editor (not in command mode)
-    if !app.editor.is_command_mode {
+    // Show cursor only when we're in the main editor (not in command mode) and not side pane focused
+    if !app.editor.is_command_mode && !app.editor_side_pane_focused {
         let cursor_y = app.editor.cursor_y.saturating_sub(app.editor.scroll_offset) as u16;
         if cursor_y < inner_area.height {
+            // Calculate display width up to cursor position (unicode-aware)
+            let current_line = app.editor.content.get(app.editor.cursor_y).map(|s| s.as_str()).unwrap_or("");
+            let prefix: String = current_line.chars().take(app.editor.cursor_x).collect();
+            let display_x = prefix.width() as u16;
+            
+            // Bound cursor to visible area (prevent going into side pane)
+            let bounded_x = display_x.min(inner_area.width.saturating_sub(1));
+            
             f.set_cursor(
-                inner_area.left() + app.editor.cursor_x as u16,
+                inner_area.left() + bounded_x,
                 inner_area.top() + cursor_y
             );
         }
     }
     
-    // Draw editor command line if in command mode
-    if app.editor.is_command_mode {
-        let command_area = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(1),
-            ])
-            .split(inner_area)[1];
-        
-        let command = Paragraph::new(format!(":{}",app.editor.command_buffer))
-            .style(Style::default().fg(Color::Yellow));
-        
-        f.render_widget(command, command_area);
-        
-        // Set the cursor position in the command line
-        f.set_cursor(
-            command_area.left() + app.editor.command_buffer.len() as u16 + 1,
-            command_area.top()
-        );
-    }
 }
 
 fn style_editor_line(
@@ -192,65 +201,120 @@ fn style_editor_line(
 fn draw_wrap_guide(f: &mut Frame, app: &App, area: Rect) {
     let wrap_col = app.editor.wrap_column;
     
-    // Only draw if wrap column is within visible area
-    if wrap_col <= area.width as usize {
-        // Draw a vertical line at the wrap column
-        for y in 0..area.height {
-            let pos = area.left() + wrap_col as u16;
-            let cell_pos = Rect::new(pos, area.top() + y, 1, 1);
-            
-            f.buffer_mut().set_string(
-                cell_pos.x,
-                cell_pos.y,
-                symbols::line::VERTICAL,
-                Style::default().fg(Color::DarkGray)
-            );
-        }
+    let (draw_col, ch) = if wrap_col < area.width as usize {
+        (wrap_col as u16, symbols::line::VERTICAL)
+    } else {
+        // Show at right edge with indicator when beyond visible width
+        (area.width.saturating_sub(1), "»")
+    };
+
+    for y in 0..area.height {
+        let pos = area.left() + draw_col;
+        f.buffer_mut().set_string(
+            pos,
+            area.top() + y,
+            ch,
+            Style::default().fg(Color::Cyan)
+        );
     }
 }
 
-fn draw_verse_reference(f: &mut Frame, app: &App, area: Rect) {
-    // Create a box in the bottom right for verse reference info
-    let verse_ref_width = 20;
-    let verse_ref_height = 8;
-    
-    // Only show verse reference if there's enough space
-    if area.width > verse_ref_width + 2 && area.height > verse_ref_height + 2 {
-        let verse_ref_area = Rect {
-            x: area.right() - verse_ref_width - 2,
-            y: area.bottom() - verse_ref_height - 1,
-            width: verse_ref_width,
-            height: verse_ref_height,
-        };
-        
-        let verse_ref_block = Block::default()
-            .title("Verse Markers")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-        
-        f.render_widget(verse_ref_block.clone(), verse_ref_area);
-        
-        // Show verse marker commands in the box
-        let inner_area = verse_ref_block.inner(verse_ref_area);
-        let mut verse_items = Vec::new();
-        
-        for (_i, verse_group) in app.verse_groups.iter().enumerate().take(verse_ref_height as usize - 1) {
-            // Format for display: cmd -> name
-            let display_text = format!(":{} → {}", verse_group.command, verse_group.name);
-            
-            // Add to list
-            verse_items.push(Line::from(Span::styled(
-                display_text,
-                Style::default().fg(verse_group.color)
-            )));
-        }
-        
-        let verse_paragraph = Paragraph::new(verse_items)
-            .style(Style::default())
-            .alignment(ratatui::layout::Alignment::Left);
-        
-        f.render_widget(verse_paragraph, inner_area);
+/// Draw the side pane based on current slide type
+fn draw_side_pane(f: &mut Frame, app: &App, area: Rect) {
+    match app.current_slide_type {
+        SlideType::Scripture => draw_version_pane(f, app, area),
+        SlideType::Lyrics => draw_markers_pane(f, app, area),
+        _ => draw_markers_pane(f, app, area), // Default to markers for other types
     }
+}
+
+/// Draw Bible version selector for Scripture mode
+fn draw_version_pane(f: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.editor_side_pane_focused;
+    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+    let title_color = if is_focused { Color::Yellow } else { Color::Gray };
+    
+    let block = Block::default()
+        .title(Span::styled("Versions", Style::default().fg(title_color)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    
+    let versions = BibleVersion::all();
+    let lines: Vec<Line> = versions.iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let is_selected = i == app.version_picker_selection;
+            let arrow = if is_selected { "▶" } else { " " };
+            let key = format!("{:>2}", i + 1); // right-align numbers
+            let style = if is_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            // Pad right to a fixed width for alignment, then center the paragraph
+            let name = v.name();
+            Line::from(vec![
+                Span::styled(arrow, style),
+                Span::raw(" "),
+                Span::styled(key, Style::default().fg(Color::Yellow)),
+                Span::raw(" "),
+                Span::styled(format!("{:<8}", name), style), // pad names for justification
+            ])
+        })
+        .collect();
+    
+    // Add hint at bottom
+    let mut all_lines = lines;
+    all_lines.push(Line::from(""));
+    all_lines.push(Line::from(Span::styled("1-4: switch", Style::default().fg(Color::DarkGray))));
+    
+    let paragraph = Paragraph::new(all_lines).alignment(Alignment::Center);
+    f.render_widget(paragraph, inner);
+}
+
+/// Draw verse marker shortcuts for Lyrics mode
+fn draw_markers_pane(f: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.editor_side_pane_focused;
+    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+    let title_color = if is_focused { Color::Yellow } else { Color::Gray };
+    
+    let block = Block::default()
+        .title(Span::styled("Markers", Style::default().fg(title_color)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    
+    let mut lines: Vec<Line> = app.verse_groups.iter()
+        .enumerate()
+        .take(inner.height as usize - 2)
+        .map(|(i, group)| {
+            let is_selected = i == app.editor_side_pane_idx;
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let style = if is_selected {
+                Style::default().fg(group.color).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(group.color)
+            };
+            Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(format!(":{}", group.command), Style::default().fg(Color::Yellow)),
+                Span::raw(" → "),
+                Span::styled(&group.name, style),
+            ])
+        })
+        .collect();
+    
+    // Add hint
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Enter: insert", Style::default().fg(Color::DarkGray))));
+    
+    let paragraph = Paragraph::new(lines);
+    f.render_widget(paragraph, inner);
 }
 
 fn style_verse_marker(marker_text: &str, _line_content: &str, verse_groups: &[VerseGroup]) -> Span<'static> {

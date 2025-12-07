@@ -1,5 +1,5 @@
 [package]
-name = "proflow_tui"
+name = "proflow"
 version = "0.1.0"
 edition = "2021"
 
@@ -49,6 +49,9 @@ fs-err = "2.9.0"
 fuzzy-matcher = "0.3"
 walkdir = "2.4"
 shellexpand = "3.1.0"
+unicode-width = "0.1.11"
+flate2 = "1.0"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 # Additional dependencies
 dirs = "5.0"

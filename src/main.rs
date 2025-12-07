@@ -9,8 +9,10 @@ use std::{io, panic, time::Duration};
 use tokio;
 
 mod app;
+mod bible;
 mod config;
 mod error;
+mod lyrics;
 mod planning_center;
 mod propresenter;
 mod ui;
