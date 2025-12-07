@@ -58,6 +58,15 @@ struct CacheData {
     selections: HashMap<String, String>,
     /// File path → selection count
     frequency: HashMap<String, u32>,
+    /// Item ID → editor state (content, cursor, etc.)
+    #[serde(default)]
+    editor_states: HashMap<String, crate::app::EditorState>,
+    /// Item ID → completion status
+    #[serde(default)]
+    item_completion: HashMap<String, bool>,
+    /// Item ID → ignored status
+    #[serde(default)]
+    item_ignored: HashMap<String, bool>,
 }
 
 mod humantime_serde {
@@ -85,6 +94,12 @@ pub struct FileIndex {
     pub item_file_selections: HashMap<String, String>,
     /// File path → selection count (persisted)
     pub selection_frequency: HashMap<String, u32>,
+    /// Item ID → editor state (persisted)
+    pub editor_states: HashMap<String, crate::app::EditorState>,
+    /// Item ID → completion status (persisted)
+    pub item_completion: HashMap<String, bool>,
+    /// Item ID → ignored status (persisted)
+    pub item_ignored: HashMap<String, bool>,
     /// Library path for cache persistence
     library_path: PathBuf,
 }
@@ -144,6 +159,9 @@ impl FileIndex {
             entries,
             item_file_selections: HashMap::new(),
             selection_frequency: HashMap::new(),
+            editor_states: HashMap::new(),
+            item_completion: HashMap::new(),
+            item_ignored: HashMap::new(),
             library_path: library_path.to_path_buf(),
         };
 
@@ -176,6 +194,9 @@ impl FileIndex {
             entries: cache.entries,
             item_file_selections: cache.selections,
             selection_frequency: cache.frequency,
+            editor_states: cache.editor_states,
+            item_completion: cache.item_completion,
+            item_ignored: cache.item_ignored,
             library_path: library_path.to_path_buf(),
         })
     }
@@ -188,6 +209,9 @@ impl FileIndex {
             entries: self.entries.clone(),
             selections: self.item_file_selections.clone(),
             frequency: self.selection_frequency.clone(),
+            editor_states: self.editor_states.clone(),
+            item_completion: self.item_completion.clone(),
+            item_ignored: self.item_ignored.clone(),
         };
 
         let json = serde_json::to_string_pretty(&cache)
@@ -215,6 +239,39 @@ impl FileIndex {
     /// Get the previously selected file for an item
     pub fn get_selection_for_item(&self, item_id: &str) -> Option<&String> {
         self.item_file_selections.get(item_id)
+    }
+
+    /// Save editor state for an item
+    pub fn save_editor_state(&mut self, item_id: &str, state: &crate::app::EditorState) {
+        self.editor_states.insert(item_id.to_string(), state.clone());
+        self.persist();
+    }
+
+    /// Get editor state for an item
+    pub fn get_editor_state(&self, item_id: &str) -> Option<&crate::app::EditorState> {
+        self.editor_states.get(item_id)
+    }
+
+    /// Save item completion status
+    pub fn save_item_completion(&mut self, item_id: &str, completed: bool) {
+        self.item_completion.insert(item_id.to_string(), completed);
+        self.persist();
+    }
+
+    /// Get item completion status
+    pub fn get_item_completion(&self, item_id: &str) -> Option<bool> {
+        self.item_completion.get(item_id).copied()
+    }
+
+    /// Save item ignored status
+    pub fn save_item_ignored(&mut self, item_id: &str, ignored: bool) {
+        self.item_ignored.insert(item_id.to_string(), ignored);
+        self.persist();
+    }
+
+    /// Get item ignored status
+    pub fn get_item_ignored(&self, item_id: &str) -> Option<bool> {
+        self.item_ignored.get(item_id).copied()
     }
 
     /// Find matching files for a search query
@@ -277,32 +334,45 @@ impl FileIndex {
             .max(matcher.fuzzy_match(&entry.file_name, term).unwrap_or(0));
         score = score.max(fuzzy);
 
+        // **KEY FIX**: Check if filename is contained within the query (reverse containment)
+        // This catches cases like query="Prayer and the Lord's Prayer (Hope)" matching file="Prayer and The Lord's Prayer"
+        if query_lower.contains(&entry.file_name_lower) {
+            // The full filename appears in the query - this is a very strong match
+            let len_bonus = (entry.file_name_lower.len() as i64) * 100; // Longer matches are better
+            score = score.max(25000 + len_bonus);
+            quality = 3;
+        } else if query_lower.contains(&entry.normalized_lower) && entry.normalized_lower.len() > 5 {
+            let len_bonus = (entry.normalized_lower.len() as i64) * 100;
+            score = score.max(22000 + len_bonus);
+            quality = 3;
+        }
+
         // Exact/prefix/contains matching with boosts
         if entry.normalized_name.eq_ignore_ascii_case(term) {
-            score += 10000;
+            score = score.max(20000);
             quality = 3;
         } else if entry.file_name.eq_ignore_ascii_case(term) {
-            score += 9000;
+            score = score.max(19000);
             quality = 3;
         } else if entry.normalized_lower.starts_with(term_lower) {
-            score += 5000;
+            score = score.max(15000);
             quality = quality.max(2);
         } else if entry.file_name_lower.starts_with(term_lower) {
-            score += 4000;
+            score = score.max(14000);
             quality = quality.max(2);
         } else if entry.normalized_lower.contains(term_lower) {
-            score += if term_lower.len() <= 2 { 800 } else { 3000 };
+            score = score.max(if term_lower.len() <= 2 { 800 } else { 8000 });
             quality = quality.max(1);
         } else if entry.file_name_lower.contains(term_lower) {
-            score += if term_lower.len() <= 2 { 600 } else { 2000 };
+            score = score.max(if term_lower.len() <= 2 { 600 } else { 6000 });
             quality = quality.max(1);
         }
 
         // Composite query handling (e.g., "Prayer/Lord's Prayer")
-                    if let Some(last_part) = composite_parts.last() {
+        if let Some(last_part) = composite_parts.last() {
             let last_lower = last_part.to_lowercase();
-                        if entry.normalized_name.eq_ignore_ascii_case(last_part) || 
-                           entry.file_name.eq_ignore_ascii_case(last_part) {
+            if entry.normalized_name.eq_ignore_ascii_case(last_part) || 
+               entry.file_name.eq_ignore_ascii_case(last_part) {
                 score = score.max(20000);
                 quality = 3;
             } else if entry.normalized_lower.starts_with(&last_lower) ||
@@ -311,12 +381,6 @@ impl FileIndex {
                 quality = 3;
             } else if entry.normalized_lower.contains(&last_lower) {
                 score = score.max(6000);
-                quality = quality.max(2);
-            }
-
-            // Liturgical boosts
-            if last_lower.contains("lord's prayer") || last_lower.contains("our father") {
-                score += 5000;
                 quality = quality.max(2);
             }
         }
@@ -340,14 +404,18 @@ impl FileIndex {
             }
         }
 
-        // Special liturgical matching
-                if query_lower.contains("lord's prayer") || query_lower.contains("our father") {
-                    if entry.normalized_lower.contains("lord's prayer") || 
-                       entry.file_name_lower.contains("lord's prayer") || 
-                       entry.normalized_lower.contains("our father") || 
-                       entry.file_name_lower.contains("our father") {
-                score = score.max(10000);
-                quality = 3;
+        // Liturgical matching (only if we don't already have a strong match)
+        if quality < 3 {
+            if query_lower.contains("lord's prayer") || query_lower.contains("our father") {
+                if entry.normalized_lower.contains("lord's prayer") || 
+                   entry.file_name_lower.contains("lord's prayer") {
+                    score = score.max(10000);
+                    quality = quality.max(2);
+                } else if entry.normalized_lower.contains("our father") || 
+                          entry.file_name_lower.contains("our father") {
+                    score = score.max(8000);
+                    quality = quality.max(2);
+                }
             }
         }
 

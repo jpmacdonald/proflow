@@ -710,6 +710,7 @@ impl From<dm::Presentation> for rv_data::Presentation {
 // Helper function to convert a Slide to rv_data::PresentationSlide
 fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
     use rv_data::graphics;
+    use crate::propresenter::rtf::text_to_rtf_bytes;
 
     let mut elements = Vec::new();
     let mut element_uuids = Vec::new();
@@ -719,22 +720,8 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
             let element_uuid = Uuid::new_v4().to_string();
             element_uuids.push(rv_data::Uuid { string: element_uuid.clone() });
             
-            let rtf_header = format!(
-                "{{\\rtf1\\ansi\\ansicpg1252\\cocoartf1671\\cocoasubrtf600\n\
-                {{\\fonttbl\\f0\\fnil\\fcharset0 Helvetica;}}\n\
-                {{\\colortbl;\\red255\\green255\\blue255;\\red255\\green255\\blue255;}}\n\
-                {{\\*\\expandedcolortbl;;\\csgenericrgb\\c100000\\c100000\\c100000;}}\n"
-            );
-
-            // Convert \n to RTF newlines (\par)
-            let content_with_rtf_newlines = text_element.content.replace("\n", "\\par ");
-            
-            let rtf_content = format!(
-                "\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\pardirnatural\\qc\\partightenfactor0\n\
-                \\f0\\fs96 \\cf2 {}", content_with_rtf_newlines);
-
-            let rtf_footer = "}";
-            let rtf_data = format!("{}{}{}", rtf_header, rtf_content, rtf_footer).into_bytes();
+            // Use proper RTF conversion that handles superscripts
+            let rtf_data = text_to_rtf_bytes(&text_element.content);
 
             let text = graphics::Text {
                 attributes: Some(graphics::text::Attributes {

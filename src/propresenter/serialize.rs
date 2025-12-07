@@ -52,17 +52,21 @@ pub fn write_presentation_file(
     path: impl AsRef<Path>,
 ) -> Result<(), SerializeError> {
     let path = path.as_ref();
-    
-    // Create a buffer and encode the presentation into it
-    let mut buf = Vec::new();
-    presentation.encode(&mut buf)
-        .map_err(|e| SerializeError::EncodeError(e.to_string()))?;
+    let buf = encode_presentation(presentation);
     
     // Create the file and write the buffer to it
     let mut file = File::create(path)?;
     file.write_all(&buf)?;
     
     Ok(())
+}
+
+/// Encode a presentation to protobuf bytes (for embedding in playlists)
+pub fn encode_presentation(presentation: &rv_data::Presentation) -> Vec<u8> {
+    let mut buf = Vec::new();
+    // encode() only fails if the buffer can't grow, which won't happen with Vec
+    presentation.encode(&mut buf).expect("encoding to Vec should not fail");
+    buf
 }
 
 #[cfg(test)]

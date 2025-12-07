@@ -6,8 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::App;
-use crate::planning_center::types::Category;
+use crate::app::{App, SlideType};
 use crate::ui::create_titled_block;
 
 pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -28,16 +27,16 @@ pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
     let focused_fg = Color::Yellow; // Foreground for selected item when focused
     let default_fg = Color::White;
 
-    // Define category indicators and their colors
-    let category_indicators = [
-        (Category::Song, "[ Song ]", Color::Green),
-        (Category::Text, "[ Text ]", Color::Blue),
-        (Category::Title, "[ Title ]", Color::Yellow),
-        (Category::Graphic, "[ Graphic ]", Color::Magenta),
-        (Category::Other, "[ Other ]", Color::DarkGray),
+    // Define slide type indicators and their colors
+    let slide_type_indicators = [
+        (SlideType::Scripture, "[ Scripture ]", Color::Cyan),
+        (SlideType::Lyrics, "[ Lyrics ]", Color::Green),
+        (SlideType::Title, "[ Title ]", Color::Yellow),
+        (SlideType::Graphic, "[ Graphic ]", Color::Magenta),
+        (SlideType::Text, "[ Text ]", Color::Blue),
     ];
     
-    let max_indicator_width = category_indicators.iter().map(|(_, text, _)| text.len()).max().unwrap_or(10);
+    let max_indicator_width = slide_type_indicators.iter().map(|(_, text, _)| text.chars().count()).max().unwrap_or(15);
     
     // Note: file list alignment offset available if needed
     // Width before Item Title = Prefix(2) + Status(2) + MaxCategoryWidth + Space(1)
@@ -50,73 +49,96 @@ pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(i, item)| {
             let is_selected = Some(i) == selected_item_index;
             let is_focused = items_is_focused;
-            let current_bg = if is_selected { selection_bg } else { default_bg }; // Determine item background
+            let current_bg = if is_selected { selection_bg } else { default_bg };
             
-            let (type_indicator, type_color) = category_indicators.iter().find(|(cat, _, _)| *cat == item.category).map(|(_, text, color)| (*text, *color)).unwrap_or(("[ Other ]", Color::DarkGray));
-            let padding = " ".repeat(max_indicator_width - type_indicator.len() + 1);
+            // Get detected/overridden slide type for this item
+            let slide_type = app.get_slide_type_for_item(item);
+            let (type_indicator, type_color) = slide_type_indicators.iter()
+                .find(|(st, _, _)| *st == slide_type)
+                .map(|(_, text, color)| (*text, *color))
+                .unwrap_or(("[ Text ]", Color::Blue));
+            let padding = " ".repeat(max_indicator_width.saturating_sub(type_indicator.chars().count()) + 1);
+            
             let is_completed = *app.item_completion.get(&item.id).unwrap_or(&false);
             let is_ignored = *app.item_ignored.get(&item.id).unwrap_or(&false);
-            let matched_file_display = app.item_matched_file.get(&item.id)
-                .and_then(|opt_file| opt_file.as_ref())
-                .map(|s| {
-                    // Extract just the filename without extension
-                    let path = std::path::Path::new(s);
-                    let filename = path.file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .unwrap_or(s);
-                    format!(" -> {}", filename)
-                })
-                .unwrap_or_default();
+            
+            // Check if item has custom editor content (mutually exclusive with file match)
+            let has_editor_content = app.item_editor_state.get(&item.id)
+                .and_then(|opt| opt.as_ref())
+                .map(|state| state.content.iter().any(|line| !line.trim().is_empty()))
+                .unwrap_or(false);
+            
+            let matched_file = app.item_matched_file.get(&item.id)
+                .and_then(|opt_file| opt_file.as_ref());
+            
+            // Determine status display: Created vs Matched vs neither
+            let status_display = if has_editor_content {
+                " -> [Created]".to_string()
+            } else if let Some(file_path) = matched_file {
+                let path = std::path::Path::new(file_path);
+                let filename = path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or(file_path);
+                format!(" -> {}", filename)
+            } else {
+                String::new()
+            };
 
-            // Determine base foreground and modifier for text parts
+            // Determine base foreground and modifier
             let base_fg = if is_focused && is_selected { focused_fg } else { default_fg };
             let modifier = if is_focused && is_selected { Modifier::BOLD } else { Modifier::empty() };
 
-            // Styles for individual parts (NO background here)
+            // Styles for individual parts
             let mut title_style = Style::default().fg(base_fg).add_modifier(modifier);
             let mut category_style = Style::default().fg(type_color).add_modifier(modifier);
-            let mut status_style = Style::default(); // For dimming/crossing out space
-            let mut matched_file_style = Style::default().fg(Color::Cyan).add_modifier(modifier);
+            let mut status_style = Style::default();
             let mut padding_style = Style::default();
+            
+            // Status display color: Cyan for matched file, Magenta for created
+            let mut status_display_style = if has_editor_content {
+                Style::default().fg(Color::Magenta).add_modifier(modifier)
+            } else {
+                Style::default().fg(Color::Cyan).add_modifier(modifier)
+            };
 
             if is_ignored {
-                // Apply strikethrough and dimming to specific styles
                 title_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT);
                 category_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT);
-                status_style = Style::default().fg(Color::DarkGray); // Dim the space for alignment
-                matched_file_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT);
+                status_style = Style::default().fg(Color::DarkGray);
+                status_display_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT);
                 padding_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT);
             }
             
             // --- Create Spans --- 
             let mut spans = Vec::new();
             
-            // Prefix (No style needed, inherits from item)
+            // Prefix
             let prefix = if is_focused && is_selected { "> " } else { "  " };
             spans.push(Span::raw(prefix)); 
 
-            // Status Icon (Specific foreground color, inherits bg)
-            if is_completed {
-                spans.push(Span::styled("✓ ", Style::default().fg(Color::Green)));
-            } else if is_ignored {
+            // Status Icon: ✓ = matched, ✎ = created, ✗ = ignored
+            if is_ignored {
                 spans.push(Span::styled("✗ ", Style::default().fg(Color::Red)));
+            } else if has_editor_content {
+                spans.push(Span::styled("✎ ", Style::default().fg(Color::Magenta)));
+            } else if is_completed {
+                spans.push(Span::styled("✓ ", Style::default().fg(Color::Green)));
             } else {
-                spans.push(Span::styled("  ", status_style)); // Alignment space (inherits bg, gets dim+crossed out if ignored)
+                spans.push(Span::styled("  ", status_style));
             }
             
-            // Category Indicator (Uses calculated style)
+            // Category Indicator
             spans.push(Span::styled(type_indicator, category_style));
             
-            // Padding (Uses calculated style)
+            // Padding
             spans.push(Span::styled(padding, padding_style));
             
-            // Title (Uses calculated style)
+            // Title
             spans.push(Span::styled(item.title.clone(), title_style));
             
-            // Matched File (Uses calculated style)
-            spans.push(Span::styled(matched_file_display, matched_file_style));
+            // Status Display (Created or Matched file)
+            spans.push(Span::styled(status_display, status_display_style));
 
-            // Apply background to the *entire* ListItem
             ListItem::new(Line::from(spans)).style(Style::default().bg(current_bg))
         })
         .collect();
