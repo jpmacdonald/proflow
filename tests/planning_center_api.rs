@@ -1,6 +1,9 @@
+//! Integration tests for the Planning Center API client.
+
 // Ensure this test only runs when integration tests are explicitly enabled
 // or when running all tests, but provide feedback if skipped.
-#![cfg(feature = "integration_test")] 
+#![cfg(feature = "integration_test")]
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use proflow_tui::config::Config;
 use proflow_tui::planning_center::PlanningCenterClient;

@@ -1,19 +1,21 @@
 use chrono::{DateTime, Duration, Utc};
+use futures::future;
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration as StdDuration;
-use futures::future;
 use tokio::time::sleep;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::planning_center::types::*;
+use crate::planning_center::types::{Category, Item, Plan, Scripture, Service, Song};
 
 const BASE_URL: &str = "https://api.planningcenteronline.com/services/v2";
 
 /// Retry configuration for API requests
 const MAX_RETRIES: u32 = 3;
+/// Initial backoff delay in milliseconds before the first retry
 const INITIAL_BACKOFF_MS: u64 = 500;
+/// Maximum backoff delay cap in milliseconds
 const MAX_BACKOFF_MS: u64 = 10_000;
 
 /// Client for accessing Planning Center Online API
@@ -22,26 +24,36 @@ const MAX_BACKOFF_MS: u64 = 10_000;
 /// which significantly improves performance when there are many service types.
 #[derive(Clone)]
 pub struct PlanningCenterClient {
+    /// Application ID for API authentication
     app_id: String,
+    /// Secret key for API authentication
     secret: String,
+    /// HTTP client with timeout configuration
     client: Client,
 }
 
 impl PlanningCenterClient {
     /// Create a new Planning Center client from config
     pub fn new(config: &Config) -> Self {
+        // Client::build() should never fail with default settings, but if it does,
+        // we create a client without timeout rather than silently failing
+        let client = Client::builder()
+            .timeout(StdDuration::from_secs(30))
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to create HTTP client with timeout, using default client: {e}");
+                Client::default()
+            });
         Self {
             app_id: config.pco_app_id.clone(),
             secret: config.pco_secret.clone(),
-            client: Client::builder()
-                .timeout(StdDuration::from_secs(30))
-                .build()
-                .unwrap_or_default(),
+            client,
         }
     }
 
     /// Check if credentials are configured
-    fn is_configured(&self) -> bool {
+    const fn is_configured(&self) -> bool {
+        // String::is_empty is not const, so we check len directly
         !self.app_id.is_empty() && !self.secret.is_empty()
     }
 
@@ -57,13 +69,13 @@ impl PlanningCenterClient {
 
     /// Internal method that performs the actual request with retry logic
     async fn get_with_retry(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
-        let url = format!("{}{}", BASE_URL, path);
+        let url = format!("{BASE_URL}{path}");
         let mut last_error: Option<Error> = None;
         let mut backoff_ms = INITIAL_BACKOFF_MS;
 
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
-                tracing::info!("Retrying request to {} (attempt {}/{})", path, attempt + 1, MAX_RETRIES + 1);
+                tracing::info!("Retrying request to {path} (attempt {}/{})", attempt + 1, MAX_RETRIES + 1);
                 sleep(StdDuration::from_millis(backoff_ms)).await;
                 backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);
             }
@@ -72,7 +84,7 @@ impl PlanningCenterClient {
                 .get(&url)
                 .basic_auth(&self.app_id, Some(&self.secret))
                 .header("Content-Type", "application/json");
-            
+
             let request = if query.is_empty() {
                 request
             } else {
@@ -82,48 +94,48 @@ impl PlanningCenterClient {
             match request.send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    
+
                     // Don't retry client errors (4xx) except 429 (rate limit)
                     if status.is_client_error() && status.as_u16() != 429 {
                         return Err(Error::pco_status(
-                            format!("Request to {} returned {}", path, status),
+                            format!("Request to {path} returned {status}"),
                             status.as_u16(),
                         ));
                     }
-                    
+
                     // Retry on server errors (5xx) or rate limiting (429)
                     if status.is_server_error() || status.as_u16() == 429 {
                         last_error = Some(Error::pco_status(
-                            format!("Request to {} returned {}", path, status),
+                            format!("Request to {path} returned {status}"),
                             status.as_u16(),
                         ));
                         continue;
                     }
-                    
+
                     if !status.is_success() {
                         return Err(Error::pco_status(
-                            format!("Request to {} returned {}", path, status),
+                            format!("Request to {path} returned {status}"),
                             status.as_u16(),
                         ));
                     }
 
                     return resp.json().await
-                        .map_err(|e| Error::parse(format!("Invalid JSON from {}: {}", path, e), None));
+                        .map_err(|e| Error::parse(format!("Invalid JSON from {path}: {e}"), None));
                 }
                 Err(e) => {
                     // Network errors are retryable
                     if e.is_timeout() || e.is_connect() {
-                        last_error = Some(Error::Network(format!("Request to {} failed: {}", path, e)));
+                        last_error = Some(Error::Network(format!("Request to {path} failed: {e}")));
                         continue;
                     }
                     // Other errors are not retryable
-                    return Err(Error::Network(format!("Request to {} failed: {}", path, e)));
+                    return Err(Error::Network(format!("Request to {path} failed: {e}")));
                 }
             }
         }
 
         // All retries exhausted
-        Err(last_error.unwrap_or_else(|| Error::Network(format!("Request to {} failed after {} retries", path, MAX_RETRIES))))
+        Err(last_error.unwrap_or_else(|| Error::Network(format!("Request to {path} failed after {MAX_RETRIES} retries"))))
     }
 
     /// Get upcoming services and plans using concurrent API calls
@@ -148,7 +160,7 @@ impl PlanningCenterClient {
         for result in plan_results {
             match result {
                 Ok(plans) => all_plans.extend(plans),
-                Err(e) => tracing::warn!("Failed to fetch plans for a service: {}", e),
+                Err(e) => tracing::warn!("Failed to fetch plans for a service: {e}"),
             }
         }
 
@@ -164,10 +176,10 @@ impl PlanningCenterClient {
     async fn fetch_service_types(&self) -> Result<Vec<Service>> {
         let json = self.get("/service_types").await?;
 
-        let data = json["data"].as_array()
+        let entries = json["data"].as_array()
             .ok_or_else(|| Error::parse("Missing 'data' array in service types response", None))?;
 
-        Ok(data.iter().filter_map(|s| {
+        Ok(entries.iter().filter_map(|s| {
             let id = s["id"].as_str()?.to_string();
             let name = s["attributes"]["name"].as_str().unwrap_or("Unknown").to_string();
             Some(Service { id, name })
@@ -182,19 +194,20 @@ impl PlanningCenterClient {
         days_ahead: i64,
     ) -> Result<Vec<Plan>> {
         let end_date = Utc::now() + Duration::days(days_ahead);
-        let path = format!("/service_types/{}/plans", service_id);
+        let path = format!("/service_types/{service_id}/plans");
 
         let json = self.get_with_query(&path, &[
             ("filter", "future"),
             ("per_page", "25"),
         ]).await?;
 
-        let data = json["data"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+        let entries = json["data"].as_array().map_or(&[] as &[Value], Vec::as_slice);
 
-        Ok(data.iter().filter_map(|plan_data| {
-            let id = plan_data["id"].as_str()?.to_string();
-            let attrs = &plan_data["attributes"];
+        Ok(entries.iter().filter_map(|plan_value| {
+            let id = plan_value["id"].as_str()?.to_string();
+            let attrs = &plan_value["attributes"];
 
+            #[allow(clippy::similar_names)]
             let date = DateTime::parse_from_rfc3339(attrs["sort_date"].as_str()?)
                 .ok()?
                 .with_timezone(&Utc);
@@ -210,10 +223,10 @@ impl PlanningCenterClient {
             Some(Plan {
                 id,
                 service_id: service_id.to_string(),
-                _service_name: service_name.to_string(),
+                service_name: service_name.to_string(),
                 date,
                 title,
-                _items: Vec::new(),
+                items: Vec::new(),
             })
         }).collect())
     }
@@ -227,17 +240,17 @@ impl PlanningCenterClient {
             ));
         }
 
-        let path = format!("/plans/{}/items", plan_id);
+        let path = format!("/plans/{plan_id}/items");
         let json = self.get_with_query(&path, &[
             ("include", "song,arrangement"),
             ("per_page", "100"),
         ]).await?;
 
-        let data = json["data"].as_array()
+        let entries = json["data"].as_array()
             .ok_or_else(|| Error::parse("Missing 'data' array in items response", None))?;
 
         // Build lookup maps for included Song and Arrangement data
-        let included = json["included"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+        let included = json["included"].as_array().map_or(&[] as &[Value], Vec::as_slice);
         let songs: std::collections::HashMap<_, _> = included.iter()
             .filter(|v| v["type"].as_str() == Some("Song"))
             .filter_map(|v| Some((v["id"].as_str()?, v)))
@@ -248,10 +261,10 @@ impl PlanningCenterClient {
             .collect();
 
         // Parse items
-        let items: Vec<Item> = data.iter().enumerate().filter_map(|(idx, item_data)| {
-            let id = item_data["id"].as_str()?.to_string();
-            let attrs = &item_data["attributes"];
-            let rels = &item_data["relationships"];
+        let items: Vec<Item> = entries.iter().enumerate().filter_map(|(idx, item_value)| {
+            let id = item_value["id"].as_str()?.to_string();
+            let attrs = &item_value["attributes"];
+            let rels = &item_value["relationships"];
 
             let title = attrs["title"].as_str().unwrap_or("Untitled").to_string();
             let description = attrs["description"].as_str().map(String::from);
@@ -271,9 +284,9 @@ impl PlanningCenterClient {
                     .unwrap_or(&title)
                     .to_string();
                 Some(Scripture {
-                    _reference: reference,
-                    _text: description.clone(),
-                    _translation: None,
+                    reference,
+                    text: description.clone(),
+                    translation: None,
                 })
             } else {
                 None
@@ -281,13 +294,13 @@ impl PlanningCenterClient {
 
             Some(Item {
                 id,
-                _position: idx + 1,
+                position: idx + 1,
                 title,
-                _description: description,
+                description,
                 category,
-                _note: note,
+                note,
                 song,
-                _scripture: scripture,
+                scripture,
             })
         }).collect();
 
@@ -302,8 +315,8 @@ fn parse_song(
     arrangements: &std::collections::HashMap<&str, &Value>,
 ) -> Option<Song> {
     let song_id = rels.get("song")?.get("data")?.get("id")?.as_str()?;
-    let song_data = songs.get(song_id)?;
-    let attrs = &song_data["attributes"];
+    let song_value = songs.get(song_id)?;
+    let attrs = &song_value["attributes"];
 
     let title = attrs["title"].as_str().unwrap_or("").to_string();
     let author = attrs["author"].as_str().map(String::from);
@@ -314,21 +327,20 @@ fn parse_song(
     let (lyrics, arrangement) = rels.get("arrangement")
         .and_then(|a| a.get("data")?.get("id")?.as_str())
         .and_then(|arr_id| arrangements.get(arr_id))
-        .map(|arr| {
+        .map_or((None, None), |arr| {
             let lyrics = arr["attributes"]["lyrics"].as_str().map(String::from);
             let name = arr["attributes"]["name"].as_str().map(String::from);
             (lyrics, name)
-        })
-        .unwrap_or((None, None));
+        });
 
     Some(Song {
         title,
         author,
-        _copyright: copyright,
-        _ccli: ccli,
-        _themes: None,
+        copyright,
+        ccli,
+        themes: None,
         lyrics,
-        _arrangement: arrangement,
+        arrangement,
     })
 }
 
@@ -340,12 +352,12 @@ fn classify_item(title: &str, has_song: bool) -> Category {
 
     let upper = title.to_uppercase();
     match () {
-        _ if title.contains("Scripture") || title.contains("Reading") => Category::Title,
-        _ if title.contains("Sermon") || title.contains("Message") => Category::Title,
-        _ if title.contains("Announcements") || title.contains("Welcome") => Category::Graphic,
-        _ if ["PRE-SERVICE", "SERVICE", "POST-SERVICE", "PRAISE", "OFFERING",
+        () if title.contains("Scripture") || title.contains("Reading") => Category::Title,
+        () if title.contains("Sermon") || title.contains("Message") => Category::Title,
+        () if title.contains("Announcements") || title.contains("Welcome") => Category::Graphic,
+        () if ["PRE-SERVICE", "SERVICE", "POST-SERVICE", "PRAISE", "OFFERING",
               "GIVING", "PRAYER", "LORD'S PRAYER", "GREETING"]
             .iter().any(|h| upper.contains(h)) => Category::Other,
-        _ => Category::Text,
+        () => Category::Text,
     }
 }

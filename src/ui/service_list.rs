@@ -11,6 +11,7 @@ use crate::app::App;
 use crate::ui::create_titled_block;
 // No need to import Plan if not used in type hints
 
+/// Render the services and plans list panes.
 pub fn draw_services(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -85,13 +86,13 @@ pub fn draw_services(f: &mut Frame, app: &mut App, area: Rect) {
             let title_display = if title_part.len() > title_width {
                 format!("{}...", &title_part[0..(title_width-3)])
             } else {
-                format!("{:title_width$}", title_part, title_width=title_width)
+                format!("{title_part:title_width$}")
             };
             
             ListItem::new(Line::from(vec![
                 Span::raw(prefix),
                 Span::styled(title_display, text_style),
-                Span::styled(format!(" ({})", date_str), Style::default().fg(Color::Gray)),
+                Span::styled(format!(" ({date_str})"), Style::default().fg(Color::Gray)),
             ]))
         })
         .collect();

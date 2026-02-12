@@ -1,4 +1,4 @@
-//! Extract plain text content from ProPresenter files.
+//! Extract plain text content from `ProPresenter` files.
 
 use std::path::Path;
 use crate::propresenter::deserialize::read_presentation_file;
@@ -9,7 +9,7 @@ use crate::propresenter::generated::rv_data::{self, action::ActionTypeData};
 /// Returns lines with blank lines between slides (stanzas).
 pub fn extract_text_from_pro(path: &Path) -> Result<Vec<String>, String> {
     let presentation = read_presentation_file(path)
-        .map_err(|e| format!("Failed to read presentation: {}", e))?;
+        .map_err(|e| format!("Failed to read presentation: {e}"))?;
     
     let mut lines = Vec::new();
     let mut first_slide = true;
@@ -38,7 +38,7 @@ pub fn extract_text_from_pro(path: &Path) -> Result<Vec<String>, String> {
     }
     
     // Ensure trailing empty line for editor
-    if !lines.is_empty() && !lines.last().map_or(true, |l| l.is_empty()) {
+    if !lines.is_empty() && !lines.last().is_none_or(String::is_empty) {
         lines.push(String::new());
     }
     
@@ -47,21 +47,20 @@ pub fn extract_text_from_pro(path: &Path) -> Result<Vec<String>, String> {
 
 /// Extract text from a slide action
 fn extract_slide_text(action: &rv_data::Action) -> Option<String> {
+    use rv_data::action::slide_type::Slide;
+
     // Navigate through the oneof to find SlideType
     let action_data = action.action_type_data.as_ref()?;
-    
-    let slide_type = match action_data {
-        ActionTypeData::Slide(s) => s,
-        _ => return None,
+
+    let ActionTypeData::Slide(slide_type) = action_data else {
+        return None;
     };
-    
+
     // Get the slide from the oneof
     let slide_content = slide_type.slide.as_ref()?;
-    
-    use rv_data::action::slide_type::Slide;
-    let presentation_slide = match slide_content {
-        Slide::Presentation(ps) => ps,
-        Slide::Prop(_) => return None,
+
+    let Slide::Presentation(presentation_slide) = slide_content else {
+        return None;
     };
     
     // Get the base slide which contains elements
@@ -105,6 +104,8 @@ fn extract_text_from_element(element: &rv_data::graphics::Element) -> Option<Str
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use super::*;
     use std::path::PathBuf;
     

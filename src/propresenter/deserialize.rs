@@ -6,20 +6,23 @@ use thiserror::Error;
 use crate::propresenter::generated::rv_data;
 use prost::Message;
 
-/// Errors that can occur when reading ProPresenter files
+/// Errors that can occur when reading `ProPresenter` files
 #[derive(Error, Debug)]
 pub enum ProPresenterError {
+    /// The specified file was not found
     #[error("File not found: {0}")]
     FileNotFound(String),
-    
+
+    /// An I/O error occurred during file operations
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
-    
+
+    /// Failed to decode the protobuf data
     #[error("Failed to decode ProPresenter file: {0}")]
     DecodeError(#[from] prost::DecodeError),
 }
 
-/// Read a ProPresenter file and return the deserialized presentation
+/// Read a `ProPresenter` file and return the deserialized presentation
 ///
 /// # Arguments
 ///
@@ -27,7 +30,7 @@ pub enum ProPresenterError {
 ///
 /// # Returns
 ///
-/// Returns a Result containing either the deserialized Presentation or a ProPresenterError
+/// Returns a Result containing either the deserialized Presentation or a `ProPresenterError`
 ///
 /// # Example
 ///
@@ -63,6 +66,8 @@ pub fn read_presentation_file(path: impl AsRef<Path>) -> Result<rv_data::Present
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use super::*;
     use std::path::PathBuf;
     use std::io::Write;
@@ -150,10 +155,10 @@ mod tests {
 
                 println!("Successfully verified Amazing Grace presentation structure");
             }
-            Err(e) => panic!("Failed to read presentation: {}", e),
+            Err(e) => panic!("Failed to read presentation: {e}"),
         }
     }
-    
+
     #[test]
     fn test_read_simple_presentation() {
         let path = get_example_path("Tom Nametag.pro");
@@ -164,7 +169,7 @@ mod tests {
 
         // Save the raw presentation struct to a file for analysis
         if let Ok(mut file) = File::create("test_output_tom_nametag.txt") {
-            writeln!(file, "{:#?}", presentation).expect("Failed to write presentation debug output");
+            writeln!(file, "{presentation:#?}").expect("Failed to write presentation debug output");
         }
 
         // Basic presentation properties
@@ -246,7 +251,7 @@ mod tests {
             Ok(presentation) => {
                 // Save the raw presentation struct to a file for analysis
                 if let Ok(mut file) = File::create("test_output_bible_verse.txt") {
-                    writeln!(file, "{:#?}", presentation).expect("Failed to write presentation debug output");
+                    writeln!(file, "{presentation:#?}").expect("Failed to write presentation debug output");
                 }
 
                 // Basic presentation properties
@@ -297,7 +302,7 @@ mod tests {
 
                 println!("Successfully verified Bible verse presentation structure");
             }
-            Err(e) => panic!("Failed to read presentation: {}", e),
+            Err(e) => panic!("Failed to read presentation: {e}"),
         }
     }
 } 

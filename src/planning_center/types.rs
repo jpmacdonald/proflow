@@ -7,50 +7,60 @@ use chrono::{DateTime, Utc};
 /// Represents a type of service (e.g., "Sunday Morning")
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Service {
+    /// Unique identifier from Planning Center
     pub id: String,
+    /// Human-readable service type name
     pub name: String,
 }
 
 /// Represents a specific instance of a Service on a particular date
 #[derive(Debug, Clone)]
 pub struct Plan {
+    /// Unique identifier from Planning Center
     pub id: String,
+    /// Parent service type identifier
     pub service_id: String,
     /// Name of the service type this plan belongs to
-    #[allow(dead_code)]
-    pub _service_name: String,
+    pub service_name: String,
+    /// Scheduled date and time
     pub date: DateTime<Utc>,
     /// Display title (e.g., "March 31st")
     pub title: String,
     /// Items in this plan (loaded separately)
-    #[allow(dead_code)]
-    pub _items: Vec<Item>,
+    pub items: Vec<Item>,
 }
 
 /// Represents an element within a Plan (e.g., Song, Scripture, Header)
 #[derive(Debug, Clone)]
 pub struct Item {
+    /// Unique identifier from Planning Center
     pub id: String,
     /// Position in the plan order
-    #[allow(dead_code)]
-    pub _position: usize,
+    pub position: usize,
+    /// Display title
     pub title: String,
-    #[allow(dead_code)]
-    pub _description: Option<String>,
+    /// Optional description text
+    pub description: Option<String>,
+    /// Classification for application routing
     pub category: Category,
-    #[allow(dead_code)]
-    pub _note: Option<String>,
+    /// Optional note attached to this item
+    pub note: Option<String>,
+    /// Linked song data, if this item is a song
     pub song: Option<Song>,
-    #[allow(dead_code)]
-    pub _scripture: Option<Scripture>,
+    /// Linked scripture reference, if applicable
+    pub scripture: Option<Scripture>,
 }
 
 /// Classifies the type of an Item for application purposes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
+    /// Plain text content
     Text,
+    /// Visual/graphic content (e.g., announcements)
     Graphic,
+    /// Title-style content (e.g., scripture readings, sermons)
     Title,
+    /// Musical item with lyrics
     Song,
     /// Structural items like headers
     Other,
@@ -59,26 +69,29 @@ pub enum Category {
 /// Song metadata from Planning Center
 #[derive(Debug, Clone)]
 pub struct Song {
+    /// Song title
     pub title: String,
+    /// Song author or composer
     pub author: Option<String>,
-    #[allow(dead_code)]
-    pub _copyright: Option<String>,
-    #[allow(dead_code)]
-    pub _ccli: Option<String>,
-    #[allow(dead_code)]
-    pub _themes: Option<Vec<String>>,
+    /// Copyright information
+    pub copyright: Option<String>,
+    /// CCLI license number
+    pub ccli: Option<String>,
+    /// Associated theme tags
+    pub themes: Option<Vec<String>>,
+    /// Full lyrics text
     pub lyrics: Option<String>,
-    #[allow(dead_code)]
-    pub _arrangement: Option<String>,
+    /// Name of the selected arrangement
+    pub arrangement: Option<String>,
 }
 
 /// Scripture reference
 #[derive(Debug, Clone)]
 pub struct Scripture {
-    #[allow(dead_code)]
-    pub _reference: String,
-    #[allow(dead_code)]
-    pub _text: Option<String>,
-    #[allow(dead_code)]
-    pub _translation: Option<String>,
+    /// Book, chapter, and verse reference string
+    pub reference: String,
+    /// Full scripture passage text
+    pub text: Option<String>,
+    /// Bible translation identifier (e.g., "NIV", "ESV")
+    pub translation: Option<String>,
 }

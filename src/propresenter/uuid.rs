@@ -1,10 +1,10 @@
-//! UUID generation for ProPresenter files.
+//! UUID generation for `ProPresenter` files.
 
 #![allow(dead_code)]
 
 use uuid::Uuid as SystemUuid;
 
-/// Generate a new UUID in the format needed by ProPresenter
+/// Generate a new UUID in the format needed by `ProPresenter`
 pub fn generate_uuid() -> String {
     let uuid = SystemUuid::new_v4();
     uuid.to_string()
@@ -14,11 +14,7 @@ pub fn generate_uuid() -> String {
 pub fn string_to_uuid_or_generate(input: Option<&str>) -> String {
     match input {
         Some(s) if !s.is_empty() => {
-            if let Ok(uuid) = SystemUuid::parse_str(s) {
-                uuid.to_string()
-            } else {
-                generate_uuid()
-            }
+            SystemUuid::parse_str(s).map_or_else(|_| generate_uuid(), |uuid| uuid.to_string())
         },
         _ => generate_uuid(),
     }

@@ -1,4 +1,4 @@
-//! Builder pattern for creating ProPresenter presentations.
+//! Builder pattern for creating `ProPresenter` presentations.
 //!
 //! Provides a fluent API for constructing presentations with valid
 //! reference chains between cues, groups, and arrangements.
@@ -8,7 +8,7 @@
 use uuid::Uuid;
 use crate::propresenter::data_model as dm;
 
-/// Builder for creating ProPresenter presentations with valid reference chains
+/// Builder for creating `ProPresenter` presentations with valid reference chains
 pub struct PresentationBuilder {
     presentation: dm::Presentation,
     cues: Vec<dm::Cue>,
@@ -48,18 +48,21 @@ impl PresentationBuilder {
     }
 
     /// Set the category
+    #[must_use]
     pub fn with_category(mut self, category: &str) -> Self {
         self.presentation.category = category.to_string();
         self
     }
 
     /// Set the UUID
-    pub fn with_uuid(mut self, uuid: Uuid) -> Self {
+    #[must_use]
+    pub const fn with_uuid(mut self, uuid: Uuid) -> Self {
         self.presentation.uuid = uuid;
         self
     }
 
     /// Add cues, ensuring they have valid UUIDs
+    #[must_use]
     pub fn with_cues(mut self, cues: Vec<dm::Cue>) -> Self {
         // Ensure each cue has a UUID
         let cues = cues.into_iter().map(|mut cue| {
@@ -73,6 +76,7 @@ impl PresentationBuilder {
     }
 
     /// Add cue groups, ensuring they reference valid cues
+    #[must_use]
     pub fn with_cue_groups(mut self, groups: Vec<dm::CueGroup>) -> Self {
         // Validate and store cue groups
         let cue_uuids: Vec<Uuid> = self.cues.iter().map(|c| c.uuid).collect();
@@ -101,6 +105,7 @@ impl PresentationBuilder {
     }
 
     /// Add arrangements, ensuring they reference valid groups
+    #[must_use]
     pub fn with_arrangements(mut self, arrangements: Vec<dm::Arrangement>) -> Self {
         // Get valid group UUIDs
         let group_uuids: Vec<Uuid> = self.cue_groups.iter()
@@ -126,6 +131,7 @@ impl PresentationBuilder {
     }
 
     /// Set the selected arrangement, must be a valid arrangement
+    #[must_use]
     pub fn with_selected_arrangement(mut self, uuid: Uuid) -> Self {
         if self.arrangements.iter().any(|a| a.uuid == uuid) {
             self.selected_arrangement = Some(uuid);
@@ -171,6 +177,8 @@ impl PresentationBuilder {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use super::*;
 
     #[test]

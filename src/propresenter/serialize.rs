@@ -1,4 +1,4 @@
-//! ProPresenter file serialization.
+//! `ProPresenter` file serialization.
 //!
 //! Writes protobuf-encoded presentation files to disk.
 
@@ -12,17 +12,19 @@ use thiserror::Error;
 use crate::propresenter::generated::rv_data;
 use prost::Message;
 
-/// Errors that can occur when writing ProPresenter files
+/// Errors that can occur when writing `ProPresenter` files
 #[derive(Error, Debug)]
 pub enum SerializeError {
+    /// An I/O error occurred during file operations
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
-    
+
+    /// Failed to encode the protobuf data
     #[error("Failed to encode ProPresenter file: {0}")]
     EncodeError(String),
 }
 
-/// Write a presentation to a ProPresenter file
+/// Write a presentation to a `ProPresenter` file
 ///
 /// # Arguments
 ///
@@ -31,7 +33,7 @@ pub enum SerializeError {
 ///
 /// # Returns
 ///
-/// Returns a Result indicating success or containing a SerializeError
+/// Returns a Result indicating success or containing a `SerializeError`
 ///
 /// # Example
 ///
@@ -62,15 +64,17 @@ pub fn write_presentation_file(
 }
 
 /// Encode a presentation to protobuf bytes (for embedding in playlists)
+#[allow(clippy::expect_used)] // encode() only fails if buffer can't grow, impossible with Vec
 pub fn encode_presentation(presentation: &rv_data::Presentation) -> Vec<u8> {
     let mut buf = Vec::new();
-    // encode() only fails if the buffer can't grow, which won't happen with Vec
-    presentation.encode(&mut buf).expect("encoding to Vec should not fail");
+    presentation.encode(&mut buf).expect("Vec<u8> cannot fail to grow");
     buf
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::float_cmp)]
+
     use super::*;
     use crate::propresenter::deserialize::read_presentation_file;
     use std::path::PathBuf;
@@ -109,8 +113,8 @@ mod tests {
         // Save the raw presentation struct to a test output file
         let test_output_path = get_test_output_path("test_output_tom_nametag.txt");
         let mut test_file = File::create(&test_output_path).expect("Failed to create test output file");
-        writeln!(test_file, "{:#?}", original).expect("Failed to write test output");
-        
+        writeln!(test_file, "{original:#?}").expect("Failed to write test output");
+
         // Write the presentation to a .pro file that can be opened in ProPresenter
         let pro_output_path = get_pro_output_path("tom_nametag_round_trip.pro");
         write_presentation_file(&original, &pro_output_path).expect("Failed to write presentation");
@@ -143,8 +147,8 @@ mod tests {
         // Save the raw presentation struct to a test output file
         let test_output_path = get_test_output_path("test_output_amazing_grace.txt");
         let mut test_file = File::create(&test_output_path).expect("Failed to create test output file");
-        writeln!(test_file, "{:#?}", original).expect("Failed to write test output");
-        
+        writeln!(test_file, "{original:#?}").expect("Failed to write test output");
+
         // Write the presentation to a .pro file that can be opened in ProPresenter
         let pro_output_path = get_pro_output_path("amazing_grace_round_trip.pro");
         write_presentation_file(&original, &pro_output_path).expect("Failed to write presentation");
@@ -184,8 +188,8 @@ mod tests {
         // Save the raw presentation struct to a test output file
         let test_output_path = get_test_output_path("test_output_bible_verse.txt");
         let mut test_file = File::create(&test_output_path).expect("Failed to create test output file");
-        writeln!(test_file, "{:#?}", original).expect("Failed to write test output");
-        
+        writeln!(test_file, "{original:#?}").expect("Failed to write test output");
+
         // Write the presentation to a .pro file that can be opened in ProPresenter
         let pro_output_path = get_pro_output_path("titus_2v11-13_round_trip.pro");
         write_presentation_file(&original, &pro_output_path).expect("Failed to write presentation");
@@ -224,7 +228,7 @@ mod tests {
         // Save the raw presentation struct to a test output file
         let test_output_path = get_test_output_path("test_output_empty.txt");
         let mut test_file = File::create(&test_output_path).expect("Failed to create test output file");
-        writeln!(test_file, "{:#?}", empty).expect("Failed to write test output");
+        writeln!(test_file, "{empty:#?}").expect("Failed to write test output");
         
         // Write the presentation to a .pro file that can be opened in ProPresenter
         let pro_output_path = get_pro_output_path("empty_presentation.pro");
@@ -253,7 +257,7 @@ mod tests {
         // Save the raw presentation struct to a test output file for analysis
         let test_output_path = get_test_output_path("test_output_welcome_slides.txt");
         let mut test_file = File::create(&test_output_path).expect("Failed to create test output file");
-        writeln!(test_file, "{:#?}", presentation).expect("Failed to write test output");
+        writeln!(test_file, "{presentation:#?}").expect("Failed to write test output");
         
         // Basic presentation properties
         assert_eq!(presentation.name, "Welcome Slides");
@@ -313,8 +317,8 @@ mod tests {
         // Save the example presentation struct for analysis
         let example_output_path = get_test_output_path("test_output_example_comparison.txt");
         let mut example_file = File::create(&example_output_path).expect("Failed to create example output file");
-        writeln!(example_file, "{:#?}", example).expect("Failed to write example output");
-        
+        writeln!(example_file, "{example:#?}").expect("Failed to write example output");
+
         // Read our generated presentation
         let our_path = PathBuf::from("out/presentations/welcome_slides.pro");
         let our_presentation = read_presentation_file(&our_path).expect("Failed to read our presentation");
@@ -322,7 +326,7 @@ mod tests {
         // Save our presentation struct for analysis
         let our_output_path = get_test_output_path("test_output_our_presentation.txt");
         let mut our_file = File::create(&our_output_path).expect("Failed to create our output file");
-        writeln!(our_file, "{:#?}", our_presentation).expect("Failed to write our output");
+        writeln!(our_file, "{our_presentation:#?}").expect("Failed to write our output");
         
         println!("Comparison files saved to:");
         println!("  Example: {}", example_output_path.display());
@@ -341,7 +345,7 @@ mod tests {
         }
 
         let presentation = read_presentation_file(&input_path).unwrap();
-        let output = format!("{:#?}", presentation);
+        let output = format!("{presentation:#?}");
         fs::write(&output_path, output).unwrap();
     }
 
@@ -354,8 +358,8 @@ mod tests {
         // Save the raw presentation struct for analysis
         let example_output_path = get_test_output_path("test_output_group_structure_example.txt");
         let mut example_file = File::create(&example_output_path).expect("Failed to create example output file");
-        writeln!(example_file, "{:#?}", example).expect("Failed to write example output");
-        
+        writeln!(example_file, "{example:#?}").expect("Failed to write example output");
+
         // Verify group structure
         assert!(!example.cue_groups.is_empty(), "Presentation should have at least one cue group");
         
