@@ -7,19 +7,27 @@ use std::path::PathBuf;
 use prost::Message;
 
 use super::generated::rv_data;
-use super::rtf::text_to_rtf_bytes;
+use super::rtf::{text_to_rtf_bytes_styled, extract_rtf_options};
+// Re-export constants for backwards compatibility
+pub use crate::constants::template::{
+    DEFAULT_MAX_LINES_PER_SLIDE, DEFAULT_WRAP_COLUMN, MIN_SLIDE_WRAP,
+};
 
 /// Slide types that can use templates
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TemplateType {
+    /// Bible scripture slides
     Scripture,
+    /// Song/hymn lyrics slides
     Song,
+    /// Informational/announcement slides
     Info,
 }
 
 impl TemplateType {
     /// Get the template filename for this type
-    pub fn filename(&self) -> &'static str {
+    #[must_use]
+    pub const fn filename(self) -> &'static str {
         match self {
             Self::Scripture => "__template_scripture__.pro",
             Self::Song => "__template_song__.pro",
@@ -28,7 +36,8 @@ impl TemplateType {
     }
     
     /// All template types
-    pub fn all() -> &'static [TemplateType] {
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
         &[Self::Scripture, Self::Song, Self::Info]
     }
 }
@@ -114,6 +123,9 @@ pub fn extract_template_slide(presentation: &rv_data::Presentation) -> Option<rv
 }
 
 /// Clone a template slide and replace its text content
+/// 
+/// Preserves the template's styling (font, color, kerning) by extracting
+/// the RTF options from the original and applying them to the new text.
 pub fn clone_slide_with_text(template_slide: &rv_data::PresentationSlide, new_text: &str) -> rv_data::PresentationSlide {
     let mut slide = template_slide.clone();
     
@@ -122,8 +134,12 @@ pub fn clone_slide_with_text(template_slide: &rv_data::PresentationSlide, new_te
         for slide_element in &mut base_slide.elements {
             if let Some(ref mut graphics_element) = slide_element.element {
                 if let Some(ref mut text) = graphics_element.text {
-                    // Generate new RTF with proper superscript handling
-                    text.rtf_data = text_to_rtf_bytes(new_text);
+                    // Extract RTF options from original template to preserve styling
+                    let rtf_options = extract_rtf_options(&text.rtf_data)
+                        .unwrap_or_default();
+                    
+                    // Generate new RTF with template's styling (font, color, etc)
+                    text.rtf_data = text_to_rtf_bytes_styled(new_text, &rtf_options);
                 }
             }
         }
@@ -134,15 +150,111 @@ pub fn clone_slide_with_text(template_slide: &rv_data::PresentationSlide, new_te
     slide
 }
 
+/// Split content into slide-sized chunks based on visual line count
+/// 
+/// Groups content lines together until they would exceed `max_lines` when wrapped.
+/// Empty lines are treated as paragraph breaks.
+pub fn split_content_for_slides(
+    content: &[String],
+    wrap_column: usize,
+    max_lines: usize,
+) -> Vec<String> {
+    let wrap_col = wrap_column.max(MIN_SLIDE_WRAP);
+    let max = max_lines.max(1);
+    
+    let mut slides: Vec<String> = Vec::new();
+    let mut current_slide: Vec<String> = Vec::new();
+    let mut current_lines = 0;
+    
+    for line in content {
+        if line.trim().is_empty() {
+            // Empty line = paragraph break
+            // If we have content, add a blank line to current slide
+            if !current_slide.is_empty() {
+                current_slide.push(String::new());
+                current_lines += 1;
+            }
+            continue;
+        }
+        
+        // Estimate visual lines this content will take
+        let visual_lines = estimate_visual_lines(line, wrap_col);
+        
+        // Would this overflow? Start a new slide
+        if current_lines > 0 && current_lines + visual_lines > max {
+            // Finalize current slide
+            let slide_text = current_slide.join("\n").trim().to_string();
+            if !slide_text.is_empty() {
+                slides.push(slide_text);
+            }
+            current_slide.clear();
+            current_lines = 0;
+        }
+        
+        current_slide.push(line.clone());
+        current_lines += visual_lines;
+    }
+    
+    // Don't forget the last slide
+    let slide_text = current_slide.join("\n").trim().to_string();
+    if !slide_text.is_empty() {
+        slides.push(slide_text);
+    }
+    
+    // If nothing was generated, return empty slide
+    if slides.is_empty() {
+        slides.push(String::new());
+    }
+    
+    slides
+}
+
+/// Estimate how many visual lines a string will take when wrapped
+fn estimate_visual_lines(text: &str, wrap_column: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    
+    let mut lines = 0;
+    for line in text.lines() {
+        if line.is_empty() {
+            lines += 1;
+        } else {
+            let width = line.width();
+            lines += width.div_ceil(wrap_column);
+        }
+    }
+    lines.max(1)
+}
+
 /// Build a complete presentation from a template and content lines
 /// 
-/// Each line in `content` becomes a separate slide, cloned from the template.
+/// Content is automatically split into slides based on `wrap_column` and `max_lines_per_slide`.
+/// Each resulting chunk becomes a separate slide, cloned from the template.
 pub fn build_presentation_from_template(
     name: &str,
     template: &rv_data::Presentation,
     content: &[String],
 ) -> Option<rv_data::Presentation> {
+    build_presentation_from_template_with_options(
+        name,
+        template,
+        content,
+        DEFAULT_WRAP_COLUMN,
+        DEFAULT_MAX_LINES_PER_SLIDE,
+    )
+}
+
+/// Build a presentation with custom wrap/split options
+pub fn build_presentation_from_template_with_options(
+    name: &str,
+    template: &rv_data::Presentation,
+    content: &[String],
+    wrap_column: usize,
+    max_lines_per_slide: usize,
+) -> Option<rv_data::Presentation> {
     let template_slide = extract_template_slide(template)?;
+    
+    // Split content into slide-sized chunks
+    let slide_texts = split_content_for_slides(content, wrap_column, max_lines_per_slide);
     
     let mut presentation = template.clone();
     presentation.name = name.to_string();
@@ -153,10 +265,10 @@ pub fn build_presentation_from_template(
     presentation.cue_groups.clear();
     presentation.arrangements.clear();
     
-    // Create a cue for each content line (stanza)
+    // Create a cue for each slide chunk
     let mut cue_uuids = Vec::new();
     
-    for (i, text) in content.iter().enumerate() {
+    for text in &slide_texts {
         if text.trim().is_empty() {
             continue;
         }
@@ -165,12 +277,15 @@ pub fn build_presentation_from_template(
         let cue_uuid = uuid::Uuid::new_v4();
         let action_uuid = uuid::Uuid::new_v4();
         
+        // Copy cue settings from template if available
+        let template_cue = template.cues.first();
+        
         let cue = rv_data::Cue {
             uuid: Some(rv_data::Uuid { string: cue_uuid.to_string() }),
-            name: format!("Slide {}", i + 1),
+            name: String::new(),  // Empty like template
             actions: vec![rv_data::Action {
                 uuid: Some(rv_data::Uuid { string: action_uuid.to_string() }),
-                name: format!("Slide {}", i + 1),
+                name: String::new(),  // Empty like template
                 label: None,
                 delay_time: 0.0,
                 old_type: None,
@@ -186,10 +301,15 @@ pub fn build_presentation_from_template(
             }],
             completion_target_type: rv_data::cue::CompletionTargetType::None as i32,
             completion_target_uuid: None,
-            completion_action_type: rv_data::cue::CompletionActionType::First as i32,
+            // Use LAST like template/fresh presentations
+            completion_action_type: rv_data::cue::CompletionActionType::Last as i32,
             completion_action_uuid: None,
-            trigger_time: Some(rv_data::cue::TimecodeTime { time: 0.0 }),
-            hot_key: None,
+            trigger_time: None,  // None like template
+            // Empty hot_key like template (not None)
+            hot_key: template_cue.and_then(|c| c.hot_key.clone()).or_else(|| Some(rv_data::HotKey {
+                code: 0,
+                control_identifier: String::new(),
+            })),
             pending_imports: Vec::new(),
             is_enabled: true,
             completion_time: 0.0,
@@ -200,21 +320,21 @@ pub fn build_presentation_from_template(
     }
     
     // Create a single group containing all cues
+    // Copy group settings from template - use None for optional fields to match working files
+    let template_group = template.cue_groups.first().and_then(|g| g.group.as_ref());
+    
     if !cue_uuids.is_empty() {
         let group_uuid = uuid::Uuid::new_v4();
         let group = rv_data::presentation::CueGroup {
             group: Some(rv_data::Group {
                 uuid: Some(rv_data::Uuid { string: group_uuid.to_string() }),
-                name: "Default".to_string(),
-                color: Some(rv_data::Color {
-                    red: 0.0,
-                    green: 0.0,
-                    blue: 1.0,
-                    alpha: 1.0,
-                }),
-                hot_key: None,
-                application_group_identifier: Some(rv_data::Uuid { string: uuid::Uuid::new_v4().to_string() }),
-                application_group_name: String::new(),
+                name: template_group.map(|g| g.name.clone()).unwrap_or_default(),
+                // Use None instead of explicit zeros - ProPresenter treats these differently
+                color: template_group.and_then(|g| g.color.clone()),
+                hot_key: template_group.and_then(|g| g.hot_key.clone()),
+                // Use None instead of generating a UUID
+                application_group_identifier: template_group.and_then(|g| g.application_group_identifier.clone()),
+                application_group_name: template_group.map(|g| g.application_group_name.clone()).unwrap_or_default(),
             }),
             cue_identifiers: cue_uuids.iter()
                 .map(|u| rv_data::Uuid { string: u.to_string() })
@@ -222,15 +342,17 @@ pub fn build_presentation_from_template(
         };
         presentation.cue_groups.push(group);
         
-        // Create default arrangement
-        let arrangement = rv_data::presentation::Arrangement {
-            uuid: Some(rv_data::Uuid { string: uuid::Uuid::new_v4().to_string() }),
-            name: "Default".to_string(),
-            group_identifiers: vec![rv_data::Uuid { string: group_uuid.to_string() }],
-        };
-        presentation.arrangements.push(arrangement);
-        presentation.selected_arrangement = presentation.arrangements.first()
-            .and_then(|a| a.uuid.clone());
+        // Only add arrangement if template had one
+        if !template.arrangements.is_empty() {
+            let arrangement = rv_data::presentation::Arrangement {
+                uuid: Some(rv_data::Uuid { string: uuid::Uuid::new_v4().to_string() }),
+                name: "Default".to_string(),
+                group_identifiers: vec![rv_data::Uuid { string: group_uuid.to_string() }],
+            };
+            presentation.arrangements.push(arrangement);
+            presentation.selected_arrangement = presentation.arrangements.first()
+                .and_then(|a| a.uuid.clone());
+        }
     }
     
     Some(presentation)
@@ -238,8 +360,10 @@ pub fn build_presentation_from_template(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use super::*;
-    
+
     fn get_template_path() -> PathBuf {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("data");
@@ -271,15 +395,22 @@ mod tests {
     fn test_build_from_template() {
         let mut cache = TemplateCache::new(vec![get_template_path()]);
         let template = cache.get(TemplateType::Scripture).unwrap().clone();
-        
+
         let content = vec![
             "¹⁵The wilderness and dry land shall be glad,".to_string(),
             "¹⁶the desert shall rejoice and blossom;".to_string(),
         ];
-        
-        let presentation = build_presentation_from_template("Test Scripture", &template, &content);
+
+        // Use max_lines=1 so each content line becomes its own slide
+        let presentation = build_presentation_from_template_with_options(
+            "Test Scripture",
+            &template,
+            &content,
+            DEFAULT_WRAP_COLUMN,
+            1,
+        );
         assert!(presentation.is_some());
-        
+
         let pres = presentation.unwrap();
         assert_eq!(pres.name, "Test Scripture");
         assert_eq!(pres.cues.len(), 2);

@@ -1,25 +1,33 @@
 //! Bible verse lookup and scripture reference parsing.
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
 /// Supported Bible versions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[allow(clippy::upper_case_acronyms)] // NRSV, NIV, KJV are standard Bible version abbreviations
 pub enum BibleVersion {
+    /// New Revised Standard Version Updated Edition
     #[default]
     NRSVue,
+    /// New Revised Standard Version
     NRSV,
+    /// New International Version
     NIV,
+    /// King James Version
     KJV,
 }
 
 impl BibleVersion {
-    pub fn all() -> &'static [BibleVersion] {
+    /// Returns all available Bible versions.
+    pub const fn all() -> &'static [Self] {
         &[Self::NRSVue, Self::NRSV, Self::NIV, Self::KJV]
     }
-    
-    pub fn name(&self) -> &'static str {
+
+    /// Returns the human-readable name of this version.
+    pub const fn name(self) -> &'static str {
         match self {
             Self::NRSVue => "NRSVue",
             Self::NRSV => "NRSV",
@@ -27,8 +35,9 @@ impl BibleVersion {
             Self::KJV => "KJV",
         }
     }
-    
-    pub fn file_name(&self) -> &'static str {
+
+    /// Returns the JSON data filename for this version.
+    pub const fn file_name(self) -> &'static str {
         match self {
             Self::NRSVue => "NRSVUE.json",
             Self::NRSV => "NRSV.json",
@@ -36,8 +45,8 @@ impl BibleVersion {
             Self::KJV => "KJV.json",
         }
     }
-    
-    /// Try to detect version from text like "(NRSV)" or "NRSVue"
+
+    /// Try to detect version from text like "(NRSV)" or "`NRSVue`".
     pub fn from_text(text: &str) -> Option<Self> {
         let upper = text.to_uppercase();
         if upper.contains("NRSVUE") { return Some(Self::NRSVue); }
@@ -51,19 +60,22 @@ impl BibleVersion {
 /// A parsed scripture reference
 #[derive(Debug, Clone)]
 pub struct ScriptureRef {
+    /// Canonical book name (e.g., "Genesis")
     pub book: String,
+    /// Chapter number
     pub chapter: u32,
+    /// First verse in the range
     pub start_verse: u32,
+    /// Last verse in the range, if a range was specified
     pub end_verse: Option<u32>,
 }
 
 /// Bible data structure: Book -> Chapter -> Verse -> Text
 type BibleData = HashMap<String, HashMap<String, HashMap<String, String>>>;
 
-lazy_static! {
-    /// Book name normalization map
-    static ref BOOK_ALIASES: HashMap<&'static str, &'static str> = {
-        let mut m = HashMap::new();
+/// Book name normalization map
+static BOOK_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
     // Common abbreviations and variations
     m.insert("gen", "Genesis");
     m.insert("genesis", "Genesis");
@@ -204,15 +216,15 @@ lazy_static! {
     m.insert("rev", "Revelation");
     m.insert("revelation", "Revelation");
     m.insert("revelations", "Revelation");
-        m
-    };
-}
+    m
+});
 
 /// Superscript digit mapping
 const SUPERSCRIPT_DIGITS: &[char] = &['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
-/// Convert a number to superscript Unicode characters
-/// These will be converted to RTF \super tags during .pro export
+/// Convert a number to superscript Unicode characters.
+///
+/// These will be converted to RTF `\super` tags during `.pro` export.
 fn to_superscript(n: u32) -> String {
     n.to_string()
         .chars()
@@ -224,35 +236,40 @@ fn to_superscript(n: u32) -> String {
 fn normalize_book_name(name: &str) -> Option<&'static str> {
     let lower = name.to_lowercase();
     let trimmed = lower.trim();
-    
+
     // Direct lookup
     if let Some(&canonical) = BOOK_ALIASES.get(trimmed) {
         return Some(canonical);
     }
-    
+
     // Try without spaces for numbered books
     let no_space = trimmed.replace(' ', "");
     if let Some(&canonical) = BOOK_ALIASES.get(no_space.as_str()) {
         return Some(canonical);
     }
-    
+
     None
 }
 
-/// Parse a scripture reference string like "Isaiah 32:15-17" or "1 John 3:1-3"
-/// Also handles complex titles like "Scripture: Isaiah 32:15-17; Luke 1:76-79 NRSVue (Hope)"
+/// Parse a scripture reference string like "Isaiah 32:15-17" or "1 John 3:1-3".
+///
+/// Also handles complex titles like "Scripture: Isaiah 32:15-17; Luke 1:76-79
+/// `NRSVue` (Hope)" or "Scripture - Isaiah 35:1-10 (Adrian)".
 pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
-    // Strip "Scripture:" or "Reading:" prefix
+    // Strip various "Scripture" prefix formats
     let text = text.trim_start_matches("Scripture:")
+        .trim_start_matches("Scripture -")
         .trim_start_matches("Scripture Reading:")
+        .trim_start_matches("Scripture Reading -")
         .trim_start_matches("Reading:")
+        .trim_start_matches("Reading -")
         .trim();
-    
+
     // Take only the first reference if multiple (separated by ; or ,)
     let first_ref = text.split(';').next()
         .or_else(|| text.split(',').next())?
         .trim();
-    
+
     // Remove version and location indicators like "(NRSV)" or "(Hope)" or "NRSVue"
     // Also handle version without parens at end
     let cleaned = first_ref
@@ -265,20 +282,23 @@ pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
         .trim_end_matches("KJV")
         .trim_end_matches("ESV")
         .trim();
-    
+
     parse_single_reference(cleaned)
 }
 
-/// Parse multiple scripture references from a title
+/// Parse multiple scripture references from a title.
 pub fn parse_scripture_refs(text: &str) -> Vec<ScriptureRef> {
-    // Strip prefix
+    // Strip various prefix formats
     let text = text.trim_start_matches("Scripture:")
+        .trim_start_matches("Scripture -")
         .trim_start_matches("Scripture Reading:")
+        .trim_start_matches("Scripture Reading -")
         .trim_start_matches("Reading:")
+        .trim_start_matches("Reading -")
         .trim();
-    
+
     // Split by ; or , and parse each
-    text.split(|c| c == ';' || c == ',')
+    text.split([';', ','])
         .filter_map(|part| {
             let cleaned = part.trim()
                 .split('(').next()?
@@ -299,16 +319,16 @@ pub fn parse_scripture_refs(text: &str) -> Vec<ScriptureRef> {
 fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
     // Handle "v" notation (e.g., "Luke 2v1-20")
     let text = text.replace('v', ":");
-    
+
     // Find where the chapter:verse starts (look for digits followed by colon)
     let mut parts = text.rsplitn(2, |c: char| c.is_whitespace());
     let verse_part = parts.next()?;
     let book_part = parts.next()?.trim();
-    
+
     // Parse chapter:verse-verse pattern
     let (chapter_str, verse_range) = verse_part.split_once(':')?;
     let chapter: u32 = chapter_str.parse().ok()?;
-    
+
     let (start_verse, end_verse) = if verse_range.contains('-') {
         let mut range_parts = verse_range.split('-');
         let start: u32 = range_parts.next()?.parse().ok()?;
@@ -317,9 +337,9 @@ fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
     } else {
         (verse_range.parse().ok()?, None)
     };
-    
+
     let book = normalize_book_name(book_part)?;
-    
+
     Some(ScriptureRef {
         book: book.to_string(),
         chapter,
@@ -330,52 +350,56 @@ fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
 
 /// Bible lookup service
 pub struct BibleService {
+    /// Path to the directory containing Bible JSON data files
     data_path: PathBuf,
+    /// Cached Bible data keyed by version
     cache: HashMap<BibleVersion, BibleData>,
 }
 
 impl BibleService {
+    /// Creates a new `BibleService` with the given data directory path.
     pub fn new(data_path: PathBuf) -> Self {
         Self {
             data_path,
             cache: HashMap::new(),
         }
     }
-    
+
     /// Load a Bible version into cache
     fn load_version(&mut self, version: BibleVersion) -> Result<(), String> {
         if self.cache.contains_key(&version) {
             return Ok(());
         }
-        
+
         let path = self.data_path.join(version.file_name());
         let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-        
+            .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+
         let data: BibleData = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
-        
+            .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
+
         self.cache.insert(version, data);
         Ok(())
     }
-    
-    /// Look up verses and format with superscript verse numbers
-    /// Each verse is its own paragraph (for slide splitting)
+
+    /// Look up verses and format with superscript verse numbers.
+    ///
+    /// Returns a header for display and the verse text lines.
     pub fn lookup(&mut self, reference: &ScriptureRef, version: BibleVersion) -> Result<(ScriptureHeader, Vec<String>), String> {
         self.load_version(version)?;
-        
+
         let bible = self.cache.get(&version)
             .ok_or_else(|| "Bible data not loaded".to_string())?;
-        
+
         let book_data = bible.get(&reference.book)
             .ok_or_else(|| format!("Book not found: {}", reference.book))?;
-        
+
         let chapter_data = book_data.get(&reference.chapter.to_string())
             .ok_or_else(|| format!("Chapter {} not found in {}", reference.chapter, reference.book))?;
-        
+
         let end = reference.end_verse.unwrap_or(reference.start_verse);
         let mut lines = Vec::new();
-        
+
         // Build header info (for pane title, not content)
         let header = ScriptureHeader {
             book: reference.book.clone(),
@@ -384,7 +408,7 @@ impl BibleService {
             end_verse: reference.end_verse,
             version,
         };
-        
+
         // Build all verses as one continuous block of text
         // User will add line breaks to create slides
         let mut verse_text = String::new();
@@ -395,14 +419,14 @@ impl BibleService {
                 if !verse_text.is_empty() {
                     verse_text.push(' ');
                 }
-                verse_text.push_str(&format!("{}{}", to_superscript(verse_num), clean_text));
+                let _ = write!(verse_text, "{}{clean_text}", to_superscript(verse_num));
             }
         }
-        
+
         // Single line of text - user will wrap/split as needed
         lines.push(verse_text);
         lines.push(String::new()); // Trailing empty line for editor
-        
+
         Ok((header, lines))
     }
 }
@@ -410,37 +434,42 @@ impl BibleService {
 /// Scripture header info for display in pane title
 #[derive(Debug, Clone)]
 pub struct ScriptureHeader {
+    /// Canonical book name
     pub book: String,
+    /// Chapter number
     pub chapter: u32,
+    /// First verse in the range
     pub start_verse: u32,
+    /// Last verse in the range, if a range was specified
     pub end_verse: Option<u32>,
+    /// Bible version used for lookup
     pub version: BibleVersion,
 }
 
 impl ScriptureHeader {
-    /// Format for display (e.g., "Isaiah 32:15-17 NRSVue")
+    /// Format for display (e.g., "Isaiah 32:15-17 `NRSVue`").
     pub fn display(&self) -> String {
-        if let Some(end) = self.end_verse {
-            format!("{} {}:{}-{} {}", self.book, self.chapter, self.start_verse, end, self.version.name())
-        } else {
-            format!("{} {}:{} {}", self.book, self.chapter, self.start_verse, self.version.name())
-        }
+        self.end_verse.map_or_else(
+            || format!("{} {}:{} {}", self.book, self.chapter, self.start_verse, self.version.name()),
+            |end| format!("{} {}:{}-{end} {}", self.book, self.chapter, self.start_verse, self.version.name()),
+        )
     }
-    
-    /// Format for filename (colon → v)
+
+    /// Format for filename (colon replaced with v).
     pub fn filename(&self) -> String {
-        if let Some(end) = self.end_verse {
-            format!("{} {}v{}-{} ({})", self.book, self.chapter, self.start_verse, end, self.version.name())
-        } else {
-            format!("{} {}v{} ({})", self.book, self.chapter, self.start_verse, self.version.name())
-        }
+        self.end_verse.map_or_else(
+            || format!("{} {}v{} ({})", self.book, self.chapter, self.start_verse, self.version.name()),
+            |end| format!("{} {}v{}-{end} ({})", self.book, self.chapter, self.start_verse, self.version.name()),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use super::*;
-    
+
     #[test]
     fn test_parse_simple_ref() {
         let r = parse_scripture_ref("Isaiah 32:15-17").unwrap();
@@ -449,7 +478,7 @@ mod tests {
         assert_eq!(r.start_verse, 15);
         assert_eq!(r.end_verse, Some(17));
     }
-    
+
     #[test]
     fn test_parse_numbered_book() {
         let r = parse_scripture_ref("1 John 3:1-3").unwrap();
@@ -458,7 +487,7 @@ mod tests {
         assert_eq!(r.start_verse, 1);
         assert_eq!(r.end_verse, Some(3));
     }
-    
+
     #[test]
     fn test_parse_with_version() {
         let r = parse_scripture_ref("Luke 1:76-79 (NRSV)").unwrap();
@@ -467,7 +496,7 @@ mod tests {
         assert_eq!(r.start_verse, 76);
         assert_eq!(r.end_verse, Some(79));
     }
-    
+
     #[test]
     fn test_parse_single_verse() {
         let r = parse_scripture_ref("John 3:16").unwrap();
@@ -476,14 +505,14 @@ mod tests {
         assert_eq!(r.start_verse, 16);
         assert_eq!(r.end_verse, None);
     }
-    
+
     #[test]
     fn test_superscript() {
         assert_eq!(to_superscript(15), "¹⁵");
         assert_eq!(to_superscript(1), "¹");
         assert_eq!(to_superscript(100), "¹⁰⁰");
     }
-    
+
     #[test]
     fn test_version_detection() {
         assert_eq!(BibleVersion::from_text("(NRSV)"), Some(BibleVersion::NRSV));
@@ -492,4 +521,3 @@ mod tests {
         assert_eq!(BibleVersion::from_text("NIV"), Some(BibleVersion::NIV));
     }
 }
-

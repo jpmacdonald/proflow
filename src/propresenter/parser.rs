@@ -2,10 +2,12 @@
 
 #![allow(dead_code)]
 
+use std::fmt::Write;
 use crate::propresenter::generated::rv_data;
 
-/// Convert a raw protobuf Presentation to JSON string for comparison.
-/// This uses the generated protobuf types directly, not our data model,
+/// Convert a raw protobuf `Presentation` to JSON string for comparison.
+///
+/// Uses the generated protobuf types directly, not our data model,
 /// to ensure we catch any discrepancies between the raw file format
 /// and what our builders produce.
 pub fn presentation_to_json_string(presentation: &rv_data::Presentation) -> Result<String, serde_json::Error> {
@@ -37,10 +39,10 @@ pub fn compare_presentations(
 
             if orig != rec {
                 if !orig.is_empty() {
-                    diff.push_str(&format!("-{}\n", orig));
+                    let _ = writeln!(diff, "-{orig}");
                 }
                 if !rec.is_empty() {
-                    diff.push_str(&format!("+{}\n", rec));
+                    let _ = writeln!(diff, "+{rec}");
                 }
             }
         }
@@ -48,7 +50,7 @@ pub fn compare_presentations(
         if diff.is_empty() {
             Ok("Presentations are identical".to_string())
         } else {
-            Ok(format!("Presentations differ:\n{}", diff))
+            Ok(format!("Presentations differ:\n{diff}"))
         }
     }
 }

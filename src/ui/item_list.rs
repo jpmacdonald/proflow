@@ -7,8 +7,11 @@ use ratatui::{
 };
 
 use crate::app::{App, SlideType};
+use crate::types::ItemId;
 use crate::ui::create_titled_block;
 
+/// Render the item list and matching files panes.
+#[allow(clippy::too_many_lines, clippy::similar_names)]
 pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
     // Changed to vertical layout - files appear below items now
     let chunks = Layout::default()
@@ -38,11 +41,7 @@ pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
     
     let max_indicator_width = slide_type_indicators.iter().map(|(_, text, _)| text.chars().count()).max().unwrap_or(15);
     
-    // Note: file list alignment offset available if needed
-    // Width before Item Title = Prefix(2) + Status(2) + MaxCategoryWidth + Space(1)
-    let _file_list_offset = 2 + 2 + max_indicator_width + 1;
-
-    // --- Top pane: Plan Items --- 
+    // --- Top pane: Plan Items ---
     let item_list: Vec<ListItem> = app.items
         .iter()
         .enumerate()
@@ -55,21 +54,18 @@ pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
             let slide_type = app.get_slide_type_for_item(item);
             let (type_indicator, type_color) = slide_type_indicators.iter()
                 .find(|(st, _, _)| *st == slide_type)
-                .map(|(_, text, color)| (*text, *color))
-                .unwrap_or(("[ Text ]", Color::Blue));
+                .map_or(("[ Text ]", Color::Blue), |(_, text, color)| (*text, *color));
             let padding = " ".repeat(max_indicator_width.saturating_sub(type_indicator.chars().count()) + 1);
             
-            let is_completed = *app.item_completion.get(&item.id).unwrap_or(&false);
-            let is_ignored = *app.item_ignored.get(&item.id).unwrap_or(&false);
-            
+            let item_id = ItemId::new(&item.id);
+            let is_completed = app.item_states.is_completed(&item_id);
+            let is_ignored = app.item_states.is_ignored(&item_id);
+
             // Check if item has custom editor content (mutually exclusive with file match)
-            let has_editor_content = app.item_editor_state.get(&item.id)
-                .and_then(|opt| opt.as_ref())
-                .map(|state| state.content.iter().any(|line| !line.trim().is_empty()))
-                .unwrap_or(false);
-            
-            let matched_file = app.item_matched_file.get(&item.id)
-                .and_then(|opt_file| opt_file.as_ref());
+            let has_editor_content = app.item_states.get_editor(&item_id)
+                .is_some_and(|state| state.content.iter().any(|line| !line.trim().is_empty()));
+
+            let matched_file = app.item_states.get_matched_file(&item_id);
             
             // Determine status display: Created vs Matched vs neither
             let status_display = if has_editor_content {
@@ -79,7 +75,7 @@ pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let filename = path.file_stem()
                     .and_then(|stem| stem.to_str())
                     .unwrap_or(file_path);
-                format!(" -> {}", filename)
+                format!(" -> {filename}")
             } else {
                 String::new()
             };

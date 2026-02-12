@@ -2,6 +2,23 @@
 name = "proflow"
 version = "0.1.0"
 edition = "2021"
+description = "Planning Center to ProPresenter worship service workflow tool"
+license = "MIT"
+repository = "https://github.com/jimmy/proflow"
+keywords = ["propresenter", "planning-center", "worship"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "dump_pro"
+path = "src/bin/dump_pro.rs"
+
+[[bin]]
+name = "test_template"
+path = "src/bin/test_template.rs"
+
+[[bin]]
+name = "proflow"
+path = "src/main.rs"
 
 [dependencies]
 # TUI dependencies
@@ -9,8 +26,7 @@ ratatui = "0.26.1"
 crossterm = "0.27.0"
 arboard = "3.4.1"
 
-# Lyrics processing
-nlprule = "0.6.4"
+# Regex and static initialization
 lazy_static = "1.4.0"
 
 # ProPresenter integration
@@ -63,3 +79,24 @@ tempfile = "3.10"
 [features]
 default = []
 integration_test = []
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+# Specific denials
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+clone_on_ref_ptr = "deny"
+# Relaxations for this codebase
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+multiple_crate_versions = "allow"

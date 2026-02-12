@@ -1,3 +1,7 @@
+//! Application error types.
+//!
+//! Provides unified error handling with actionable context for debugging.
+
 use thiserror::Error;
 
 /// Application result type alias
@@ -9,7 +13,9 @@ pub enum Error {
     /// IO error with path context
     #[error("IO error at {path:?}: {source}")]
     Io {
+        /// The underlying IO error.
         source: std::io::Error,
+        /// File path where the error occurred, if known.
         path: Option<std::path::PathBuf>,
     },
 
@@ -17,25 +23,32 @@ pub enum Error {
     #[error("Network error: {0}")]
     Network(String),
 
-    /// Planning Center API error with status context
+    /// `Planning Center` API error with status context
     #[error("Planning Center API error: {message}")]
     PlanningCenter {
+        /// Human-readable error description.
         message: String,
+        /// HTTP status code, if from an HTTP response.
         status: Option<u16>,
+        /// Actionable suggestion for resolving the error.
         hint: Option<&'static str>,
     },
 
     /// Configuration error with guidance
     #[error("Configuration error: {message}. {hint}")]
     Config {
+        /// Description of the configuration problem.
         message: String,
+        /// Actionable guidance for fixing the issue.
         hint: &'static str,
     },
 
     /// File parsing error
     #[error("Parse error in {file:?}: {message}")]
     Parse {
+        /// File that failed to parse, if known.
         file: Option<std::path::PathBuf>,
+        /// Description of the parse failure.
         message: String,
     },
 
@@ -43,10 +56,20 @@ pub enum Error {
     #[error("Library error: {0}")]
     Library(String),
 
-    /// ProPresenter format error
+    /// `ProPresenter` format error
     #[error("ProPresenter format error: {0}")]
     #[allow(dead_code)]
     ProPresenter(String),
+
+    /// Scripture lookup error
+    #[error("Scripture lookup failed: {0}")]
+    #[allow(dead_code)]
+    Scripture(String),
+
+    /// Playlist generation error
+    #[error("Playlist generation failed: {0}")]
+    #[allow(dead_code)]
+    Playlist(String),
 
     /// Generic message error (escape hatch)
     #[error("{0}")]
@@ -60,7 +83,7 @@ impl Error {
         Self::Io { source, path: path.into() }
     }
 
-    /// Create a Planning Center error with optional status and hint
+    /// Create a `Planning Center` error with optional status and hint
     #[allow(dead_code)]
     pub fn pco(message: impl Into<String>) -> Self {
         Self::PlanningCenter {
@@ -70,7 +93,7 @@ impl Error {
         }
     }
 
-    /// Create a Planning Center error with HTTP status
+    /// Create a `Planning Center` error with HTTP status
     pub fn pco_status(message: impl Into<String>, status: u16) -> Self {
         let hint = match status {
             401 => Some("Check PCO_APP_ID and PCO_SECRET environment variables"),
@@ -119,6 +142,8 @@ impl From<&str> for Error {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use super::*;
 
     #[test]

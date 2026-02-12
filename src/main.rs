@@ -1,4 +1,6 @@
-use anyhow::Result;
+//! `ProFlow` - Planning Center to `ProPresenter` workflow tool.
+
+use error::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, EnableBracketedPaste, DisableBracketedPaste},
     execute,
@@ -6,15 +8,20 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use std::{io, panic, time::Duration};
-use tokio;
 
 mod app;
 mod bible;
 mod config;
+mod hymnal;
+mod constants;
 mod error;
+mod input;
+mod item_state;
 mod lyrics;
 mod planning_center;
 mod propresenter;
+mod services;
+mod types;
 mod ui;
 mod utils;
 
@@ -59,22 +66,14 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Load configuration
-    let _config = match config::Config::load() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("Error loading config: {}", e);
-            config::Config::default()
-        }
-    };
-
     // Create app and run it
+    // Note: App::new() loads its own config internally
     let app = App::new();
     let res = run_app(&mut terminal, app).await;
 
     // Restore terminal
     if let Err(e) = cleanup_terminal(&mut terminal) {
-        eprintln!("Error cleaning up terminal: {:?}", e);
+        eprintln!("Error cleaning up terminal: {e:?}");
     }
 
     if let Err(err) = res {

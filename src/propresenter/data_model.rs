@@ -3,7 +3,18 @@
 //! These types represent the full ProPresenter file format structure.
 //! Many are not yet used but are defined for future export functionality.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    missing_docs,
+    clippy::use_self,
+    clippy::missing_const_for_fn,
+    clippy::doc_markdown,
+    clippy::struct_excessive_bools,
+    clippy::derive_partial_eq_without_eq,
+    clippy::large_enum_variant,
+    clippy::return_self_not_must_use,
+    clippy::new_without_default
+)]
 
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -355,6 +366,7 @@ pub struct GradientStop {
 
 /// Music-specific settings
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_field_names)] // sheet_music is the canonical term
 pub struct Music {
     pub tempo: f64,
     pub time_signature: TimeSignature,
@@ -740,6 +752,7 @@ pub struct Stroke {
 
 /// Stroke style options
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // Line suffix is part of the stroke terminology
 pub enum StrokeStyle {
     SolidLine,
     DashedLine,
@@ -780,6 +793,7 @@ pub struct ShapeMask {
 
 /// Mask style options
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // Width suffix describes the measurement type
 pub enum MaskStyle {
     FullWidth,
     TextWidth,

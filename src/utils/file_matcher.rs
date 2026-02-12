@@ -1,8 +1,11 @@
-//! File matching and indexing for ProPresenter library files.
+//! File matching and indexing for `ProPresenter` library files.
 //!
 //! Provides fuzzy search with persistent caching of:
 //! - File index (avoids cold-start rescans)
 //! - Selection history (previously matched files rank higher)
+
+// Allow unwrap for compile-time constant regex patterns in lazy_static blocks
+#![allow(clippy::unwrap_used)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,21 +21,46 @@ use walkdir::WalkDir;
 use crate::error::{Error, Result};
 use crate::planning_center::types::Category;
 
-/// Cache file name stored alongside the library
-const CACHE_FILE: &str = ".proflow_cache.json";
+/// Cache file name
+const CACHE_FILE: &str = "library_cache.json";
 
-/// A file entry representing a ProPresenter file
+/// Get the application cache directory, creating it if needed.
+/// Uses `~/Library/Application Support/proflow/` on macOS (via `dirs::data_dir`).
+fn cache_dir() -> Option<PathBuf> {
+    let dir = dirs::data_dir()?.join("proflow");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// Get the cache file path. Falls back to a dotfile next to the library
+/// if the platform data directory is unavailable.
+fn cache_path(library_path: &Path) -> PathBuf {
+    cache_dir().map_or_else(
+        || library_path.join(".proflow_cache.json"),
+        |d| d.join(CACHE_FILE),
+    )
+}
+
+/// A file entry representing a `ProPresenter` file
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::pub_underscore_fields)]
 pub struct FileEntry {
+    /// Original file name without extension
     pub file_name: String,
+    /// Name after stripping prefixes/numbering
     pub normalized_name: String,
+    /// Lowercase variant of `file_name` (not serialized)
     #[serde(skip)]
     pub file_name_lower: String,
+    /// Lowercase variant of `normalized_name` (not serialized)
     #[serde(skip)]
     pub normalized_lower: String,
+    /// Human-readable display name
     pub display_name: String,
+    /// Path relative to the library root
     #[serde(rename = "relative_path")]
     pub _relative_path: String,
+    /// Absolute path on disk
     pub full_path: PathBuf,
 }
 
@@ -73,6 +101,9 @@ mod humantime_serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    // serde requires `&Option<T>` for field-level `serialize_with`; we cannot
+    // change the signature to `Option<&SystemTime>`.
+    #[allow(clippy::ref_option)]
     pub fn serialize<S: Serializer>(time: &Option<SystemTime>, s: S) -> Result<S::Ok, S::Error> {
         match time {
             Some(t) => t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs().serialize(s),
@@ -86,7 +117,7 @@ mod humantime_serde {
     }
 }
 
-/// Index of ProPresenter files with persistent caching
+/// Index of `ProPresenter` files with persistent caching
 pub struct FileIndex {
     /// All indexed files
     pub entries: Vec<FileEntry>,
@@ -114,10 +145,10 @@ impl FileIndex {
             )));
         }
 
-        let cache_path = library_path.join(CACHE_FILE);
+        let cp = cache_path(library_path);
 
         // Try to load from cache
-        if let Some(mut index) = Self::load_cache(&cache_path, library_path) {
+        if let Some(mut index) = Self::load_cache(&cp, library_path) {
             // Recompute lowercase fields
             for entry in &mut index.entries {
                 entry.compute_lowercase();
@@ -130,14 +161,14 @@ impl FileIndex {
         let entries: Vec<FileEntry> = WalkDir::new(library_path)
             .follow_links(true)
             .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "pro"))
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "pro"))
             .filter_map(|entry| {
                 let stem = entry.path().file_stem()?.to_str()?;
                 let normalized = normalize_name(stem);
                 let relative_path = entry.path()
                     .strip_prefix(library_path)
-                    .unwrap_or(entry.path())
+                    .unwrap_or_else(|_| entry.path())
                     .to_string_lossy()
                     .to_string();
                 
@@ -153,7 +184,9 @@ impl FileIndex {
             })
             .collect();
 
-        eprintln!("Indexed {} files in {:?}", entries.len(), start.elapsed());
+        let count = entries.len();
+        let elapsed = start.elapsed();
+        tracing::info!("Indexed {count} files in {elapsed:?}");
 
         let index = Self {
             entries,
@@ -166,7 +199,7 @@ impl FileIndex {
         };
 
         // Save cache (ignore errors)
-        let _ = index.save_cache(&cache_path);
+        let _ = index.save_cache(&cp);
 
         Ok(index)
     }
@@ -215,15 +248,15 @@ impl FileIndex {
         };
 
         let json = serde_json::to_string_pretty(&cache)
-            .map_err(|e| Error::Msg(format!("Failed to serialize cache: {}", e)))?;
+            .map_err(|e| Error::Msg(format!("Failed to serialize cache: {e}")))?;
         std::fs::write(cache_path, json)?;
         Ok(())
     }
 
     /// Persist current selections to cache
     pub fn persist(&self) {
-        let cache_path = self.library_path.join(CACHE_FILE);
-        let _ = self.save_cache(&cache_path);
+        let cp = cache_path(&self.library_path);
+        let _ = self.save_cache(&cp);
     }
 
     /// Record a file selection for an item
@@ -274,6 +307,37 @@ impl FileIndex {
         self.item_ignored.get(item_id).copied()
     }
 
+    /// Add a newly exported file to the index, skipping duplicates.
+    pub fn add_entry(&mut self, full_path: &Path) {
+        // Dedup: skip if already indexed
+        if self.entries.iter().any(|e| e.full_path == full_path) {
+            return;
+        }
+
+        let Some(stem) = full_path.file_stem().and_then(|s| s.to_str()) else {
+            return;
+        };
+
+        let normalized = normalize_name(stem);
+        let relative = full_path
+            .strip_prefix(&self.library_path)
+            .unwrap_or(full_path)
+            .to_string_lossy()
+            .to_string();
+
+        self.entries.push(FileEntry {
+            file_name: stem.to_string(),
+            normalized_name: normalized.clone(),
+            file_name_lower: stem.to_lowercase(),
+            normalized_lower: normalized.to_lowercase(),
+            display_name: stem.to_string(),
+            _relative_path: relative,
+            full_path: full_path.to_path_buf(),
+        });
+
+        self.persist();
+    }
+
     /// Find matching files for a search query
     pub fn find_matches(&self, query: impl AsRef<str>, max_results: usize) -> Vec<FileEntry> {
         let query_str = query.as_ref().trim();
@@ -296,7 +360,7 @@ impl FileIndex {
             .filter_map(|entry| {
                 let score = self.score_entry(
                     &matcher, entry, effective, &effective_lower,
-                    &query_lower, &hymn_number, &composite_parts, &tokens,
+                    &query_lower, hymn_number.as_deref(), &composite_parts, &tokens,
                 )?;
                 Some((score, entry))
             })
@@ -315,6 +379,7 @@ impl FileIndex {
     }
 
     /// Score a single entry against the query
+    #[allow(clippy::too_many_arguments)]
     fn score_entry(
         &self,
         matcher: &SkimMatcherV2,
@@ -322,7 +387,7 @@ impl FileIndex {
         term: &str,
         term_lower: &str,
         query_lower: &str,
-        hymn_number: &Option<String>,
+        hymn_number: Option<&str>,
         composite_parts: &[&str],
         tokens: &[&str],
     ) -> Option<i64> {
@@ -337,11 +402,14 @@ impl FileIndex {
         // **KEY FIX**: Check if filename is contained within the query (reverse containment)
         // This catches cases like query="Prayer and the Lord's Prayer (Hope)" matching file="Prayer and The Lord's Prayer"
         if query_lower.contains(&entry.file_name_lower) {
-            // The full filename appears in the query - this is a very strong match
-            let len_bonus = (entry.file_name_lower.len() as i64) * 100; // Longer matches are better
+            // The full filename appears in the query — very strong match.
+            // Filenames are always short enough that truncation is not a concern.
+            #[allow(clippy::cast_possible_wrap)]
+            let len_bonus = (entry.file_name_lower.len() as i64) * 100;
             score = score.max(25000 + len_bonus);
             quality = 3;
         } else if query_lower.contains(&entry.normalized_lower) && entry.normalized_lower.len() > 5 {
+            #[allow(clippy::cast_possible_wrap)]
             let len_bonus = (entry.normalized_lower.len() as i64) * 100;
             score = score.max(22000 + len_bonus);
             quality = 3;
@@ -396,32 +464,35 @@ impl FileIndex {
 
         // Hymn number matching
         if let Some(num) = hymn_number {
-            if entry.file_name_lower.contains(&format!("#{}", num)) ||
-               entry.file_name_lower.contains(&format!(" {} ", num)) ||
-               entry.file_name_lower.contains(&format!("-{}", num)) {
+            if entry.file_name_lower.contains(&format!("#{num}")) ||
+               entry.file_name_lower.contains(&format!(" {num} ")) ||
+               entry.file_name_lower.contains(&format!("-{num}")) {
                 score = score.max(9000);
                 quality = 3;
             }
         }
 
         // Liturgical matching (only if we don't already have a strong match)
-        if quality < 3 {
-            if query_lower.contains("lord's prayer") || query_lower.contains("our father") {
-                if entry.normalized_lower.contains("lord's prayer") || 
-                   entry.file_name_lower.contains("lord's prayer") {
-                    score = score.max(10000);
-                    quality = quality.max(2);
-                } else if entry.normalized_lower.contains("our father") || 
-                          entry.file_name_lower.contains("our father") {
-                    score = score.max(8000);
-                    quality = quality.max(2);
-                }
+        if quality < 3
+            && (query_lower.contains("lord's prayer") || query_lower.contains("our father"))
+        {
+            if entry.normalized_lower.contains("lord's prayer")
+                || entry.file_name_lower.contains("lord's prayer")
+            {
+                score = score.max(10000);
+                quality = quality.max(2);
+            } else if entry.normalized_lower.contains("our father")
+                || entry.file_name_lower.contains("our father")
+            {
+                score = score.max(8000);
+                quality = quality.max(2);
             }
         }
 
         // Frequency bonus (previously selected files rank higher)
         let path_str = entry.full_path.to_string_lossy();
-        let freq_bonus = self.selection_frequency.get(path_str.as_ref()).copied().unwrap_or(0) as i64 * 500;
+        #[allow(clippy::cast_possible_wrap)]
+        let freq_bonus = i64::from(self.selection_frequency.get(path_str.as_ref()).copied().unwrap_or(0)) * 500;
         score += freq_bonus;
 
         // Filter out completely irrelevant matches
@@ -435,15 +506,22 @@ impl FileIndex {
 
 /// Normalize a filename by removing common prefixes and patterns
 pub fn normalize_name(name: &str) -> String {
-    lazy_static::lazy_static! {
-        static ref RE_BRACKETS: Regex = Regex::new(r"^\s*\[[^\]]+\]\s*").unwrap();
-        static ref RE_HASH_NUM: Regex = Regex::new(r"^\s*#\d+\s*").unwrap();
-        static ref RE_HYMN_NUM: Regex = Regex::new(r"^\s*(?i)hymn\s+(?:#?\d+\s*|)").unwrap();
-        static ref RE_ANTHEM: Regex = Regex::new(r"^\s*(?i)anthem\s*[:|-]?\s*").unwrap();
-        static ref RE_LEADING_NUM: Regex = Regex::new(r"^\s*\d+[\.:\-\s]+").unwrap();
-        static ref RE_PUNCTUATION: Regex = Regex::new(r"[,;:\(\)\[\]'!?]").unwrap();
-        static ref RE_SPACES: Regex = Regex::new(r"\s+").unwrap();
-    }
+    use std::sync::LazyLock;
+
+    static RE_BRACKETS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*\[[^\]]+\]\s*").unwrap());
+    static RE_HASH_NUM: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*#\d+\s*").unwrap());
+    static RE_HYMN_NUM: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*(?i)hymn\s+(?:#?\d+\s*|)").unwrap());
+    static RE_ANTHEM: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*(?i)anthem\s*[:|-]?\s*").unwrap());
+    static RE_LEADING_NUM: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*\d+[\.:\-\s]+").unwrap());
+    static RE_PUNCTUATION: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"[,;:\(\)\[\]'!?]").unwrap());
+    static RE_SPACES: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
     let mut s = RE_BRACKETS.replace(name, "").to_string();
     s = RE_HASH_NUM.replace(&s, "").to_string();
@@ -455,7 +533,7 @@ pub fn normalize_name(name: &str) -> String {
     s.trim().to_string()
 }
 
-/// Get the default ProPresenter library path
+/// Get the default `ProPresenter` library path
 pub fn get_default_library_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let path = home.join("Documents/ProPresenter/Libraries/Default");
@@ -542,9 +620,9 @@ fn score_token(matcher: &SkimMatcherV2, entry: &FileEntry, token: &str) -> Optio
     if entry.normalized_lower.contains(token) {
         score += 3000 + boost;
         // Word boundary bonus
-        if entry.normalized_lower.contains(&format!(" {} ", token)) || 
-           entry.normalized_lower.starts_with(&format!("{} ", token)) ||
-           entry.normalized_lower.ends_with(&format!(" {}", token)) ||
+        if entry.normalized_lower.contains(&format!(" {token} ")) ||
+           entry.normalized_lower.starts_with(&format!("{token} ")) ||
+           entry.normalized_lower.ends_with(&format!(" {token}")) ||
            entry.normalized_lower == token {
             score += 2000;
         }
@@ -561,7 +639,7 @@ fn apply_threshold_filter(results: Vec<(i64, &FileEntry)>, min_desired: usize) -
         return results;
     }
 
-    let top_score = results.first().map(|(s, _)| *s).unwrap_or(0);
+    let top_score = results.first().map_or(0, |(s, _)| *s);
     let threshold = match top_score {
         s if s > 10000 => 500,
         s if s > 5000 => 300,
@@ -571,9 +649,9 @@ fn apply_threshold_filter(results: Vec<(i64, &FileEntry)>, min_desired: usize) -
     if results.len() > min_desired * 2 {
         let filtered: Vec<_> = results.iter()
             .filter(|(s, _)| *s >= threshold)
-            .cloned()
+            .copied()
             .collect();
-        
+
         if filtered.len() >= min_desired {
             return filtered;
         }

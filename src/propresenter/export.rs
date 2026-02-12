@@ -1,6 +1,6 @@
-//! Export editor content to ProPresenter presentation files.
+//! Export editor content to `ProPresenter` presentation files.
 //!
-//! Converts edited text content (with verse markers) into ProPresenter .pro files.
+//! Converts edited text content (with verse markers) into `ProPresenter` .pro files.
 
 use std::path::Path;
 use uuid::Uuid;
@@ -17,12 +17,15 @@ use super::serialize::write_presentation_file;
 /// Errors that can occur during export
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
+    /// An I/O error occurred during file operations
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
+    /// The presentation could not be built from the provided content
     #[error("Build error: {0}")]
     Build(String),
-    
+
+    /// Failed to serialize the presentation to disk
     #[error("Serialize error: {0}")]
     Serialize(#[from] super::serialize::SerializeError),
 }
@@ -248,6 +251,8 @@ pub fn export_to_pro_file(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use super::*;
 
     #[test]
@@ -256,7 +261,7 @@ mod tests {
             "[Verse 1]".to_string(),
             "Amazing grace how sweet the sound".to_string(),
             "That saved a wretch like me".to_string(),
-            "".to_string(),
+            String::new(),
             "[Chorus]".to_string(),
             "I once was lost but now am found".to_string(),
         ];
@@ -272,7 +277,7 @@ mod tests {
     fn test_parse_stanzas_no_labels() {
         let content = vec![
             "First slide content".to_string(),
-            "".to_string(),
+            String::new(),
             "Second slide content".to_string(),
         ];
 

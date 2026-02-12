@@ -1,3 +1,8 @@
+//! User interface components.
+//!
+//! Provides TUI widgets and drawing functions for the application's
+//! terminal-based user interface using ratatui.
+
 mod editor;
 mod item_list;
 mod service_list;
@@ -16,6 +21,8 @@ use ratatui::{
 
 use crate::app::{App, AppMode};
 
+/// Render the full application UI to the terminal frame.
+#[allow(clippy::cast_possible_truncation)]
 pub fn draw(f: &mut Frame, app: &mut App) {
     // Create the base layout
     let chunks = Layout::default()
@@ -61,12 +68,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     // Draw command/status bar at the bottom (except in splash screen)
-    if app.mode != AppMode::Splash {
-        draw_command_bar(f, app, chunks[1]);
-    } else {
+    if app.mode == AppMode::Splash {
         // Draw a simple press any key message
         let msg = "Press any key to continue...";
-        
+
         // Make sure the area is large enough for the message
         if chunks[1].width >= msg.len() as u16 && chunks[1].height >= 3 {
             let width = msg.len() as u16;
@@ -83,10 +88,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             let style = Style::default().fg(Color::Yellow);
             f.render_widget(Paragraph::new(msg).style(style), text_area);
         }
+    } else {
+        draw_command_bar(f, app, chunks[1]);
     }
 }
 
-// Draw the command bar (which shows help/status by default or command input when active)
+#[allow(clippy::cast_possible_truncation)]
 fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
     let title = if app.is_global_command_mode { 
         "Command" 
@@ -115,16 +122,9 @@ fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
         .split(area)[0];
     
     if app.mode == AppMode::Editor && app.editor.is_command_mode {
-        // Editor-local command input
         let command = Paragraph::new(format!(" :{}", app.editor.command_buffer))
             .style(Style::default().fg(Color::Yellow));
         f.render_widget(command, inner_area);
-    } else if app.mode == AppMode::Editor && app.editor.is_command_mode {
-        // Editor-local command input
-        let command = Paragraph::new(format!(" :{}", app.editor.command_buffer))
-            .style(Style::default().fg(Color::Yellow));
-        f.render_widget(command, inner_area);
-        // Place cursor after command text
         f.set_cursor(inner_area.left() + app.editor.command_buffer.len() as u16 + 2, inner_area.top());
     } else if app.file_search_active {
         // Show file search input
@@ -180,7 +180,7 @@ fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
                 };
                 
                 let mut text = create_help_text(hints);
-                text.push(Span::styled(format!(" | {}", status), Style::default().fg(Color::Gray)));
+                text.push(Span::styled(format!(" | {status}"), Style::default().fg(Color::Gray)));
                 
                 text
             }
@@ -193,7 +193,7 @@ fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-// Create consistently styled help text for command bar
+/// Build styled help text spans from key-description pairs for the command bar.
 pub fn create_help_text<'a>(commands: &[(&'a str, &'a str)]) -> Vec<Span<'a>> {
     let mut text = vec![Span::raw(" ")]; // Start with padding
     
@@ -202,7 +202,7 @@ pub fn create_help_text<'a>(commands: &[(&'a str, &'a str)]) -> Vec<Span<'a>> {
         text.push(Span::styled(*key, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
         
         // Add the description
-        text.push(Span::raw(format!(": {}", description)));
+        text.push(Span::raw(format!(": {description}")));
         
         // Add separator unless it's the last item
         if i < commands.len() - 1 {
@@ -213,8 +213,8 @@ pub fn create_help_text<'a>(commands: &[(&'a str, &'a str)]) -> Vec<Span<'a>> {
     text
 }
 
-// Helper function to create a styled block with consistent appearance
-pub fn create_titled_block<'a>(title: &'a str, is_focused: bool) -> Block<'a> {
+/// Create a bordered block with a title, highlighted when focused.
+pub fn create_titled_block(title: &str, is_focused: bool) -> Block<'_> {
     let title_style = if is_focused {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
@@ -233,6 +233,7 @@ pub fn create_titled_block<'a>(title: &'a str, is_focused: bool) -> Block<'a> {
         .border_style(border_style)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn draw_splash(f: &mut Frame, _app: &App, area: Rect) {
     // Define ASCII art logo for the app
     let logo = vec![
@@ -403,24 +404,27 @@ fn draw_error_message(f: &mut Frame, message: &str) {
     f.render_widget(hint, inner_area[2]);
 }
 
-// Draw a status/info modal (blocking)
+#[allow(clippy::cast_possible_truncation)]
 fn draw_status_message(f: &mut Frame, message: &str) {
-    let size = f.size();
     use unicode_width::UnicodeWidthStr;
+    let size = f.size();
 
-    let msg_width = message.width();
-    
-    // Create a centered box sized to message width
-    let width = msg_width
+    // Calculate box width (max 80% of screen, min 50)
+    let max_width = (size.width as usize * 80) / 100;
+    let width = message.width()
         .saturating_add(6)
-        .min(size.width.saturating_sub(4) as usize)
-        .max(40);
-    let height = 5;
+        .min(max_width)
+        .max(50) as u16;
+    
+    // Calculate how many lines the message will need when wrapped
+    let inner_width = width.saturating_sub(4) as usize; // account for borders + margin
+    let msg_lines = (message.width() + inner_width - 1) / inner_width.max(1);
+    let height = (msg_lines as u16 + 4).min(size.height.saturating_sub(4)); // +4 for borders, hint, padding
     
     let area = Rect {
-        x: (size.width.saturating_sub(width as u16)) / 2,
+        x: (size.width.saturating_sub(width)) / 2,
         y: (size.height.saturating_sub(height)) / 2,
-        width: width as u16,
+        width,
         height,
     };
     
@@ -441,20 +445,19 @@ fn draw_status_message(f: &mut Frame, message: &str) {
     let inner_area = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Min(1),      // message (flexible)
+            Constraint::Length(1),   // hint
         ])
         .margin(1)
         .split(area);
     
-    f.render_widget(text, inner_area[1]);
+    f.render_widget(text, inner_area[0]);
     
     let hint = Paragraph::new("Press Esc to dismiss")
         .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     
-    f.render_widget(hint, inner_area[2]);
+    f.render_widget(hint, inner_area[1]);
 }
 
 // Draw the help modal with keybindings
@@ -500,7 +503,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled(format!("{:>12}", key), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{key:>12}"), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                     Span::raw("  "),
                     Span::styled(*desc, Style::default().fg(Color::White)),
                 ])
@@ -630,7 +633,7 @@ fn draw_version_picker(f: &mut Frame, app: &App) {
             } else {
                 Style::default().fg(Color::White)
             };
-            Line::from(Span::styled(format!("{}{}", prefix, v.name()), style))
+            Line::from(Span::styled(format!("{prefix}{}", v.name()), style))
         })
         .collect();
     
