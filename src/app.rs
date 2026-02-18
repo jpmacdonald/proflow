@@ -2652,12 +2652,11 @@ impl App {
 
     // Renamed function to better reflect loading types and plans
     fn initialize_data(&mut self) {
-        // Set loading state immediately
-        self.is_loading = true;
-        
         if let Some(client) = &self.pco_client {
+            // Set loading state for async fetch
+            self.is_loading = true;
             let client_clone = client.clone();
-            let config_clone = self.config.clone(); 
+            let config_clone = self.config.clone();
             let tx_clone = self.async_task_tx.clone();
 
             // Spawn the async task using tokio::spawn
@@ -2667,9 +2666,11 @@ impl App {
                 }
             });
         } else {
-           // Load dummy data synchronously
-           self.initialize_selection_state();
-           self.is_loading = false; 
+           // No credentials configured - show error
+           self.error_message = Some(
+               "No Planning Center credentials found. Set PCO_APP_ID and PCO_SECRET in a .env file or as environment variables.".to_string()
+           );
+           self.is_loading = false;
         }
     }
 
