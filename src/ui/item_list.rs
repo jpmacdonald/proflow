@@ -59,17 +59,18 @@ pub fn draw_item_list(f: &mut Frame, app: &mut App, area: Rect) {
                 .unwrap_or(("[ Text ]", Color::Blue));
             let padding = " ".repeat(max_indicator_width.saturating_sub(type_indicator.chars().count()) + 1);
             
-            let is_completed = *app.item_completion.get(&item.id).unwrap_or(&false);
-            let is_ignored = *app.item_ignored.get(&item.id).unwrap_or(&false);
-            
+            let item_state = app.item_states.get(&item.id);
+            let is_completed = item_state.map_or(false, |s| s.completed);
+            let is_ignored = item_state.map_or(false, |s| s.ignored);
+
             // Check if item has custom editor content (mutually exclusive with file match)
-            let has_editor_content = app.item_editor_state.get(&item.id)
-                .and_then(|opt| opt.as_ref())
+            let has_editor_content = item_state
+                .and_then(|s| s.editor_state.as_ref())
                 .map(|state| state.content.iter().any(|line| !line.trim().is_empty()))
                 .unwrap_or(false);
-            
-            let matched_file = app.item_matched_file.get(&item.id)
-                .and_then(|opt_file| opt_file.as_ref());
+
+            let matched_file = item_state
+                .and_then(|s| s.matched_file.as_ref());
             
             // Determine status display: Created vs Matched vs neither
             let status_display = if has_editor_content {

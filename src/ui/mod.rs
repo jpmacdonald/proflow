@@ -119,11 +119,6 @@ fn draw_command_bar(f: &mut Frame, app: &App, area: Rect) {
         let command = Paragraph::new(format!(" :{}", app.editor.command_buffer))
             .style(Style::default().fg(Color::Yellow));
         f.render_widget(command, inner_area);
-    } else if app.mode == AppMode::Editor && app.editor.is_command_mode {
-        // Editor-local command input
-        let command = Paragraph::new(format!(" :{}", app.editor.command_buffer))
-            .style(Style::default().fg(Color::Yellow));
-        f.render_widget(command, inner_area);
         // Place cursor after command text
         f.set_cursor(inner_area.left() + app.editor.command_buffer.len() as u16 + 2, inner_area.top());
     } else if app.file_search_active {

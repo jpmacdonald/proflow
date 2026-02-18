@@ -36,8 +36,12 @@ impl Default for Config {
 impl Config {
     /// Load configuration from environment variables
     pub fn load() -> Result<Self> {
-        // Try to load .env file if present
-        dotenv().ok();
+        // Try to load .env file if present (not an error if missing)
+        if let Err(e) = dotenv() {
+            if !matches!(e, dotenv::Error::Io(_)) {
+                tracing::warn!("Failed to load .env file: {}", e);
+            }
+        }
         
         let mut config = Config::default();
         

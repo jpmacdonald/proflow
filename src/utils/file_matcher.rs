@@ -165,8 +165,9 @@ impl FileIndex {
             library_path: library_path.to_path_buf(),
         };
 
-        // Save cache (ignore errors)
-        let _ = index.save_cache(&cache_path);
+        if let Err(e) = index.save_cache(&cache_path) {
+            eprintln!("Warning: failed to save file index cache: {}", e);
+        }
 
         Ok(index)
     }
@@ -223,7 +224,9 @@ impl FileIndex {
     /// Persist current selections to cache
     pub fn persist(&self) {
         let cache_path = self.library_path.join(CACHE_FILE);
-        let _ = self.save_cache(&cache_path);
+        if let Err(e) = self.save_cache(&cache_path) {
+            eprintln!("Warning: failed to persist cache: {}", e);
+        }
     }
 
     /// Record a file selection for an item

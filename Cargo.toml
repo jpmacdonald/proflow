@@ -26,7 +26,7 @@ async-trait = "0.1.73"
 futures = "0.3"
 
 # Async
-tokio = { version = "1.36.0", features = ["full"] }
+tokio = { version = "1.36.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 # Serialization
 serde = { version = "1.0.197", features = ["derive"] }
@@ -62,4 +62,3 @@ tempfile = "3.10"
 
 [features]
 default = []
-integration_test = []

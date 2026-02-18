@@ -5,7 +5,6 @@ use ratatui::style::Color;
 use std::path::PathBuf;
 use crate::utils::file_matcher::{find_matches_for_items, FileIndex, FileEntry};
 use crate::bible::{BibleService, BibleVersion, ScriptureHeader, parse_scripture_ref};
-use unicode_width::UnicodeWidthStr;
 use regex::Regex;
 use tokio::sync::mpsc;
 use std::collections::HashMap;
@@ -103,10 +102,11 @@ fn default_wrap_auto() -> bool { true }
 fn default_viewport_height() -> usize { 20 }
 
 fn sanitize_filename(name: &str) -> String {
-    use regex::Regex;
-    let verse_re = Regex::new(r"(\d+):(\d+)").unwrap();
+    lazy_static::lazy_static! {
+        static ref VERSE_RE: Regex = Regex::new(r"(\d+):(\d+)").unwrap();
+    }
     // Replace verse refs ":" with "v"
-    let mut s = verse_re.replace_all(name, "$1v$2").to_string();
+    let mut s = VERSE_RE.replace_all(name, "$1v$2").to_string();
     // Replace remaining colons with " - "
     s = s.replace(":", " - ");
     // Allow alnum, space, dash, underscore, comma, dot, parentheses
@@ -152,18 +152,25 @@ impl Default for EditorState {
     }
 }
 
+/// Consolidated per-item state. Keeps completion, ignored, matched file, and editor state
+/// in a single struct so they can never go out of sync.
+#[derive(Debug, Clone, Default)]
+pub struct ItemState {
+    pub completed: bool,
+    pub ignored: bool,
+    pub matched_file: Option<String>,
+    pub editor_state: Option<EditorState>,
+}
+
 pub struct App {
     pub mode: AppMode,
     pub services: Vec<Service>,
     pub service_list_state: ListState,
     pub active_service_id: Option<String>,
-    pub plans: Vec<Plan>, 
+    pub plans: Vec<Plan>,
     pub plan_list_state: ListState,
     pub items: Vec<Item>,
-    pub item_completion: HashMap<String, bool>,
-    pub item_ignored: HashMap<String, bool>,
-    pub item_matched_file: HashMap<String, Option<String>>,
-    pub item_editor_state: HashMap<String, Option<EditorState>>,
+    pub item_states: HashMap<String, ItemState>,
     pub item_list_state: ListState,
     pub matching_files: Vec<FileEntry>,
     pub file_list_state: ListState,
@@ -230,7 +237,7 @@ impl App {
             });
 
         // Create the async channel
-        let (async_task_tx, async_task_rx) = mpsc::channel(10); // Channel with buffer size 10
+        let (async_task_tx, async_task_rx) = mpsc::channel(64);
 
         let app = Self {
             mode: AppMode::Splash, 
@@ -240,10 +247,7 @@ impl App {
             plans: Vec::new(),
             plan_list_state: ListState::default(),
             items: Vec::new(),
-            item_completion: HashMap::new(),
-            item_ignored: HashMap::new(),
-            item_matched_file: HashMap::new(),
-            item_editor_state: HashMap::new(),
+            item_states: HashMap::new(),
             item_list_state: ListState::default(),
             matching_files: Vec::new(),
             file_list_state: ListState::default(),
@@ -501,7 +505,7 @@ impl App {
                 self.quit();
             }
             "h" | "help" => {
-                // TODO: Show help modal
+                self.show_help = true;
             }
             "reload" | "refresh" => {
                 // Reload data from the API
@@ -714,9 +718,9 @@ impl App {
                     if let Some(selected_idx) = self.item_list_state.selected() {
                         if let Some(item) = self.items.get(selected_idx) {
                             let item_id = item.id.clone();
-                            let currently_ignored = *self.item_ignored.get(&item_id).unwrap_or(&false);
+                            let currently_ignored = self.item_states.get(&item_id).map_or(false, |s| s.ignored);
                             let new_ignored = !currently_ignored;
-                            self.item_ignored.insert(item_id.clone(), new_ignored);
+                            self.item_states.entry(item_id.clone()).or_default().ignored = new_ignored;
                             
                             // Save to cache
                             if let Some(index) = &mut self.file_index {
@@ -724,7 +728,7 @@ impl App {
                             }
                             
                             if new_ignored {
-                                self.item_completion.insert(item_id.clone(), false);
+                                self.item_states.entry(item_id.clone()).or_default().completed = false;
                                 if let Some(index) = &mut self.file_index {
                                     index.save_item_completion(&item_id, false);
                                 }
@@ -843,7 +847,7 @@ impl App {
             if let Some(item) = self.items.get(item_idx) {
                 let item_id = item.id.clone();
                 // Update the map with the current editor state
-                self.item_editor_state.insert(item_id, Some(self.editor.clone()));
+                self.item_states.entry(item_id).or_default().editor_state = Some(self.editor.clone());
             }
         }
 
@@ -917,13 +921,12 @@ impl App {
                         
                         if has_content {
                             // Save editor state - this is a custom creation
-                            self.item_editor_state.insert(item_id.clone(), Some(self.editor.clone()));
-                            
+                            let state = self.item_states.entry(item_id.clone()).or_default();
+                            state.editor_state = Some(self.editor.clone());
                             // Clear any matched file - custom creation and file match are mutually exclusive
-                            self.item_matched_file.insert(item_id.clone(), None);
-                            
+                            state.matched_file = None;
                             // Mark as complete since we have content
-                            self.item_completion.insert(item_id.clone(), true);
+                            state.completed = true;
                             
                             // Persist to cache
                             if let Some(index) = &mut self.file_index {
@@ -933,7 +936,7 @@ impl App {
                             }
                         } else {
                             // No content - clear editor state
-                            self.item_editor_state.insert(item_id.clone(), None);
+                            self.item_states.entry(item_id.clone()).or_default().editor_state = None;
                             if let Some(index) = &mut self.file_index {
                                 index.editor_states.remove(&item_id);
                                 index.persist();
@@ -1222,14 +1225,14 @@ impl App {
         self.editor_side_pane_idx = 0;
         
         // Priority 1: Existing editor state (user's custom creation)
-        if let Some(Some(state)) = self.item_editor_state.get(&item_id) {
+        if let Some(state) = self.item_states.get(&item_id).and_then(|s| s.editor_state.as_ref()) {
             self.editor = state.clone();
             self.mode = AppMode::Editor;
             return;
         }
         
         // Priority 2: Matched .pro file - extract its content
-        if let Some(Some(matched_path)) = self.item_matched_file.get(&item_id) {
+        if let Some(matched_path) = self.item_states.get(&item_id).and_then(|s| s.matched_file.as_ref()) {
             use crate::propresenter::extract::extract_text_from_pro;
             use std::path::Path;
             
@@ -1325,11 +1328,6 @@ impl App {
         self.item_slide_type.get(&item.id)
             .copied()
             .unwrap_or_else(|| self.detect_slide_type(&item.category, &item.title))
-    }
-    
-    /// Check if an item is a scripture reading
-    fn is_scripture_item(&self, category: &Category, title: &str) -> bool {
-        matches!(self.detect_slide_type(category, title), SlideType::Scripture)
     }
     
     /// Handle input when side pane is focused
@@ -1672,28 +1670,21 @@ impl App {
         ];
         
         // Initialize state, restoring from cache where available
-        self.item_completion.clear();
-        self.item_ignored.clear();
-        self.item_matched_file.clear();
-        self.item_editor_state.clear();
-        
+        self.item_states.clear();
+
         for item in &self.items {
-            let (completion, ignored, editor_state, matched_file) = 
-                if let Some(index) = &self.file_index {
-                    (
-                        index.get_item_completion(&item.id).unwrap_or(false),
-                        index.get_item_ignored(&item.id).unwrap_or(false),
-                        index.get_editor_state(&item.id).cloned(),
-                        index.get_selection_for_item(&item.id).cloned(),
-                    )
-                } else {
-                    (false, false, None, None)
-                };
-            
-            self.item_completion.insert(item.id.clone(), completion);
-            self.item_ignored.insert(item.id.clone(), ignored);
-            self.item_matched_file.insert(item.id.clone(), matched_file);
-            self.item_editor_state.insert(item.id.clone(), editor_state);
+            let state = if let Some(index) = &self.file_index {
+                ItemState {
+                    completed: index.get_item_completion(&item.id).unwrap_or(false),
+                    ignored: index.get_item_ignored(&item.id).unwrap_or(false),
+                    editor_state: index.get_editor_state(&item.id).cloned(),
+                    matched_file: index.get_selection_for_item(&item.id).cloned(),
+                }
+            } else {
+                ItemState::default()
+            };
+
+            self.item_states.insert(item.id.clone(), state);
         }
 
         if !self.items.is_empty() {
@@ -2018,12 +2009,12 @@ impl App {
         let uncompleted_count = self.items.iter()
             .filter(|item| {
                 let id = &item.id;
-                let is_completed = *self.item_completion.get(id).unwrap_or(&false);
-                let is_ignored = *self.item_ignored.get(id).unwrap_or(&false);
+                let is_completed = self.item_states.get(id).map_or(false, |s| s.completed);
+                let is_ignored = self.item_states.get(id).map_or(false, |s| s.ignored);
                 !is_completed && !is_ignored
             })
             .count();
-            
+
         if uncompleted_count > 0 {
             self.pending_playlist_confirmation = Some(uncompleted_count);
             self.status_message = Some(format!(
@@ -2048,12 +2039,12 @@ impl App {
         let mut entries: Vec<PlaylistEntry> = Vec::new();
 
         for item in self.items.iter() {
-            if *self.item_ignored.get(&item.id).unwrap_or(&false) {
+            if self.item_states.get(&item.id).map_or(false, |s| s.ignored) {
                 continue;
             }
 
             // Check for matched external .pro file
-            if let Some(Some(matched_path)) = self.item_matched_file.get(&item.id) {
+            if let Some(matched_path) = self.item_states.get(&item.id).and_then(|s| s.matched_file.as_ref()) {
                 // Read the .pro file and embed it
                 match std::fs::read(matched_path) {
                     Ok(data) => {
@@ -2079,7 +2070,7 @@ impl App {
             }
 
             // If no matched file but we have editor content, create embedded presentation
-            if let Some(Some(state)) = self.item_editor_state.get(&item.id) {
+            if let Some(state) = self.item_states.get(&item.id).and_then(|s| s.editor_state.as_ref()) {
                 let has_content = state.content.iter().any(|l| !l.trim().is_empty());
                 if !has_content {
                     if allow_incomplete {
@@ -2723,29 +2714,22 @@ impl App {
                                 self.items = items;
                                 
                                 // Initialize state for items, restoring from cache where available
-                                self.item_completion.clear();
-                                self.item_ignored.clear();
-                                self.item_matched_file.clear();
-                                self.item_editor_state.clear();
-                                
+                                self.item_states.clear();
+
                                 for item in &self.items {
                                     // Restore completion/ignored/editor state from cache
-                                    let (completion, ignored, editor_state, matched_file) = 
-                                        if let Some(index) = &self.file_index {
-                                            (
-                                                index.get_item_completion(&item.id).unwrap_or(false),
-                                                index.get_item_ignored(&item.id).unwrap_or(false),
-                                                index.get_editor_state(&item.id).cloned(),
-                                                index.get_selection_for_item(&item.id).cloned(),
-                                            )
-                                        } else {
-                                            (false, false, None, None)
-                                        };
-                                    
-                                    self.item_completion.insert(item.id.clone(), completion);
-                                    self.item_ignored.insert(item.id.clone(), ignored);
-                                    self.item_matched_file.insert(item.id.clone(), matched_file);
-                                    self.item_editor_state.insert(item.id.clone(), editor_state);
+                                    let state = if let Some(index) = &self.file_index {
+                                        ItemState {
+                                            completed: index.get_item_completion(&item.id).unwrap_or(false),
+                                            ignored: index.get_item_ignored(&item.id).unwrap_or(false),
+                                            editor_state: index.get_editor_state(&item.id).cloned(),
+                                            matched_file: index.get_selection_for_item(&item.id).cloned(),
+                                        }
+                                    } else {
+                                        ItemState::default()
+                                    };
+
+                                    self.item_states.insert(item.id.clone(), state);
                                 }
                                 
                                 if !self.items.is_empty() {
@@ -2836,16 +2820,15 @@ impl App {
         
         // IMPORTANT: Clear editor state when selecting a file match
         // (file match and custom creation are mutually exclusive)
-        self.item_editor_state.insert(item_id.clone(), None);
+        {
+            let state = self.item_states.entry(item_id.clone()).or_default();
+            state.editor_state = None;
+            state.matched_file = Some(file_path.clone());
+            state.completed = true;
+        }
         if let Some(index) = &mut self.file_index {
             index.editor_states.remove(&item_id);
         }
-        
-        // Record the selection in our item_matched_file hashmap
-        self.item_matched_file.insert(item_id.clone(), Some(file_path.clone()));
-        
-        // Mark the item as completed
-        self.item_completion.insert(item_id.clone(), true);
         
         // Record the selection and completion in the file index for persistence
         if let Some(index) = &mut self.file_index {
@@ -2869,8 +2852,8 @@ impl App {
         ((current_idx + 1)..self.items.len())
             .find(|&i| {
                 if let Some(item) = self.items.get(i) {
-                    let is_completed = *self.item_completion.get(&item.id).unwrap_or(&false);
-                    let is_ignored = *self.item_ignored.get(&item.id).unwrap_or(&false);
+                    let is_completed = self.item_states.get(&item.id).map_or(false, |s| s.completed);
+                    let is_ignored = self.item_states.get(&item.id).map_or(false, |s| s.ignored);
                     
                     // Skip both completed and ignored items
                     !is_completed && !is_ignored
