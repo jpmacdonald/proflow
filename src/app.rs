@@ -470,9 +470,9 @@ impl App {
         
         // Then move to the service list
         self.mode = AppMode::ServiceList;
-        
-        // Make sure loading state is still set when transitioning
-        if self.services.is_empty() {
+
+        // Only show loading if we actually have an async request in flight
+        if self.services.is_empty() && self.pco_client.is_some() {
             self.is_loading = true;
         }
     }
