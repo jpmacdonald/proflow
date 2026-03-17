@@ -2,18 +2,14 @@
 //!
 //! Handles loading configuration from environment variables and .env files.
 
+use crate::error::Result;
 use dotenv::dotenv;
 use std::env;
 use std::path::PathBuf;
-use crate::error::Result;
 
 /// Configuration for the application.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// The application name
-    app_name: String,
-    /// The application version
-    app_version: String,
     /// `Planning Center` Online application ID
     pub pco_app_id: String,
     /// `Planning Center` Online secret
@@ -26,25 +22,9 @@ pub struct Config {
     pub hymnal_path: Option<PathBuf>,
 }
 
-impl Config {
-    /// Get the application name.
-    #[must_use]
-    pub fn app_name(&self) -> &str {
-        &self.app_name
-    }
-
-    /// Get the application version.
-    #[must_use]
-    pub fn app_version(&self) -> &str {
-        &self.app_version
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
-            app_name: env!("CARGO_PKG_NAME").to_string(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
             pco_app_id: String::new(),
             pco_secret: String::new(),
             propresenter_path: None,

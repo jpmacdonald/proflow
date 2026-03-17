@@ -13,8 +13,6 @@ pub mod convert;
 pub mod data_model;
 /// File deserialization (reading .pro files).
 pub mod deserialize;
-/// Export editor content to .pro files.
-pub mod export;
 /// Extract plain text from presentations.
 pub mod extract;
 /// Generated protobuf types.
@@ -23,12 +21,12 @@ pub mod generated;
 pub mod parser;
 /// Playlist file support (.proplaylist).
 pub mod playlist;
-/// Template-based slide generation.
-pub mod template;
 /// RTF conversion utilities.
 pub mod rtf;
 /// File serialization (writing .pro files).
 pub mod serialize;
+/// Template-based slide generation.
+pub mod template;
 /// UUID generation utilities.
 pub mod uuid;
 

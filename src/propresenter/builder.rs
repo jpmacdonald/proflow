@@ -5,8 +5,8 @@
 
 #![allow(dead_code)]
 
-use uuid::Uuid;
 use crate::propresenter::data_model as dm;
+use uuid::Uuid;
 
 /// Builder for creating `ProPresenter` presentations with valid reference chains
 pub struct PresentationBuilder {
@@ -65,12 +65,15 @@ impl PresentationBuilder {
     #[must_use]
     pub fn with_cues(mut self, cues: Vec<dm::Cue>) -> Self {
         // Ensure each cue has a UUID
-        let cues = cues.into_iter().map(|mut cue| {
-            if cue.uuid == Uuid::nil() {
-                cue.uuid = Uuid::new_v4();
-            }
-            cue
-        }).collect();
+        let cues = cues
+            .into_iter()
+            .map(|mut cue| {
+                if cue.uuid == Uuid::nil() {
+                    cue.uuid = Uuid::new_v4();
+                }
+                cue
+            })
+            .collect();
         self.cues = cues;
         self
     }
@@ -80,25 +83,28 @@ impl PresentationBuilder {
     pub fn with_cue_groups(mut self, groups: Vec<dm::CueGroup>) -> Self {
         // Validate and store cue groups
         let cue_uuids: Vec<Uuid> = self.cues.iter().map(|c| c.uuid).collect();
-        
-        let groups = groups.into_iter().map(|mut group| {
-            // Ensure group has UUID
-            if group.group.uuid == Uuid::nil() {
-                group.group.uuid = Uuid::new_v4();
-            }
-            
-            // Ensure application group identifier
-            if group.group.application_group_identifier.is_empty() {
-                group.group.application_group_identifier = Uuid::new_v4().to_string();
-            }
 
-            // Validate cue references
-            group.cue_identifiers.retain(|cue_id| {
-                cue_uuids.contains(cue_id)
-            });
+        let groups = groups
+            .into_iter()
+            .map(|mut group| {
+                // Ensure group has UUID
+                if group.group.uuid == Uuid::nil() {
+                    group.group.uuid = Uuid::new_v4();
+                }
 
-            group
-        }).collect();
+                // Ensure application group identifier
+                if group.group.application_group_identifier.is_empty() {
+                    group.group.application_group_identifier = Uuid::new_v4().to_string();
+                }
+
+                // Validate cue references
+                group
+                    .cue_identifiers
+                    .retain(|cue_id| cue_uuids.contains(cue_id));
+
+                group
+            })
+            .collect();
 
         self.cue_groups = groups;
         self
@@ -108,23 +114,23 @@ impl PresentationBuilder {
     #[must_use]
     pub fn with_arrangements(mut self, arrangements: Vec<dm::Arrangement>) -> Self {
         // Get valid group UUIDs
-        let group_uuids: Vec<Uuid> = self.cue_groups.iter()
-            .map(|g| g.group.uuid)
+        let group_uuids: Vec<Uuid> = self.cue_groups.iter().map(|g| g.group.uuid).collect();
+
+        let arrangements = arrangements
+            .into_iter()
+            .map(|mut arr| {
+                // Ensure arrangement has UUID
+                if arr.uuid == Uuid::nil() {
+                    arr.uuid = Uuid::new_v4();
+                }
+
+                // Validate group references
+                arr.group_identifiers
+                    .retain(|group_id| group_uuids.contains(group_id));
+
+                arr
+            })
             .collect();
-
-        let arrangements = arrangements.into_iter().map(|mut arr| {
-            // Ensure arrangement has UUID
-            if arr.uuid == Uuid::nil() {
-                arr.uuid = Uuid::new_v4();
-            }
-
-            // Validate group references
-            arr.group_identifiers.retain(|group_id| {
-                group_uuids.contains(group_id)
-            });
-
-            arr
-        }).collect();
 
         self.arrangements = arrangements;
         self
@@ -170,7 +176,7 @@ impl PresentationBuilder {
         self.presentation.cues = self.cues;
         self.presentation.cue_groups = self.cue_groups;
         self.presentation.arrangements = self.arrangements;
-        
+
         Ok(self.presentation)
     }
 }
@@ -233,8 +239,12 @@ mod tests {
         // Verify chain
         let arr = &presentation.arrangements[0];
         let group_id = arr.group_identifiers[0];
-        let group = presentation.cue_groups.iter().find(|g| g.group.uuid == group_id).unwrap();
+        let group = presentation
+            .cue_groups
+            .iter()
+            .find(|g| g.group.uuid == group_id)
+            .unwrap();
         let cue_id = group.cue_identifiers[0];
         let _cue = presentation.cues.iter().find(|c| c.uuid == cue_id).unwrap();
     }
-} 
+}

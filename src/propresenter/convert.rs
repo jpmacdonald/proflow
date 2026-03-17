@@ -5,15 +5,11 @@
 
 #![allow(dead_code)]
 
-use uuid::Uuid;
 use crate::propresenter::{
     data_model as dm,
-    generated::rv_data::{
-        self,
-        graphics,
-        presentation
-    },
+    generated::rv_data::{self, graphics, presentation},
 };
+use uuid::Uuid;
 
 // Basic type conversions
 #[allow(clippy::cast_possible_truncation)] // f64 color values are always 0.0..=1.0
@@ -96,8 +92,17 @@ impl From<dm::Rect> for graphics::Rect {
 impl From<graphics::Rect> for dm::Rect {
     fn from(rect: graphics::Rect) -> Self {
         Self {
-            origin: rect.origin.unwrap_or(graphics::Point { x: 0.0, y: 0.0 }).into(),
-            size: rect.size.unwrap_or(graphics::Size { width: 0.0, height: 0.0 }).into(),
+            origin: rect
+                .origin
+                .unwrap_or(graphics::Point { x: 0.0, y: 0.0 })
+                .into(),
+            size: rect
+                .size
+                .unwrap_or(graphics::Size {
+                    width: 0.0,
+                    height: 0.0,
+                })
+                .into(),
         }
     }
 }
@@ -177,8 +182,14 @@ impl From<presentation::BibleReference> for dm::BibleReference {
             book_index: bible_ref.book_index,
             book_name: bible_ref.book_name,
             book_key: bible_ref.book_key,
-            chapter_range: bible_ref.chapter_range.unwrap_or(rv_data::IntRange { start: 1, end: 1 }).into(),
-            verse_range: bible_ref.verse_range.unwrap_or(rv_data::IntRange { start: 1, end: 1 }).into(),
+            chapter_range: bible_ref
+                .chapter_range
+                .unwrap_or(rv_data::IntRange { start: 1, end: 1 })
+                .into(),
+            verse_range: bible_ref
+                .verse_range
+                .unwrap_or(rv_data::IntRange { start: 1, end: 1 })
+                .into(),
             translation_name: bible_ref.translation_name,
             translation_display_abbreviation: bible_ref.translation_display_abbreviation,
             translation_internal_abbreviation: bible_ref.translation_internal_abbreviation,
@@ -195,13 +206,17 @@ impl From<dm::Timeline> for presentation::Timeline {
             timecode_enable: timeline.timecode_enabled,
             timecode_offset: timeline.timecode_offset,
             cues: Vec::new(), // Legacy cues field, use cues_v2 instead
-            cues_v2: timeline.cues.into_iter().map(|cue| {
-                presentation::timeline::Cue {
+            cues_v2: timeline
+                .cues
+                .into_iter()
+                .map(|cue| presentation::timeline::Cue {
                     trigger_time: cue.trigger_time,
                     name: cue.name,
-                    trigger_info: Some(presentation::timeline::cue::TriggerInfo::CueId(cue.uuid.into())),
-                }
-            }).collect(),
+                    trigger_info: Some(presentation::timeline::cue::TriggerInfo::CueId(
+                        cue.uuid.into(),
+                    )),
+                })
+                .collect(),
             audio_action: None, // Not supported in data model
         }
     }
@@ -215,20 +230,24 @@ impl From<presentation::Timeline> for dm::Timeline {
             loop_enabled: timeline.r#loop,
             timecode_enabled: timeline.timecode_enable,
             timecode_offset: timeline.timecode_offset,
-            cues: timeline.cues_v2.into_iter().map(|cue| {
-                let uuid = extract_timeline_cue_uuid(&cue);
-                let action = extract_timeline_cue_action(&cue);
+            cues: timeline
+                .cues_v2
+                .into_iter()
+                .map(|cue| {
+                    let uuid = extract_timeline_cue_uuid(&cue);
+                    let action = extract_timeline_cue_action(&cue);
 
-                dm::TimelineCue {
-                    trigger_time: cue.trigger_time,
-                    name: cue.name,
-                    uuid,
-                    action: action.unwrap_or(dm::Action::Clear {
-                        target_layer: 0,
-                        content_destination: dm::ContentDestination::Global,
-                    }),
-                }
-            }).collect(),
+                    dm::TimelineCue {
+                        trigger_time: cue.trigger_time,
+                        name: cue.name,
+                        uuid,
+                        action: action.unwrap_or(dm::Action::Clear {
+                            target_layer: 0,
+                            content_destination: dm::ContentDestination::Global,
+                        }),
+                    }
+                })
+                .collect(),
         }
     }
 }
@@ -237,18 +256,19 @@ impl From<presentation::Timeline> for dm::Timeline {
 /// Falls back to a new v4 UUID when the trigger has no parseable UUID.
 fn extract_timeline_cue_uuid(cue: &presentation::timeline::Cue) -> Uuid {
     let Some(presentation::timeline::cue::TriggerInfo::Action(action)) = &cue.trigger_info else {
-        return cue.trigger_info.as_ref().map_or_else(
-            Uuid::new_v4,
-            |info| match info {
+        return cue
+            .trigger_info
+            .as_ref()
+            .map_or_else(Uuid::new_v4, |info| match info {
                 presentation::timeline::cue::TriggerInfo::CueId(uuid) => {
                     uuid.string.parse().unwrap_or_else(|_| Uuid::new_v4())
                 }
                 presentation::timeline::cue::TriggerInfo::Action(_) => unreachable!(),
-            },
-        );
+            });
     };
 
-    if rv_data::action::ActionType::try_from(action.r#type).unwrap_or(rv_data::action::ActionType::Unknown)
+    if rv_data::action::ActionType::try_from(action.r#type)
+        .unwrap_or(rv_data::action::ActionType::Unknown)
         != rv_data::action::ActionType::AudienceLook
     {
         return Uuid::new_v4();
@@ -273,9 +293,12 @@ fn extract_timeline_cue_action(cue: &presentation::timeline::Cue) -> Option<dm::
         return None;
     };
 
-    match rv_data::action::ActionType::try_from(action.r#type).unwrap_or(rv_data::action::ActionType::Unknown) {
+    match rv_data::action::ActionType::try_from(action.r#type)
+        .unwrap_or(rv_data::action::ActionType::Unknown)
+    {
         rv_data::action::ActionType::Clear => {
-            let Some(rv_data::action::ActionTypeData::Clear(clear)) = &action.action_type_data else {
+            let Some(rv_data::action::ActionTypeData::Clear(clear)) = &action.action_type_data
+            else {
                 return None;
             };
             // Only Global destination is currently supported
@@ -287,7 +310,9 @@ fn extract_timeline_cue_action(cue: &presentation::timeline::Cue) -> Option<dm::
             })
         }
         rv_data::action::ActionType::AudienceLook => {
-            let Some(rv_data::action::ActionTypeData::AudienceLook(look)) = &action.action_type_data else {
+            let Some(rv_data::action::ActionTypeData::AudienceLook(look)) =
+                &action.action_type_data
+            else {
                 return None;
             };
             let Some(identification) = &look.identification else {
@@ -295,10 +320,12 @@ fn extract_timeline_cue_action(cue: &presentation::timeline::Cue) -> Option<dm::
             };
             Some(dm::Action::AudienceLook {
                 name: action.name.clone(),
-                uuid: identification.parameter_uuid.as_ref().map_or_else(
-                    Uuid::new_v4,
-                    |u| u.string.parse().unwrap_or_else(|_| Uuid::new_v4()),
-                ),
+                uuid: identification
+                    .parameter_uuid
+                    .as_ref()
+                    .map_or_else(Uuid::new_v4, |u| {
+                        u.string.parse().unwrap_or_else(|_| Uuid::new_v4())
+                    }),
                 parameter_name: identification.parameter_name.clone(),
             })
         }
@@ -312,7 +339,11 @@ impl From<dm::Arrangement> for presentation::Arrangement {
         Self {
             uuid: Some(arrangement.uuid.into()),
             name: arrangement.name,
-            group_identifiers: arrangement.group_identifiers.into_iter().map(std::convert::Into::into).collect(),
+            group_identifiers: arrangement
+                .group_identifiers
+                .into_iter()
+                .map(std::convert::Into::into)
+                .collect(),
         }
     }
 }
@@ -320,9 +351,15 @@ impl From<dm::Arrangement> for presentation::Arrangement {
 impl From<presentation::Arrangement> for dm::Arrangement {
     fn from(arrangement: presentation::Arrangement) -> Self {
         Self {
-            uuid: arrangement.uuid.map_or_else(Uuid::new_v4, |uuid| uuid.string.parse().unwrap_or_else(|_| Uuid::new_v4())),
+            uuid: arrangement.uuid.map_or_else(Uuid::new_v4, |uuid| {
+                uuid.string.parse().unwrap_or_else(|_| Uuid::new_v4())
+            }),
             name: arrangement.name,
-            group_identifiers: arrangement.group_identifiers.into_iter().map(|uuid| uuid.string.parse().unwrap_or_else(|_| Uuid::new_v4())).collect(),
+            group_identifiers: arrangement
+                .group_identifiers
+                .into_iter()
+                .map(|uuid| uuid.string.parse().unwrap_or_else(|_| Uuid::new_v4()))
+                .collect(),
         }
     }
 }
@@ -341,9 +378,9 @@ impl From<dm::Presentation> for rv_data::Presentation {
             })),
         });
 
-        let slide_show = presentation.slide_show.map(|s| {
-            presentation::SlideShow::SlideShowDuration(s.slide_duration)
-        });
+        let slide_show = presentation
+            .slide_show
+            .map(|s| presentation::SlideShow::SlideShowDuration(s.slide_duration));
 
         // Create rv_data::Cues from our data model
         let cues = presentation.cues.into_iter().map(|cue| {
@@ -674,7 +711,9 @@ impl From<dm::Presentation> for rv_data::Presentation {
                     build: "7.14.0".to_string(),
                 }),
             }),
-            uuid: Some(rv_data::Uuid { string: presentation.uuid.to_string() }),
+            uuid: Some(rv_data::Uuid {
+                string: presentation.uuid.to_string(),
+            }),
             name: presentation.name,
             last_date_used: None,
             last_modified_date: Some(rv_data::Timestamp {
@@ -686,9 +725,13 @@ impl From<dm::Presentation> for rv_data::Presentation {
             background,
             chord_chart: None,
             selected_arrangement: Some(rv_data::Uuid {
-                string: "a27370a2-9f2c-4766-bcd5-28c6454f9c68".to_string()
+                string: "a27370a2-9f2c-4766-bcd5-28c6454f9c68".to_string(),
             }),
-            arrangements: presentation.arrangements.into_iter().map(std::convert::Into::into).collect(),
+            arrangements: presentation
+                .arrangements
+                .into_iter()
+                .map(std::convert::Into::into)
+                .collect(),
             cue_groups,
             cues,
             ccli: presentation.ccli.map(std::convert::Into::into),
@@ -698,9 +741,18 @@ impl From<dm::Presentation> for rv_data::Presentation {
                 cues: Vec::new(),
                 cues_v2: Vec::new(),
                 duration: presentation.timeline.as_ref().map_or(300.0, |t| t.duration),
-                r#loop: presentation.timeline.as_ref().is_some_and(|t| t.loop_enabled),
-                timecode_enable: presentation.timeline.as_ref().is_some_and(|t| t.timecode_enabled),
-                timecode_offset: presentation.timeline.as_ref().map_or(0.0, |t| t.timecode_offset),
+                r#loop: presentation
+                    .timeline
+                    .as_ref()
+                    .is_some_and(|t| t.loop_enabled),
+                timecode_enable: presentation
+                    .timeline
+                    .as_ref()
+                    .is_some_and(|t| t.timecode_enabled),
+                timecode_offset: presentation
+                    .timeline
+                    .as_ref()
+                    .map_or(0.0, |t| t.timecode_offset),
             }),
             transition: None,
             content_destination: rv_data::action::ContentDestination::Global as i32,
@@ -715,8 +767,8 @@ impl From<dm::Presentation> for rv_data::Presentation {
 /// Converts a data model `Slide` into the protobuf `PresentationSlide` representation.
 #[allow(clippy::too_many_lines)] // Complex protobuf struct assembly
 fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
-    use rv_data::graphics;
     use crate::propresenter::rtf::text_to_rtf_bytes;
+    use rv_data::graphics;
 
     let mut elements = Vec::new();
     let mut element_uuids = Vec::new();
@@ -724,8 +776,10 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
     for element in slide.base.elements {
         if let dm::Element::Text(text_element) = element {
             let element_uuid = Uuid::new_v4().to_string();
-            element_uuids.push(rv_data::Uuid { string: element_uuid.clone() });
-            
+            element_uuids.push(rv_data::Uuid {
+                string: element_uuid.clone(),
+            });
+
             // Use proper RTF conversion that handles superscripts
             let rtf_data = text_to_rtf_bytes(&text_element.content);
 
@@ -754,10 +808,16 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
                         blue: 1.0,
                         alpha: 1.0,
                     }),
-                    custom_attributes: text_element.custom_attributes.into_iter().map(std::convert::Into::into).collect(),
+                    custom_attributes: text_element
+                        .custom_attributes
+                        .into_iter()
+                        .map(std::convert::Into::into)
+                        .collect(),
                     background_color: None,
                     ligature_style: graphics::text::attributes::LigatureStyle::Default as i32,
-                    fill: Some(graphics::text::attributes::Fill::TextSolidFill(text_element.color.into())),
+                    fill: Some(graphics::text::attributes::Fill::TextSolidFill(
+                        text_element.color.into(),
+                    )),
                 }),
                 shadow: text_element.shadow.map(std::convert::Into::into),
                 rtf_data,
@@ -788,7 +848,9 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
             let text_element_shadow = text_element.shadow;
 
             let graphics_element = rv_data::graphics::Element {
-                uuid: Some(rv_data::Uuid { string: element_uuid.clone() }),
+                uuid: Some(rv_data::Uuid {
+                    string: element_uuid.clone(),
+                }),
                 name: "Text Element".to_string(),
                 bounds: Some(rv_data::graphics::Rect {
                     origin: Some(rv_data::graphics::Point {
@@ -796,8 +858,14 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
                         y: text_element.bounds.as_ref().map_or(0.0, |b| b.origin.y),
                     }),
                     size: Some(rv_data::graphics::Size {
-                        width: text_element.bounds.as_ref().map_or(1920.0, |b| b.size.width),
-                        height: text_element.bounds.as_ref().map_or(1080.0, |b| b.size.height),
+                        width: text_element
+                            .bounds
+                            .as_ref()
+                            .map_or(1920.0, |b| b.size.width),
+                        height: text_element
+                            .bounds
+                            .as_ref()
+                            .map_or(1080.0, |b| b.size.height),
                     }),
                 }),
                 rotation: 0.0,
@@ -868,14 +936,16 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
                 text: Some(text),
                 flip_mode: graphics::element::FlipMode::None as i32,
                 hidden: false,
-                mask: Some(graphics::element::Mask::TextLineMask(graphics::text::LineFillMask {
-                    enabled: true,
-                    height_offset: 0.0,
-                    vertical_offset: 0.0,
-                    mask_style: graphics::text::line_fill_mask::LineMaskStyle::FullWidth as i32,
-                    width_offset: 0.0,
-                    horizontal_offset: 0.0,
-                })),
+                mask: Some(graphics::element::Mask::TextLineMask(
+                    graphics::text::LineFillMask {
+                        enabled: true,
+                        height_offset: 0.0,
+                        vertical_offset: 0.0,
+                        mask_style: graphics::text::line_fill_mask::LineMaskStyle::FullWidth as i32,
+                        width_offset: 0.0,
+                        horizontal_offset: 0.0,
+                    },
+                )),
             };
             elements.push(rv_data::slide::Element {
                 element: Some(graphics_element),
@@ -886,20 +956,30 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
                 data_links: Vec::new(),
                 child_builds: Vec::new(),
                 reveal_from_index: 0,
-                text_scroller: text_element.text_scroller.map(|ts| rv_data::slide::element::TextScroller {
-                    should_scroll: ts.should_scroll,
-                    scroll_rate: ts.scroll_rate,
-                    should_repeat: ts.should_repeat,
-                    repeat_distance: ts.repeat_distance,
-                    scrolling_direction: match ts.scrolling_direction {
-                        dm::ScrollDirection::Left => rv_data::slide::element::text_scroller::Direction::Left as i32,
-                        dm::ScrollDirection::Right => rv_data::slide::element::text_scroller::Direction::Right as i32,
-                        dm::ScrollDirection::Up => rv_data::slide::element::text_scroller::Direction::Up as i32,
-                        dm::ScrollDirection::Down => rv_data::slide::element::text_scroller::Direction::Down as i32,
-                    },
-                    starts_off_screen: ts.starts_off_screen,
-                    fade_left: ts.fade_left,
-                    fade_right: ts.fade_right,
+                text_scroller: text_element.text_scroller.map(|ts| {
+                    rv_data::slide::element::TextScroller {
+                        should_scroll: ts.should_scroll,
+                        scroll_rate: ts.scroll_rate,
+                        should_repeat: ts.should_repeat,
+                        repeat_distance: ts.repeat_distance,
+                        scrolling_direction: match ts.scrolling_direction {
+                            dm::ScrollDirection::Left => {
+                                rv_data::slide::element::text_scroller::Direction::Left as i32
+                            }
+                            dm::ScrollDirection::Right => {
+                                rv_data::slide::element::text_scroller::Direction::Right as i32
+                            }
+                            dm::ScrollDirection::Up => {
+                                rv_data::slide::element::text_scroller::Direction::Up as i32
+                            }
+                            dm::ScrollDirection::Down => {
+                                rv_data::slide::element::text_scroller::Direction::Down as i32
+                            }
+                        },
+                        starts_off_screen: ts.starts_off_screen,
+                        fade_left: ts.fade_left,
+                        fade_right: ts.fade_right,
+                    }
                 }),
             });
         }
@@ -914,36 +994,59 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
     let base_slide = rv_data::Slide {
         elements,
         element_build_order,
-        guidelines: slide.base.guidelines.into_iter().map(|g| rv_data::AlignmentGuide {
-            uuid: Some(rv_data::Uuid { string: Uuid::new_v4().to_string() }),
-            orientation: match g.orientation {
-                dm::GuidelineOrientation::Horizontal => rv_data::alignment_guide::GuidelineOrientation::Horizontal as i32,
-                dm::GuidelineOrientation::Vertical => rv_data::alignment_guide::GuidelineOrientation::Vertical as i32,
-            },
-            location: g.position,
-        }).collect(),
+        guidelines: slide
+            .base
+            .guidelines
+            .into_iter()
+            .map(|g| rv_data::AlignmentGuide {
+                uuid: Some(rv_data::Uuid {
+                    string: Uuid::new_v4().to_string(),
+                }),
+                orientation: match g.orientation {
+                    dm::GuidelineOrientation::Horizontal => {
+                        rv_data::alignment_guide::GuidelineOrientation::Horizontal as i32
+                    }
+                    dm::GuidelineOrientation::Vertical => {
+                        rv_data::alignment_guide::GuidelineOrientation::Vertical as i32
+                    }
+                },
+                location: g.position,
+            })
+            .collect(),
         draws_background_color: slide.base.draws_background_color,
         background_color: slide.base.background_color.map(std::convert::Into::into),
         size: Some(slide.base.size.into()),
-        uuid: Some(rv_data::Uuid { string: slide.base.uuid.to_string() }),
+        uuid: Some(rv_data::Uuid {
+            string: slide.base.uuid.to_string(),
+        }),
     };
 
     rv_data::PresentationSlide {
         base_slide: Some(base_slide),
-        notes: slide.notes.map(|note_text| {
-            rv_data::presentation_slide::Notes {
+        notes: slide
+            .notes
+            .map(|note_text| rv_data::presentation_slide::Notes {
                 rtf_data: note_text.into_bytes(),
                 attributes: None,
-            }
-        }),
-        template_guidelines: slide.template_guidelines.into_iter().map(|g| rv_data::AlignmentGuide {
-            uuid: Some(rv_data::Uuid { string: Uuid::new_v4().to_string() }),
-            orientation: match g.orientation {
-                dm::GuidelineOrientation::Horizontal => rv_data::alignment_guide::GuidelineOrientation::Horizontal as i32,
-                dm::GuidelineOrientation::Vertical => rv_data::alignment_guide::GuidelineOrientation::Vertical as i32,
-            },
-            location: g.position,
-        }).collect(),
+            }),
+        template_guidelines: slide
+            .template_guidelines
+            .into_iter()
+            .map(|g| rv_data::AlignmentGuide {
+                uuid: Some(rv_data::Uuid {
+                    string: Uuid::new_v4().to_string(),
+                }),
+                orientation: match g.orientation {
+                    dm::GuidelineOrientation::Horizontal => {
+                        rv_data::alignment_guide::GuidelineOrientation::Horizontal as i32
+                    }
+                    dm::GuidelineOrientation::Vertical => {
+                        rv_data::alignment_guide::GuidelineOrientation::Vertical as i32
+                    }
+                },
+                location: g.position,
+            })
+            .collect(),
         chord_chart: slide.chord_chart.map(|url| rv_data::Url {
             platform: rv_data::url::Platform::Macos as i32,
             storage: Some(rv_data::url::Storage::AbsoluteString(url.url)),
@@ -953,7 +1056,9 @@ fn convert_slide_to_rv_data(slide: dm::Slide) -> rv_data::PresentationSlide {
             duration: t.duration,
             favorite_uuid: None,
             effect: Some(rv_data::Effect {
-                uuid: Some(rv_data::Uuid { string: Uuid::new_v4().to_string() }),
+                uuid: Some(rv_data::Uuid {
+                    string: Uuid::new_v4().to_string(),
+                }),
                 enabled: true,
                 name: "Dissolve".to_string(),
                 render_id: "com.renewedvision.transition.dissolve".to_string(),
@@ -1000,15 +1105,19 @@ impl From<dm::ParagraphStyle> for rv_data::graphics::text::attributes::Paragraph
             line_spacing: style.line_spacing,
             paragraph_spacing: style.paragraph_spacing,
             paragraph_spacing_before: style.paragraph_spacing_before,
-            tab_stops: style.tab_stops.into_iter().map(|ts| attributes::paragraph::TabStop {
-                location: ts.position,
-                alignment: match ts.alignment {
-                    dm::TabAlignment::Left => attributes::Alignment::Left as i32,
-                    dm::TabAlignment::Center => attributes::Alignment::Center as i32,
-                    dm::TabAlignment::Right => attributes::Alignment::Right as i32,
-                    dm::TabAlignment::Decimal => attributes::Alignment::Natural as i32,
-                },
-            }).collect(),
+            tab_stops: style
+                .tab_stops
+                .into_iter()
+                .map(|ts| attributes::paragraph::TabStop {
+                    location: ts.position,
+                    alignment: match ts.alignment {
+                        dm::TabAlignment::Left => attributes::Alignment::Left as i32,
+                        dm::TabAlignment::Center => attributes::Alignment::Center as i32,
+                        dm::TabAlignment::Right => attributes::Alignment::Right as i32,
+                        dm::TabAlignment::Decimal => attributes::Alignment::Natural as i32,
+                    },
+                })
+                .collect(),
             default_tab_interval: style.default_tab_interval,
             text_list: Some(attributes::paragraph::TextList {
                 is_enabled: false,
@@ -1033,9 +1142,15 @@ impl From<dm::CustomAttribute> for rv_data::graphics::text::attributes::CustomAt
                 end: attr.range.end.cast_signed(),
             }),
             attribute: Some(match attr.attribute {
-                dm::CustomAttributeType::Capitalization(cap) => Attribute::Capitalization(cap as i32),
-                dm::CustomAttributeType::OriginalFontSize(size) => Attribute::OriginalFontSize(size),
-                dm::CustomAttributeType::FontScaleFactor(factor) => Attribute::FontScaleFactor(factor),
+                dm::CustomAttributeType::Capitalization(cap) => {
+                    Attribute::Capitalization(cap as i32)
+                }
+                dm::CustomAttributeType::OriginalFontSize(size) => {
+                    Attribute::OriginalFontSize(size)
+                }
+                dm::CustomAttributeType::FontScaleFactor(factor) => {
+                    Attribute::FontScaleFactor(factor)
+                }
                 // Other attribute types would go here - simplified for now
                 _ => Attribute::Capitalization(0),
             }),
@@ -1045,7 +1160,9 @@ impl From<dm::CustomAttribute> for rv_data::graphics::text::attributes::CustomAt
 
 /// Converts a data model [`Presentation`](crate::propresenter::data_model::Presentation)
 /// into its protobuf representation.
-pub fn convert_presentation_to_rv_data(presentation: crate::propresenter::data_model::Presentation) -> rv_data::Presentation {
+pub fn convert_presentation_to_rv_data(
+    presentation: crate::propresenter::data_model::Presentation,
+) -> rv_data::Presentation {
     presentation.into()
 }
 

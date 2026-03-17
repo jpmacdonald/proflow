@@ -90,6 +90,7 @@ pkg/
 *.tmp
 *.bak
 *.backup
+test_output_*.txt
 .temp/
 .tmp/
 tmp/
@@ -102,4 +103,4 @@ jspm_packages/
 # Backup files
 **/*~
 **/*.bak
-**/*.bakup 
+**/*.bakup

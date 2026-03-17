@@ -5,11 +5,11 @@ Terminal UI to map Planning Center plans to existing ProPresenter library files 
 ## Current Capabilities
 
 - Splash screen → Services/Plans → Items/Matching Files → Editor flow.
-- Planning Center: fetches service types and plans when `PCO_APP_ID`/`PCO_SECRET` are set; otherwise uses built-in dummy data so the UI can be exercised offline. Includes retry/backoff for API failures.
+- Planning Center: fetches service types and plans from the live API when `PCO_APP_ID`/`PCO_SECRET` are set. Includes retry/backoff and pagination handling.
 - ProPresenter library discovery: auto-detects `Documents/ProPresenter/Libraries/Default`, `PROPRESENTER_PATH`, or `LIBRARY_DIR`. Builds a `.pro` index on first entry past the splash.
-- **Persistent file index caching**: saves index and selection history to `.proflow_cache.json` in the library directory, avoiding cold-start rescans and remembering previously matched files across sessions.
+- **Persistent file index caching**: saves index and selection history to the app data directory as `library_cache.json` when available, falling back to `.proflow_cache.json` beside the library.
 - File matching: normalization + fuzzy scoring with hymn-number detection, composite title handling, liturgical boosts, and selection frequency boosting.
-- Item actions: mark complete, ignore (Delete/Backspace), select a matching file, or open an editor buffer (`c`) with optional preloaded song lyrics.
+- Item actions: mark complete, ignore (Delete/Backspace/Space), select a matching file, or open an editor buffer (`c`/`e`) with optional preloaded song lyrics.
 - **Playlist generation** (`g`): generates `.proplaylist` files from matched items, respecting ignored items.
 - **ProPresenter export** (`:export` in editor): converts editor content with verse markers to `.pro` files.
 - Editor: basic text editing, selection, clipboard, wrap guide (Alt+←/→), verse markers via `:` commands, wrap/split helpers, and export.
@@ -29,7 +29,7 @@ Terminal UI to map Planning Center plans to existing ProPresenter library files 
 
 2. **Environment**  
    Create `.env` with any of:  
-   - `PCO_APP_ID`, `PCO_SECRET` – enable Planning Center fetching.  
+   - `PCO_APP_ID`, `PCO_SECRET` – required for Planning Center access.
    - `DAYS_AHEAD` – override default 30-day plan window.  
    - `PROPRESENTER_PATH` or `LIBRARY_DIR` – point to your ProPresenter install or library.
 
@@ -37,14 +37,14 @@ Terminal UI to map Planning Center plans to existing ProPresenter library files 
    ```bash
    cargo run
    ```
-   Press any key on the splash screen to begin. If PCO credentials are missing, dummy services/plans/items are used.
+   Press any key on the splash screen to begin. If PCO credentials are missing, the app will stop at a configuration error.
 
 ## UI & Keys (quick reference)
 
 - **Navigation**: arrows / `h` `j` `k` `l`, `Tab` to switch panes.
 - **Global**: `F1` or `?` for help modal; `:` enters command mode; `:q` quit, `:reload` refresh data.
 - **Service/Plans**: Enter to drill into a plan.
-- **Items pane**: Enter/Tab to focus files; Delete/Backspace toggles ignore; `c` open editor; `g` generate playlist.
+- **Items pane**: Enter/Tab to focus files; Delete/Backspace/Space toggles ignore; `c` or `e` opens the editor; `g` generates the playlist.
 - **Files pane**: Enter selects file for the current item (marks complete, records preference for future ranking).
 - **Editor**: Esc back; Shift+arrows for selection; Ctrl/Cmd+C/X/V clipboard; Alt+←/→ wrap column; `:split`, `:wrap`/`wrap 90`, verse markers like `:v1`, `:c`; `:export` or `:save` to write `.pro` file.
 

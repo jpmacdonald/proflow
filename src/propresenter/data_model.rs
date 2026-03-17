@@ -16,61 +16,61 @@
     clippy::new_without_default
 )]
 
+use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Represents a ProPresenter presentation
 #[derive(Debug, Clone)]
 pub struct Presentation {
     /// Name of the presentation
     pub name: String,
-    
+
     /// Path to the presentation file, if it was loaded from disk
     pub path: Option<PathBuf>,
-    
+
     /// Unique identifier for the presentation
     pub uuid: Uuid,
-    
+
     /// Last time the presentation was used
     pub last_used: Option<DateTime<Utc>>,
-    
+
     /// Last time the presentation was modified
     pub last_modified: Option<DateTime<Utc>>,
-    
+
     /// Category of the presentation
     pub category: String,
-    
+
     /// Notes about the presentation
     pub notes: String,
-    
+
     /// CCLI information if this is a song
     pub ccli: Option<CCLIInfo>,
-    
+
     /// Bible reference if this is a scripture
     pub bible_reference: Option<BibleReference>,
-    
+
     /// Cues in the presentation (containing slides as actions)
     pub cues: Vec<Cue>,
-    
+
     /// Cue groups for organizing cues
     pub cue_groups: Vec<CueGroup>,
-    
+
     /// Arrangements of slides (different orderings/groupings)
     pub arrangements: Vec<Arrangement>,
-    
+
     /// Timeline for automated playback
     pub timeline: Option<Timeline>,
-    
+
     /// Application version information
     pub application_info: Option<ApplicationInfo>,
-    
+
     /// Music key if this is a song
     pub music_key: String,
-    
+
     /// Music-specific settings
     pub music: Option<Music>,
-    
+
     /// Slideshow-specific settings
     pub slide_show: Option<SlideShow>,
 }
@@ -199,16 +199,16 @@ pub struct Arrangement {
 pub struct Slide {
     /// Base slide properties
     pub base: BaseSlide,
-    
+
     /// Slide-specific notes
     pub notes: Option<String>,
-    
+
     /// Template guidelines
     pub template_guidelines: Vec<Guideline>,
-    
+
     /// Associated chord chart
     pub chord_chart: Option<Url>,
-    
+
     /// Transition settings
     pub transition: Option<Transition>,
 }
@@ -218,22 +218,22 @@ pub struct Slide {
 pub struct BaseSlide {
     /// Unique identifier
     pub uuid: Uuid,
-    
+
     /// Elements on the slide
     pub elements: Vec<Element>,
-    
+
     /// Build order for elements
     pub element_build_order: Vec<Uuid>,
-    
+
     /// Layout guidelines
     pub guidelines: Vec<Guideline>,
-    
+
     /// Whether to draw background color
     pub draws_background_color: bool,
-    
+
     /// Background color
     pub background_color: Option<Color>,
-    
+
     /// Slide size
     pub size: Size,
 }
@@ -263,7 +263,12 @@ pub struct Color {
 
 impl Default for Color {
     fn default() -> Self {
-        Self { red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0 }
+        Self {
+            red: 1.0,
+            green: 1.0,
+            blue: 1.0,
+            alpha: 1.0,
+        }
     }
 }
 
@@ -272,7 +277,7 @@ impl Default for Color {
 pub enum Element {
     /// Text element with formatting
     Text(TextElement),
-    
+
     /// Shape element (rectangle, circle, etc)
     Shape {
         shape_type: ShapeType,
@@ -280,7 +285,7 @@ pub enum Element {
         border_color: Option<Color>,
         border_width: f64,
     },
-    
+
     /// Media element (image, video)
     Media {
         source: MediaSource,
@@ -288,7 +293,7 @@ pub enum Element {
         opacity: f32,
         volume: f32,
     },
-    
+
     /// Countdown timer
     Timer {
         format: TimerFormat,
@@ -320,10 +325,7 @@ pub enum ShapeType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaSource {
     File(PathBuf),
-    VideoInput {
-        input_id: Uuid,
-        input_name: String,
-    },
+    VideoInput { input_id: Uuid, input_name: String },
     Url(String),
 }
 
@@ -375,15 +377,15 @@ pub struct Music {
     pub subdivision: Subdivision,
 
     pub arrangement_info: Option<ArrangementInfo>, // Add this
-    pub rehearsal_mix: Option<MediaSource>,      // Add this
-    pub click_track: Option<MediaSource>,        // Add this
-    pub chord_chart: Option<Url>,                // Add this
-    pub lyrics: String,                         // Add this
-    pub sheet_music: Option<Url>,               // Add this
-    pub audio_file: Option<MediaSource>,        // Add this
-    pub background_audio: Option<MediaSource>,  // Add this
-    pub timeline_start: f64,                    // Add this
-    pub timeline_end: f64,                      // Add this
+    pub rehearsal_mix: Option<MediaSource>,        // Add this
+    pub click_track: Option<MediaSource>,          // Add this
+    pub chord_chart: Option<Url>,                  // Add this
+    pub lyrics: String,                            // Add this
+    pub sheet_music: Option<Url>,                  // Add this
+    pub audio_file: Option<MediaSource>,           // Add this
+    pub background_audio: Option<MediaSource>,     // Add this
+    pub timeline_start: f64,                       // Add this
+    pub timeline_end: f64,                         // Add this
 }
 
 // ArrangementInfo
@@ -682,7 +684,10 @@ impl Default for Slide {
                 guidelines: Vec::new(),
                 draws_background_color: true,
                 background_color: None,
-                size: Size { width: 1920.0, height: 1080.0 },
+                size: Size {
+                    width: 1920.0,
+                    height: 1080.0,
+                },
             },
             notes: None,
             template_guidelines: Vec::new(),
@@ -1045,19 +1050,19 @@ impl TimelineCue {
 pub struct Cue {
     /// Unique identifier for the cue
     pub uuid: Uuid,
-    
+
     /// Name of the cue
     pub name: String,
-    
+
     /// Actions contained in this cue
     pub actions: Vec<Action>,
-    
+
     /// Whether the cue is enabled
     pub enabled: bool,
-    
+
     /// Hot key associated with this cue
     pub hot_key: Option<HotKey>,
-    
+
     /// Completion behavior settings
     pub completion_target_type: CompletionTargetType,
     pub completion_target_uuid: Option<Uuid>,
@@ -1098,7 +1103,7 @@ pub struct HotKey {
 pub struct CueGroup {
     /// The group details
     pub group: Group,
-    
+
     /// Identifiers of cues within this group
     pub cue_identifiers: Vec<Uuid>,
 }
@@ -1108,16 +1113,16 @@ pub struct CueGroup {
 pub struct Group {
     /// Unique identifier
     pub uuid: Uuid,
-    
+
     /// Name of the group
     pub name: String,
-    
+
     /// Color of the group (used in UI)
     pub color: Color,
-    
+
     /// Hot key associated with this group
     pub hot_key: Option<HotKey>,
-    
+
     /// Application-specific identifier
     pub application_group_identifier: String,
-} 
+}

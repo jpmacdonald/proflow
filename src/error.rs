@@ -80,7 +80,10 @@ impl Error {
     /// Create an IO error with path context
     #[allow(dead_code)]
     pub fn io(source: std::io::Error, path: impl Into<Option<std::path::PathBuf>>) -> Self {
-        Self::Io { source, path: path.into() }
+        Self::Io {
+            source,
+            path: path.into(),
+        }
     }
 
     /// Create a `Planning Center` error with optional status and hint
@@ -112,19 +115,28 @@ impl Error {
 
     /// Create a config error with actionable hint
     pub fn config(message: impl Into<String>, hint: &'static str) -> Self {
-        Self::Config { message: message.into(), hint }
+        Self::Config {
+            message: message.into(),
+            hint,
+        }
     }
 
     /// Create a parse error with file context
     pub fn parse(message: impl Into<String>, file: impl Into<Option<std::path::PathBuf>>) -> Self {
-        Self::Parse { file: file.into(), message: message.into() }
+        Self::Parse {
+            file: file.into(),
+            message: message.into(),
+        }
     }
 }
 
 // Convenience conversions
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        Self::Io { source: e, path: None }
+        Self::Io {
+            source: e,
+            path: None,
+        }
     }
 }
 

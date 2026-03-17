@@ -2,15 +2,17 @@
 //!
 //! Writes protobuf-encoded playlist files (.proplaylist) to disk.
 
+use prost::Message;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use prost::Message;
 use uuid::Uuid;
 use zip::write::FileOptions;
 use zip::ZipWriter;
 
-use crate::propresenter::generated::rv_data::{self, playlist, playlist_document, playlist_item, url};
+use crate::propresenter::generated::rv_data::{
+    self, playlist, playlist_document, playlist_item, url,
+};
 use crate::types::SlideType;
 
 /// Errors that can occur when writing playlist files
@@ -61,6 +63,32 @@ impl PlaylistEntry {
     }
 }
 
+fn deduplicated_embedded_filenames(entries: &[PlaylistEntry]) -> Vec<Option<String>> {
+    let mut used_names = std::collections::HashSet::new();
+
+    entries
+        .iter()
+        .map(|entry| {
+            entry.embedded_data.as_ref().map(|_| {
+                let base = entry.embedded_filename();
+                if used_names.insert(base.clone()) {
+                    base
+                } else {
+                    let stem = base.trim_end_matches(".pro");
+                    let mut n = 2u32;
+                    loop {
+                        let candidate = format!("{stem} ({n}).pro");
+                        if used_names.insert(candidate.clone()) {
+                            break candidate;
+                        }
+                        n += 1;
+                    }
+                }
+            })
+        })
+        .collect()
+}
+
 /// Convert a file path to a `ProPresenter` `file:///` URL
 fn path_to_file_url(path: &str) -> String {
     // URL-encode characters that have special meaning in URIs.
@@ -84,7 +112,7 @@ fn extract_relative_path(path: &str) -> Option<url::RelativeFilePath> {
             .and_then(|n| n.to_str())
             .map(String::from)?
     };
-    
+
     // Use LocalRelativePath with root = Show (10) for library paths
     Some(url::RelativeFilePath::Local(url::LocalRelativePath {
         root: url::local_relative_path::Root::Show as i32,
@@ -145,8 +173,11 @@ fn sanitize_scripture(name: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut result = String::with_capacity(s.len());
     for (i, &c) in chars.iter().enumerate() {
-        if c == ':' && i > 0 && chars[i - 1].is_ascii_digit()
-            && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()
+        if c == ':'
+            && i > 0
+            && chars[i - 1].is_ascii_digit()
+            && i + 1 < chars.len()
+            && chars[i + 1].is_ascii_digit()
         {
             result.push('v');
         } else {
@@ -234,33 +265,39 @@ pub fn get_embedded_filename(name: &str, slide_type: SlideType) -> String {
 /// `ProPresenter` expects a two-level structure:
 /// - Root Playlist (container) with `playlists` field containing child playlists
 /// - Child Playlist with `items` field containing the actual `PlaylistItems`
+#[allow(clippy::too_many_lines)]
 pub fn build_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::PlaylistDocument {
+    let embedded_filenames = deduplicated_embedded_filenames(entries);
     let items: Vec<rv_data::PlaylistItem> = entries
         .iter()
-        .map(|entry| {
-            let embedded_filename = entry.embedded_filename();
-            
+        .zip(embedded_filenames.iter())
+        .map(|(entry, embedded_filename)| {
             // For embedded files, create a path that ProPresenter can find:
             // - absolute_string: file:/// URL (can be placeholder path)
             // - relative_file_path: Libraries/Default/<filename>.pro with root=Show
-            let (file_url, relative_path) = if entry.embedded_data.is_some() {
-                // Create a plausible absolute path (ProPresenter will use relative)
-                let encoded_name = embedded_filename.replace(' ', "%20");
-                let abs_path = format!("file:///Libraries/Default/{encoded_name}");
-                // Relative path within ProPresenter's library structure
-                let rel = url::RelativeFilePath::Local(url::LocalRelativePath {
-                    root: url::local_relative_path::Root::Show as i32,
-                    path: format!("Libraries/Default/{embedded_filename}"),
-                });
-                (abs_path, Some(rel))
-            } else {
-                let file_url = path_to_file_url(&entry.presentation_path);
-                let relative_path = extract_relative_path(&entry.presentation_path);
-                (file_url, relative_path)
-            };
-            
+            let (file_url, relative_path) = embedded_filename.as_ref().map_or_else(
+                || {
+                    let file_url = path_to_file_url(&entry.presentation_path);
+                    let relative_path = extract_relative_path(&entry.presentation_path);
+                    (file_url, relative_path)
+                },
+                |embedded_filename| {
+                    // Create a plausible absolute path (ProPresenter will use relative)
+                    let encoded_name = embedded_filename.replace(' ', "%20");
+                    let abs_path = format!("file:///Libraries/Default/{encoded_name}");
+                    // Relative path within ProPresenter's library structure
+                    let rel = url::RelativeFilePath::Local(url::LocalRelativePath {
+                        root: url::local_relative_path::Root::Show as i32,
+                        path: format!("Libraries/Default/{embedded_filename}"),
+                    });
+                    (abs_path, Some(rel))
+                },
+            );
+
             rv_data::PlaylistItem {
-                uuid: Some(rv_data::Uuid { string: Uuid::new_v4().to_string() }),
+                uuid: Some(rv_data::Uuid {
+                    string: Uuid::new_v4().to_string(),
+                }),
                 name: entry.name.clone(),
                 tags: Vec::new(),
                 is_hidden: false,
@@ -271,8 +308,8 @@ pub fn build_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::Playlis
                             storage: Some(rv_data::url::Storage::AbsoluteString(file_url)),
                             relative_file_path: relative_path,
                         }),
-                        arrangement: entry.arrangement_uuid.map(|u| rv_data::Uuid { 
-                            string: u.to_string() 
+                        arrangement: entry.arrangement_uuid.map(|u| rv_data::Uuid {
+                            string: u.to_string(),
                         }),
                         content_destination: rv_data::action::ContentDestination::Global as i32,
                         user_music_key: None,
@@ -285,7 +322,9 @@ pub fn build_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::Playlis
 
     // Inner playlist containing the actual items
     let inner_playlist = rv_data::Playlist {
-        uuid: Some(rv_data::Uuid { string: Uuid::new_v4().to_string() }),
+        uuid: Some(rv_data::Uuid {
+            string: Uuid::new_v4().to_string(),
+        }),
         name: name.to_string(),
         r#type: playlist::Type::Playlist as i32,
         expanded: true,
@@ -297,13 +336,17 @@ pub fn build_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::Playlis
         timecode_enabled: false,
         timing: playlist::TimingType::None as i32,
         startup_info: None,
-        children_type: Some(playlist::ChildrenType::Items(playlist::PlaylistItems { items })),
+        children_type: Some(playlist::ChildrenType::Items(playlist::PlaylistItems {
+            items,
+        })),
         link_data: None,
     };
 
     // Root playlist container (holds child playlists via PlaylistArray)
     let root_node = rv_data::Playlist {
-        uuid: Some(rv_data::Uuid { string: Uuid::new_v4().to_string() }),
+        uuid: Some(rv_data::Uuid {
+            string: Uuid::new_v4().to_string(),
+        }),
         name: "PLAYLIST".to_string(),
         r#type: playlist::Type::Unknown as i32, // Root uses default/unknown
         expanded: true,
@@ -347,7 +390,7 @@ pub fn build_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::Playlis
 }
 
 /// Write a playlist document to a .proplaylist file
-/// 
+///
 /// If entries have `embedded_data`, those .pro files are bundled into the zip.
 pub fn write_playlist_file(
     playlist: &rv_data::PlaylistDocument,
@@ -367,26 +410,10 @@ pub fn write_playlist_file(
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     // Write embedded .pro files first (at root level like the sample).
-    // Deduplicate filenames to avoid zip entry collisions.
-    let mut used_names = std::collections::HashSet::new();
-    for entry in entries {
-        if let Some(data) = &entry.embedded_data {
-            let base = entry.embedded_filename();
-            let filename = if used_names.contains(&base) {
-                let stem = base.trim_end_matches(".pro");
-                let mut n = 2u32;
-                loop {
-                    let candidate = format!("{stem} ({n}).pro");
-                    if !used_names.contains(&candidate) {
-                        break candidate;
-                    }
-                    n += 1;
-                }
-            } else {
-                base
-            };
-            used_names.insert(filename.clone());
-            zip.start_file(&filename, options)?;
+    let embedded_filenames = deduplicated_embedded_filenames(entries);
+    for (entry, filename) in entries.iter().zip(embedded_filenames.iter()) {
+        if let (Some(data), Some(filename)) = (&entry.embedded_data, filename) {
+            zip.start_file(filename.as_str(), options)?;
             zip.write_all(data)?;
         }
     }
@@ -480,7 +507,10 @@ mod tests {
     #[test]
     fn test_scripture_strips_prefix_and_converts_colons() {
         assert_eq!(
-            sanitize_filename("Scripture - 1 Kings 18:18-21 (Connie)", SlideType::Scripture),
+            sanitize_filename(
+                "Scripture - 1 Kings 18:18-21 (Connie)",
+                SlideType::Scripture
+            ),
             "1 Kings 18v18-21"
         );
         assert_eq!(
@@ -540,10 +570,7 @@ mod tests {
 
     #[test]
     fn test_song_strips_unsafe_chars() {
-        assert_eq!(
-            sanitize_filename("What?", SlideType::Lyrics),
-            "What"
-        );
+        assert_eq!(sanitize_filename("What?", SlideType::Lyrics), "What");
     }
 
     // -- General (Text/Title/Graphic) sanitization --
@@ -621,7 +648,10 @@ mod tests {
             embedded_data: None,
         };
         // Parens preserved because matched files skip sanitization
-        assert_eq!(entry.embedded_filename(), "Morning By Morning (I Will Trust).pro");
+        assert_eq!(
+            entry.embedded_filename(),
+            "Morning By Morning (I Will Trust).pro"
+        );
     }
 
     #[test]
@@ -646,6 +676,44 @@ mod tests {
         ];
 
         let playlist = build_playlist("Test", &entries);
+        let root = playlist.root_node.as_ref().expect("root");
+        let inner = match &root.children_type {
+            Some(playlist::ChildrenType::Playlists(arr)) => &arr.playlists[0],
+            _ => panic!("Expected playlist array"),
+        };
+        let items = match &inner.children_type {
+            Some(playlist::ChildrenType::Items(items)) => &items.items,
+            _ => panic!("Expected playlist items"),
+        };
+        let first_path = match &items[0].item_type {
+            Some(playlist_item::ItemType::Presentation(presentation)) => presentation
+                .document_path
+                .as_ref()
+                .and_then(|url| url.relative_file_path.as_ref())
+                .expect("relative file path"),
+            _ => panic!("Expected presentation item"),
+        };
+        let second_path = match &items[1].item_type {
+            Some(playlist_item::ItemType::Presentation(presentation)) => presentation
+                .document_path
+                .as_ref()
+                .and_then(|url| url.relative_file_path.as_ref())
+                .expect("relative file path"),
+            _ => panic!("Expected presentation item"),
+        };
+        match first_path {
+            url::RelativeFilePath::Local(local) => {
+                assert_eq!(local.path, "Libraries/Default/Untitled.pro");
+            }
+            url::RelativeFilePath::External(_) => panic!("Expected local relative file path"),
+        }
+        match second_path {
+            url::RelativeFilePath::Local(local) => {
+                assert_eq!(local.path, "Libraries/Default/Untitled (2).pro");
+            }
+            url::RelativeFilePath::External(_) => panic!("Expected local relative file path"),
+        }
+
         let output_path = get_test_output_path("test_dedup.proplaylist");
         // Should not panic from duplicate zip entries
         write_playlist_file(&playlist, &entries, &output_path).expect("Failed to write playlist");
@@ -662,16 +730,14 @@ mod tests {
 
     #[test]
     fn test_write_playlist_file() {
-        let entries = vec![
-            PlaylistEntry {
-                name: "Test Song".to_string(),
-                slide_type: SlideType::Lyrics,
-                from_matched_file: true,
-                presentation_path: "/Users/Shared/ProPresenter/Libraries/Default/Test.pro".to_string(),
-                arrangement_uuid: None,
-                embedded_data: None,
-            },
-        ];
+        let entries = vec![PlaylistEntry {
+            name: "Test Song".to_string(),
+            slide_type: SlideType::Lyrics,
+            from_matched_file: true,
+            presentation_path: "/Users/Shared/ProPresenter/Libraries/Default/Test.pro".to_string(),
+            arrangement_uuid: None,
+            embedded_data: None,
+        }];
 
         let playlist = build_playlist("Test Playlist", &entries);
         let output_path = get_test_output_path("test_playlist.proplaylist");
@@ -684,4 +750,3 @@ mod tests {
         assert!(!contents.is_empty());
     }
 }
-

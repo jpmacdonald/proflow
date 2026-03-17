@@ -1,21 +1,22 @@
 //! `ProFlow` - Planning Center to `ProPresenter` workflow tool.
 
-use error::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, EnableBracketedPaste, DisableBracketedPaste},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use error::Result;
 use ratatui::prelude::*;
 use std::{io, panic, time::Duration};
 
 mod app;
 mod bible;
 mod config;
-mod hymnal;
 mod constants;
 mod error;
-mod input;
+mod hymnal;
 mod item_state;
 mod lyrics;
 mod planning_center;
@@ -62,7 +63,12 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -102,4 +108,4 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result
         }
     }
     Ok(()) // Return Ok(()) after loop breaks
-} 
+}

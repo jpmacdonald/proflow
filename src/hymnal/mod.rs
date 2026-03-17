@@ -13,27 +13,22 @@ use regex::Regex;
 
 /// Regex matching `#510` style hymn numbers.
 #[allow(clippy::expect_used)]
-static RE_HASH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"#(\d+)").expect("valid regex: RE_HASH")
-});
+static RE_HASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"#(\d+)").expect("valid regex: RE_HASH"));
 
 /// Regex matching `Hymn 510` or `Hymn #510` patterns.
 #[allow(clippy::expect_used)]
-static RE_HYMN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)[Hh]ymn\s*#?(\d+)").expect("valid regex: RE_HYMN")
-});
+static RE_HYMN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)[Hh]ymn\s*#?(\d+)").expect("valid regex: RE_HYMN"));
 
 /// Regex matching hymnal filenames like `#510 - Jesus Shall Reign`.
 #[allow(clippy::expect_used)]
-static RE_FILENAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^#(\d+)\s*-\s*(.+)$").expect("valid regex: RE_FILENAME")
-});
+static RE_FILENAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^#(\d+)\s*-\s*(.+)$").expect("valid regex: RE_FILENAME"));
 
 /// A single hymn loaded from disk.
 #[derive(Debug, Clone)]
 pub struct HymnEntry {
-    /// Hymn number in the hymnal.
-    pub number: u32,
     /// Display title of the hymn.
     pub title: String,
     /// Lowercased title for case-insensitive matching.
@@ -88,7 +83,10 @@ impl HymnalService {
         let dir = match std::fs::read_dir(&self.hymnal_path) {
             Ok(d) => d,
             Err(e) => {
-                tracing::warn!("Failed to read hymnal directory {}: {e}", self.hymnal_path.display());
+                tracing::warn!(
+                    "Failed to read hymnal directory {}: {e}",
+                    self.hymnal_path.display()
+                );
                 return;
             }
         };
@@ -114,7 +112,6 @@ impl HymnalService {
 
             let idx = self.entries.len();
             self.entries.push(HymnEntry {
-                number,
                 title_lower: title.to_lowercase(),
                 title,
                 content,
@@ -122,11 +119,17 @@ impl HymnalService {
             self.by_number.insert(number, idx);
         }
 
-        tracing::info!("Loaded {} hymns from {}", self.entries.len(), self.hymnal_path.display());
+        tracing::info!(
+            "Loaded {} hymns from {}",
+            self.entries.len(),
+            self.hymnal_path.display()
+        );
     }
 
     fn lookup_by_number(&self, number: u32) -> Option<&HymnEntry> {
-        self.by_number.get(&number).and_then(|&idx| self.entries.get(idx))
+        self.by_number
+            .get(&number)
+            .and_then(|&idx| self.entries.get(idx))
     }
 
     fn lookup_by_title(&self, query: &str) -> Option<(String, Vec<String>)> {
@@ -150,7 +153,9 @@ impl HymnalService {
             }
         }
 
-        let best = self.entries.iter()
+        let best = self
+            .entries
+            .iter()
             .filter_map(|entry| {
                 let score = matcher.fuzzy_match(&entry.title, query)?;
                 (score >= MIN_SCORE).then_some((score, entry))
@@ -165,7 +170,8 @@ impl HymnalService {
 ///
 /// Recognizes patterns like `#510`, `Hymn #510`, `Hymn 510`.
 fn extract_hymn_number(text: &str) -> Option<u32> {
-    RE_HASH.captures(text)
+    RE_HASH
+        .captures(text)
         .or_else(|| RE_HYMN.captures(text))
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<u32>().ok())

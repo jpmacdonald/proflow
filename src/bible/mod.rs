@@ -49,10 +49,18 @@ impl BibleVersion {
     /// Try to detect version from text like "(NRSV)" or "`NRSVue`".
     pub fn from_text(text: &str) -> Option<Self> {
         let upper = text.to_uppercase();
-        if upper.contains("NRSVUE") { return Some(Self::NRSVue); }
-        if upper.contains("NRSV") { return Some(Self::NRSV); }
-        if upper.contains("NIV") { return Some(Self::NIV); }
-        if upper.contains("KJV") { return Some(Self::KJV); }
+        if upper.contains("NRSVUE") {
+            return Some(Self::NRSVue);
+        }
+        if upper.contains("NRSV") {
+            return Some(Self::NRSV);
+        }
+        if upper.contains("NIV") {
+            return Some(Self::NIV);
+        }
+        if upper.contains("KJV") {
+            return Some(Self::KJV);
+        }
         None
     }
 }
@@ -257,7 +265,8 @@ fn normalize_book_name(name: &str) -> Option<&'static str> {
 /// `NRSVue` (Hope)" or "Scripture - Isaiah 35:1-10 (Adrian)".
 pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
     // Strip various "Scripture" prefix formats
-    let text = text.trim_start_matches("Scripture:")
+    let text = text
+        .trim_start_matches("Scripture:")
         .trim_start_matches("Scripture -")
         .trim_start_matches("Scripture Reading:")
         .trim_start_matches("Scripture Reading -")
@@ -266,14 +275,17 @@ pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
         .trim();
 
     // Take only the first reference if multiple (separated by ; or ,)
-    let first_ref = text.split(';').next()
+    let first_ref = text
+        .split(';')
+        .next()
         .or_else(|| text.split(',').next())?
         .trim();
 
     // Remove version and location indicators like "(NRSV)" or "(Hope)" or "NRSVue"
     // Also handle version without parens at end
     let cleaned = first_ref
-        .split('(').next()?
+        .split('(')
+        .next()?
         .trim()
         .trim_end_matches("NRSVue")
         .trim_end_matches("NRSVUE")
@@ -284,35 +296,6 @@ pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
         .trim();
 
     parse_single_reference(cleaned)
-}
-
-/// Parse multiple scripture references from a title.
-pub fn parse_scripture_refs(text: &str) -> Vec<ScriptureRef> {
-    // Strip various prefix formats
-    let text = text.trim_start_matches("Scripture:")
-        .trim_start_matches("Scripture -")
-        .trim_start_matches("Scripture Reading:")
-        .trim_start_matches("Scripture Reading -")
-        .trim_start_matches("Reading:")
-        .trim_start_matches("Reading -")
-        .trim();
-
-    // Split by ; or , and parse each
-    text.split([';', ','])
-        .filter_map(|part| {
-            let cleaned = part.trim()
-                .split('(').next()?
-                .trim()
-                .trim_end_matches("NRSVue")
-                .trim_end_matches("NRSVUE")
-                .trim_end_matches("NRSV")
-                .trim_end_matches("NIV")
-                .trim_end_matches("KJV")
-                .trim_end_matches("ESV")
-                .trim();
-            parse_single_reference(cleaned)
-        })
-        .collect()
 }
 
 /// Parse a single scripture reference like "Isaiah 32:15-17"
@@ -385,17 +368,30 @@ impl BibleService {
     /// Look up verses and format with superscript verse numbers.
     ///
     /// Returns a header for display and the verse text lines.
-    pub fn lookup(&mut self, reference: &ScriptureRef, version: BibleVersion) -> Result<(ScriptureHeader, Vec<String>), String> {
+    pub fn lookup(
+        &mut self,
+        reference: &ScriptureRef,
+        version: BibleVersion,
+    ) -> Result<(ScriptureHeader, Vec<String>), String> {
         self.load_version(version)?;
 
-        let bible = self.cache.get(&version)
+        let bible = self
+            .cache
+            .get(&version)
             .ok_or_else(|| "Bible data not loaded".to_string())?;
 
-        let book_data = bible.get(&reference.book)
+        let book_data = bible
+            .get(&reference.book)
             .ok_or_else(|| format!("Book not found: {}", reference.book))?;
 
-        let chapter_data = book_data.get(&reference.chapter.to_string())
-            .ok_or_else(|| format!("Chapter {} not found in {}", reference.chapter, reference.book))?;
+        let chapter_data = book_data
+            .get(&reference.chapter.to_string())
+            .ok_or_else(|| {
+                format!(
+                    "Chapter {} not found in {}",
+                    reference.chapter, reference.book
+                )
+            })?;
 
         let end = reference.end_verse.unwrap_or(reference.start_verse);
         let mut lines = Vec::new();
@@ -450,16 +446,24 @@ impl ScriptureHeader {
     /// Format for display (e.g., "Isaiah 32:15-17 `NRSVue`").
     pub fn display(&self) -> String {
         self.end_verse.map_or_else(
-            || format!("{} {}:{} {}", self.book, self.chapter, self.start_verse, self.version.name()),
-            |end| format!("{} {}:{}-{end} {}", self.book, self.chapter, self.start_verse, self.version.name()),
-        )
-    }
-
-    /// Format for filename (colon replaced with v).
-    pub fn filename(&self) -> String {
-        self.end_verse.map_or_else(
-            || format!("{} {}v{} ({})", self.book, self.chapter, self.start_verse, self.version.name()),
-            |end| format!("{} {}v{}-{end} ({})", self.book, self.chapter, self.start_verse, self.version.name()),
+            || {
+                format!(
+                    "{} {}:{} {}",
+                    self.book,
+                    self.chapter,
+                    self.start_verse,
+                    self.version.name()
+                )
+            },
+            |end| {
+                format!(
+                    "{} {}:{}-{end} {}",
+                    self.book,
+                    self.chapter,
+                    self.start_verse,
+                    self.version.name()
+                )
+            },
         )
     }
 }
@@ -516,7 +520,10 @@ mod tests {
     #[test]
     fn test_version_detection() {
         assert_eq!(BibleVersion::from_text("(NRSV)"), Some(BibleVersion::NRSV));
-        assert_eq!(BibleVersion::from_text("NRSVue"), Some(BibleVersion::NRSVue));
+        assert_eq!(
+            BibleVersion::from_text("NRSVue"),
+            Some(BibleVersion::NRSVue)
+        );
         assert_eq!(BibleVersion::from_text("KJV"), Some(BibleVersion::KJV));
         assert_eq!(BibleVersion::from_text("NIV"), Some(BibleVersion::NIV));
     }

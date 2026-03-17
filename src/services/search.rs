@@ -25,9 +25,6 @@ pub trait SearchStrategy: Send + Sync {
         files: &'a [FileEntry],
         limit: usize,
     ) -> Vec<&'a FileEntry>;
-
-    /// Get the name of this search strategy (for debugging/logging).
-    fn name(&self) -> &'static str;
 }
 
 /// Fuzzy string matching search strategy.
@@ -72,10 +69,6 @@ impl SearchStrategy for FuzzySearch {
         scored.sort_by(|a, b| b.1.cmp(&a.1));
         scored.into_iter().take(limit).map(|(e, _)| e).collect()
     }
-
-    fn name(&self) -> &'static str {
-        "FuzzySearch"
-    }
 }
 
 /// Liturgical term mapping for common worship items.
@@ -87,11 +80,20 @@ impl Default for LiturgicalSearch {
     fn default() -> Self {
         Self {
             mappings: vec![
-                ("call to worship", &["call to worship", "gathering", "opening"]),
+                (
+                    "call to worship",
+                    &["call to worship", "gathering", "opening"],
+                ),
                 ("gloria patri", &["gloria patri", "glory be", "doxology"]),
-                ("doxology", &["doxology", "praise god from whom", "old 100th"]),
+                (
+                    "doxology",
+                    &["doxology", "praise god from whom", "old 100th"],
+                ),
                 ("lords prayer", &["lord's prayer", "our father"]),
-                ("apostles creed", &["apostles creed", "apostle's creed", "i believe"]),
+                (
+                    "apostles creed",
+                    &["apostles creed", "apostle's creed", "i believe"],
+                ),
                 ("nicene creed", &["nicene creed", "we believe"]),
                 ("kyrie", &["kyrie", "lord have mercy"]),
                 ("sanctus", &["sanctus", "holy holy holy"]),
@@ -134,10 +136,6 @@ impl SearchStrategy for LiturgicalSearch {
             })
             .take(limit)
             .collect()
-    }
-
-    fn name(&self) -> &'static str {
-        "LiturgicalSearch"
     }
 }
 
@@ -185,10 +183,6 @@ impl SearchStrategy for CompositeSearch {
         }
 
         results
-    }
-
-    fn name(&self) -> &'static str {
-        "CompositeSearch"
     }
 }
 

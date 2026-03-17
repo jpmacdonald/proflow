@@ -2,15 +2,17 @@
 
 #![allow(dead_code)]
 
-use std::fmt::Write;
 use crate::propresenter::generated::rv_data;
+use std::fmt::Write;
 
 /// Convert a raw protobuf `Presentation` to JSON string for comparison.
 ///
 /// Uses the generated protobuf types directly, not our data model,
 /// to ensure we catch any discrepancies between the raw file format
 /// and what our builders produce.
-pub fn presentation_to_json_string(presentation: &rv_data::Presentation) -> Result<String, serde_json::Error> {
+pub fn presentation_to_json_string(
+    presentation: &rv_data::Presentation,
+) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(presentation)
 }
 
