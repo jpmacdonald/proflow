@@ -1,19 +1,19 @@
 //! Extract plain text content from `ProPresenter` files.
 
-use std::path::Path;
 use crate::propresenter::deserialize::read_presentation_file;
-use crate::propresenter::rtf::rtf_to_text;
 use crate::propresenter::generated::rv_data::{self, action::ActionTypeData};
+use crate::propresenter::rtf::rtf_to_text;
+use std::path::Path;
 
 /// Extract all slide text from a .pro file as editor-ready lines.
 /// Returns lines with blank lines between slides (stanzas).
 pub fn extract_text_from_pro(path: &Path) -> Result<Vec<String>, String> {
-    let presentation = read_presentation_file(path)
-        .map_err(|e| format!("Failed to read presentation: {e}"))?;
-    
+    let presentation =
+        read_presentation_file(path).map_err(|e| format!("Failed to read presentation: {e}"))?;
+
     let mut lines = Vec::new();
     let mut first_slide = true;
-    
+
     // Iterate through cues to find slide actions
     for cue in &presentation.cues {
         for action in &cue.actions {
@@ -23,12 +23,12 @@ pub fn extract_text_from_pro(path: &Path) -> Result<Vec<String>, String> {
                     lines.push(String::new());
                 }
                 first_slide = false;
-                
+
                 // Add cue name as label if meaningful
                 if !cue.name.is_empty() && cue.name != "Slide" {
                     lines.push(format!("[{}]", cue.name));
                 }
-                
+
                 // Add the slide text lines
                 for line in slide_text.lines() {
                     lines.push(line.to_string());
@@ -36,12 +36,12 @@ pub fn extract_text_from_pro(path: &Path) -> Result<Vec<String>, String> {
             }
         }
     }
-    
+
     // Ensure trailing empty line for editor
     if !lines.is_empty() && !lines.last().is_none_or(String::is_empty) {
         lines.push(String::new());
     }
-    
+
     Ok(lines)
 }
 
@@ -62,12 +62,12 @@ fn extract_slide_text(action: &rv_data::Action) -> Option<String> {
     let Slide::Presentation(presentation_slide) = slide_content else {
         return None;
     };
-    
+
     // Get the base slide which contains elements
     let base_slide = presentation_slide.base_slide.as_ref()?;
-    
+
     let mut text_parts = Vec::new();
-    
+
     // Extract text from each element
     for element in &base_slide.elements {
         if let Some(graphics_element) = &element.element {
@@ -78,7 +78,7 @@ fn extract_slide_text(action: &rv_data::Action) -> Option<String> {
             }
         }
     }
-    
+
     if text_parts.is_empty() {
         None
     } else {
@@ -90,14 +90,14 @@ fn extract_slide_text(action: &rv_data::Action) -> Option<String> {
 fn extract_text_from_element(element: &rv_data::graphics::Element) -> Option<String> {
     // Get the text component of this element
     let text = element.text.as_ref()?;
-    
+
     // Get RTF data
     if text.rtf_data.is_empty() {
         return None;
     }
-    
+
     let rtf_string = String::from_utf8_lossy(&text.rtf_data);
-    
+
     // Convert RTF to plain text
     rtf_to_text(&rtf_string)
 }
@@ -108,7 +108,7 @@ mod tests {
 
     use super::*;
     use std::path::PathBuf;
-    
+
     fn get_example_path(filename: &str) -> PathBuf {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("data");
@@ -117,7 +117,7 @@ mod tests {
         path.push(filename);
         path
     }
-    
+
     #[test]
     fn test_extract_text_from_amazing_grace() {
         let path = get_example_path("[Hymn] Amazing Grace.pro");

@@ -6,14 +6,14 @@
 // Allow expect for compile-time constant regex patterns in static initializers
 #![allow(clippy::expect_used)]
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::widgets::ListState;
-use arboard::Clipboard;
-use ratatui::style::Color;
-use std::path::PathBuf;
-use crate::utils::file_matcher::{find_matches_for_items, FileIndex, FileEntry};
-use crate::bible::{BibleService, BibleVersion, ScriptureHeader, parse_scripture_ref};
+use crate::bible::{parse_scripture_ref, BibleService, BibleVersion, ScriptureHeader};
 use crate::hymnal::HymnalService;
+use crate::utils::file_matcher::{FileEntry, FileIndex};
+use arboard::Clipboard;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Color;
+use ratatui::widgets::ListState;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::config::Config;
@@ -23,8 +23,9 @@ use crate::constants::search::MAX_SEARCH_RESULTS;
 use crate::constants::template::MIN_SLIDE_WRAP;
 use crate::error::Result;
 use crate::item_state::ItemStateStore;
+use crate::planning_center::types::{Category, Item, Plan, Service};
 use crate::planning_center::PlanningCenterClient;
-use crate::planning_center::types::{Service, Plan, Item, Category};
+use crate::services::search::{CompositeSearch, SearchStrategy};
 use crate::types::ItemId;
 
 /// Messages sent from async tasks back to the main thread.
@@ -95,9 +96,15 @@ pub struct EditorState {
     pub selection_start_y: usize,
 }
 
-const fn default_wrap_column() -> usize { DEFAULT_WRAP_COLUMN }
-const fn default_wrap_auto() -> bool { true }
-const fn default_viewport_height() -> usize { DEFAULT_VIEWPORT_HEIGHT }
+const fn default_wrap_column() -> usize {
+    DEFAULT_WRAP_COLUMN
+}
+const fn default_wrap_auto() -> bool {
+    true
+}
+const fn default_viewport_height() -> usize {
+    DEFAULT_VIEWPORT_HEIGHT
+}
 
 /// A labeled song-section marker (e.g., Verse, Chorus) with its shorthand command.
 #[derive(Debug, Clone)]
@@ -211,6 +218,8 @@ pub struct App {
     pub pending_playlist_confirmation: Option<usize>,
     /// Cache of `ProPresenter` templates for slide generation.
     pub template_cache: Option<crate::propresenter::template::TemplateCache>,
+    /// Composite search strategy for file matching (liturgical + fuzzy).
+    pub search: CompositeSearch,
 }
 
 /// Locate a subdirectory under the app's bundled data folder.
@@ -261,16 +270,17 @@ impl App {
     /// Creates a new `App` with configuration loaded from disk and services initialized.
     #[allow(clippy::too_many_lines)]
     pub fn new() -> Self {
-        
         // Load configuration (fallback to default on error)
         let config = Config::load().unwrap_or_default();
-        
+
         // Initialize Planning Center client if credentials are available
-        let pco_client = config.has_planning_center_credentials()
+        let pco_client = config
+            .has_planning_center_credentials()
             .then(|| PlanningCenterClient::new(&config));
-        
+
         // Determine library path: env var > default location > config path
-        let library_path = std::env::var("LIBRARY_DIR").ok()
+        let library_path = std::env::var("LIBRARY_DIR")
+            .ok()
             .map(|s| PathBuf::from(shellexpand::tilde(&s).to_string()))
             .or_else(crate::utils::file_matcher::get_default_library_path)
             .or_else(|| {
@@ -285,7 +295,10 @@ impl App {
         let (async_task_tx, async_task_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
 
         // Extract hymnal service before config is moved into struct
-        let hymnal_service = config.hymnal_path.as_ref().map(|p| HymnalService::new(p.clone()));
+        let hymnal_service = config
+            .hymnal_path
+            .as_ref()
+            .map(|p| HymnalService::new(p.clone()));
 
         Self {
             mode: AppMode::Splash,
@@ -383,6 +396,7 @@ impl App {
                 paths.push(find_data_subdir("templates"));
                 Some(crate::propresenter::template::TemplateCache::new(paths))
             },
+            search: CompositeSearch::with_defaults(),
         }
     }
 
@@ -404,10 +418,13 @@ impl App {
             self.handle_version_picker_input(key);
             return;
         }
-        
+
         // First, check if help modal is shown
         if self.show_help {
-            if key.code == KeyCode::Esc || key.code == KeyCode::F(1) || key.code == KeyCode::Char('?') {
+            if key.code == KeyCode::Esc
+                || key.code == KeyCode::F(1)
+                || key.code == KeyCode::Char('?')
+            {
                 self.show_help = false;
             }
             return; // Don't process other keys while help is displayed
@@ -443,7 +460,9 @@ impl App {
         }
 
         // Global help shortcut (? or F1)
-        if key.code == KeyCode::F(1) || (key.code == KeyCode::Char('?') && self.mode != AppMode::Editor) {
+        if key.code == KeyCode::F(1)
+            || (key.code == KeyCode::Char('?') && self.mode != AppMode::Editor)
+        {
             self.show_help = true;
             return;
         }
@@ -482,7 +501,7 @@ impl App {
         if !self.initialized {
             // Initialize Planning Center data
             self.initialize_data();
-            
+
             // Initialize file index if library path is available
             if let Some(lib_path) = &self.library_path {
                 self.is_loading = true;
@@ -490,20 +509,20 @@ impl App {
                     Ok(index) => {
                         self.file_index = Some(index);
                         self.is_loading = false;
-                    },
+                    }
                     Err(e) => {
                         self.error_message = Some(format!("Failed to index library: {e}"));
                         self.is_loading = false;
                     }
                 }
             }
-            
+
             self.initialized = true;
         }
-        
+
         // Then move to the service list
         self.mode = AppMode::ServiceList;
-        
+
         // Make sure loading state is still set when transitioning
         if self.services.is_empty() {
             self.is_loading = true;
@@ -563,12 +582,12 @@ impl App {
             // Check if command starts with a verse group command
             if command.starts_with(&group.command) {
                 let remainder = &command[group.command.len()..];
-                
+
                 // If there's nothing after the command, just use the base name
                 if remainder.is_empty() {
                     return Some(group.name.clone());
                 }
-                
+
                 // Otherwise, try to parse a number
                 if let Ok(num) = remainder.parse::<u32>() {
                     return Some(format!("{} {num}", group.name));
@@ -581,17 +600,17 @@ impl App {
     fn handle_service_list_input(&mut self, key: KeyEvent) {
         let service_focused = self.service_list_state.selected().is_some();
 
-        let is_left_pane_focused = service_focused; 
+        let is_left_pane_focused = service_focused;
 
         if is_left_pane_focused {
-            // --- Service List (Left Pane) Input --- 
+            // --- Service List (Left Pane) Input ---
             let current_service_idx = self.service_list_state.selected().unwrap_or(0);
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     if current_service_idx > 0 {
                         let new_idx = current_service_idx - 1;
                         self.service_list_state.select(Some(new_idx));
-                    self.plan_list_state.select(None);
+                        self.plan_list_state.select(None);
                         self.active_service_id = self.services.get(new_idx).map(|s| s.id.clone());
                     }
                 }
@@ -599,13 +618,16 @@ impl App {
                     if current_service_idx < self.services.len().saturating_sub(1) {
                         let new_idx = current_service_idx + 1;
                         self.service_list_state.select(Some(new_idx));
-                        self.plan_list_state.select(None); 
+                        self.plan_list_state.select(None);
                         self.active_service_id = self.services.get(new_idx).map(|s| s.id.clone());
                     }
                 }
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Enter => {
-                     if let Some(selected_service) = self.services.get(current_service_idx).cloned() {
-                        let has_plans = self.plans.iter()
+                    if let Some(selected_service) = self.services.get(current_service_idx).cloned()
+                    {
+                        let has_plans = self
+                            .plans
+                            .iter()
                             .any(|p| p.service_id == selected_service.id);
 
                         if has_plans {
@@ -618,63 +640,67 @@ impl App {
                 _ => {}
             }
         } else {
-            // --- Plan List (Right Pane) Input --- 
+            // --- Plan List (Right Pane) Input ---
             let num_displayed_plans = match &self.active_service_id {
                 Some(id) => self.plans.iter().filter(|p| p.service_id == *id).count(),
                 None => 0,
             };
 
-        match key.code {
+            match key.code {
                 KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
                     self.plan_list_state.select(None);
-                    if let Some(type_idx) = self.active_service_id.as_ref()
-                        .and_then(|id| self.services.iter().position(|s| &s.id == id)) {
+                    if let Some(type_idx) = self
+                        .active_service_id
+                        .as_ref()
+                        .and_then(|id| self.services.iter().position(|s| &s.id == id))
+                    {
                         self.service_list_state.select(Some(type_idx));
                     } else if !self.services.is_empty() {
                         self.service_list_state.select(Some(0));
                         self.active_service_id = self.services.first().map(|s| s.id.clone());
                     }
                 }
-            KeyCode::Up | KeyCode::Char('k') => {
-                    match self.plan_list_state.selected() {
+                KeyCode::Up | KeyCode::Char('k') => match self.plan_list_state.selected() {
                     Some(selected) if selected > 0 => {
-                            self.plan_list_state.select(Some(selected - 1));
-                        }
-                        Some(_) => {}
-                        None => {
-                           if num_displayed_plans > 0 {
-                                self.plan_list_state.select(Some(num_displayed_plans - 1));
-                           }
+                        self.plan_list_state.select(Some(selected - 1));
+                    }
+                    Some(_) => {}
+                    None => {
+                        if num_displayed_plans > 0 {
+                            self.plan_list_state.select(Some(num_displayed_plans - 1));
                         }
                     }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    match self.plan_list_state.selected() {
-                        Some(selected) if selected < num_displayed_plans.saturating_sub(1) => {
-                            self.plan_list_state.select(Some(selected + 1));
-                        }
-                         Some(_) => {}
-                         None => {
-                            if num_displayed_plans > 0 {
-                        self.plan_list_state.select(Some(0));
+                },
+                KeyCode::Down | KeyCode::Char('j') => match self.plan_list_state.selected() {
+                    Some(selected) if selected < num_displayed_plans.saturating_sub(1) => {
+                        self.plan_list_state.select(Some(selected + 1));
                     }
+                    Some(_) => {}
+                    None => {
+                        if num_displayed_plans > 0 {
+                            self.plan_list_state.select(Some(0));
                         }
                     }
-                }
+                },
                 KeyCode::Enter => {
                     if let Some(selected_idx_filtered) = self.plan_list_state.selected() {
                         if let Some(service_id) = &self.active_service_id {
-                             if let Some(plan) = self.plans.iter()
+                            if let Some(plan) = self
+                                .plans
+                                .iter()
                                 .filter(|p| &p.service_id == service_id)
-                                .nth(selected_idx_filtered) {
-                                     let plan_id = plan.id.clone(); 
-                                     self.mode = AppMode::ItemList;
-                                     self.load_items_for_plan(&plan_id);
-                             } else { /* ... error ... */ }
-                        } else { /* ... error ... */ }
+                                .nth(selected_idx_filtered)
+                            {
+                                let plan_id = plan.id.clone();
+                                self.mode = AppMode::ItemList;
+                                self.load_items_for_plan(&plan_id);
+                            } else { /* ... error ... */
+                            }
+                        } else { /* ... error ... */
+                        }
+                    }
                 }
-            }
-            _ => {}
+                _ => {}
             }
         }
     }
@@ -688,7 +714,7 @@ impl App {
         }
 
         let files_focused = self.file_list_state.selected().is_some();
-        
+
         match key.code {
             KeyCode::Esc => {
                 if files_focused {
@@ -697,40 +723,32 @@ impl App {
                     self.mode = AppMode::ServiceList;
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                match self.file_list_state.selected() {
+            KeyCode::Up | KeyCode::Char('k') => match self.file_list_state.selected() {
+                Some(selected) if selected > 0 => {
+                    self.file_list_state.select(Some(selected - 1));
+                }
+                None => match self.item_list_state.selected() {
                     Some(selected) if selected > 0 => {
-                        self.file_list_state.select(Some(selected - 1));
-                    }
-                    None => {
-                        match self.item_list_state.selected() {
-                            Some(selected) if selected > 0 => {
-                                self.item_list_state.select(Some(selected - 1));
-                                self.update_matching_files();
-                            }
-                            _ => {}
-                        }
+                        self.item_list_state.select(Some(selected - 1));
+                        self.update_matching_files();
                     }
                     _ => {}
+                },
+                _ => {}
+            },
+            KeyCode::Down | KeyCode::Char('j') => match self.file_list_state.selected() {
+                Some(selected) if selected < self.matching_files.len().saturating_sub(1) => {
+                    self.file_list_state.select(Some(selected + 1));
                 }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                match self.file_list_state.selected() {
-                    Some(selected) if selected < self.matching_files.len().saturating_sub(1) => {
-                        self.file_list_state.select(Some(selected + 1));
-                    }
-                    None => {
-                        match self.item_list_state.selected() {
-                            Some(selected) if selected < self.items.len().saturating_sub(1) => {
-                                self.item_list_state.select(Some(selected + 1));
-                                self.update_matching_files();
-                            }
-                            _ => {}
-                        }
+                None => match self.item_list_state.selected() {
+                    Some(selected) if selected < self.items.len().saturating_sub(1) => {
+                        self.item_list_state.select(Some(selected + 1));
+                        self.update_matching_files();
                     }
                     _ => {}
-                }
-            }
+                },
+                _ => {}
+            },
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
                 if !files_focused && !self.matching_files.is_empty() {
                     self.file_list_state.select(Some(0));
@@ -746,8 +764,8 @@ impl App {
                 self.file_search_active = true;
                 self.file_search_query.clear();
             }
-            KeyCode::Char(' ') => {
-                // Space = toggle ignore (won't do) for current item
+            KeyCode::Delete | KeyCode::Backspace | KeyCode::Char(' ') => {
+                // Delete/Backspace/Space = toggle ignore (won't do) for current item
                 if !files_focused {
                     if let Some(selected_idx) = self.item_list_state.selected() {
                         if let Some(item) = self.items.get(selected_idx) {
@@ -783,7 +801,7 @@ impl App {
                     self.file_list_state.select(Some(0));
                 }
             }
-            KeyCode::Char('e') if !files_focused => {
+            KeyCode::Char('e' | 'c') if !files_focused => {
                 // Edit key: open editor
                 // - If item has matched .pro file → load its content
                 // - If item has saved editor state → restore it
@@ -862,7 +880,12 @@ impl App {
 
         if let Some(index) = &self.file_index {
             self.matching_files = index.find_matches(&self.file_search_query, MAX_SEARCH_RESULTS);
-            self.file_list_state.select(if self.matching_files.is_empty() { None } else { Some(0) });
+            self.file_list_state
+                .select(if self.matching_files.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
         }
     }
 
@@ -881,7 +904,8 @@ impl App {
             if let Some(item) = self.items.get(item_idx) {
                 let item_id = ItemId::new(&item.id);
                 // Update the store with the current editor state
-                self.item_states.set_editor(&item_id, Some(self.editor.clone()));
+                self.item_states
+                    .set_editor(&item_id, Some(self.editor.clone()));
             }
         }
 
@@ -889,7 +913,7 @@ impl App {
         // Scroll up if cursor moves above viewport
         if self.editor.cursor_y < self.editor.scroll_offset {
             self.editor.scroll_offset = self.editor.cursor_y;
-        } 
+        }
         // Scroll down only when cursor reaches bottom of viewport
         else if self.editor.cursor_y >= self.editor.scroll_offset + self.editor.viewport_height {
             self.editor.scroll_offset = self.editor.cursor_y - self.editor.viewport_height + 1;
@@ -924,39 +948,55 @@ impl App {
             self.editor_side_pane_focused = !self.editor_side_pane_focused;
             return;
         }
-        
+
         // If side pane is focused, handle its keys
         if self.editor_side_pane_focused {
             self.handle_side_pane_input(key);
             return;
         }
-        
+
         // Handle side pane shortcuts based on slide type (number keys work even when not focused)
         match (key.code, self.current_slide_type) {
             // Scripture mode: 1-4 to switch Bible versions
-            (KeyCode::Char('1'), SlideType::Scripture) => { self.switch_bible_version(0); return; }
-            (KeyCode::Char('2'), SlideType::Scripture) => { self.switch_bible_version(1); return; }
-            (KeyCode::Char('3'), SlideType::Scripture) => { self.switch_bible_version(2); return; }
-            (KeyCode::Char('4'), SlideType::Scripture) => { self.switch_bible_version(3); return; }
+            (KeyCode::Char('1'), SlideType::Scripture) => {
+                self.switch_bible_version(0);
+                return;
+            }
+            (KeyCode::Char('2'), SlideType::Scripture) => {
+                self.switch_bible_version(1);
+                return;
+            }
+            (KeyCode::Char('3'), SlideType::Scripture) => {
+                self.switch_bible_version(2);
+                return;
+            }
+            (KeyCode::Char('4'), SlideType::Scripture) => {
+                self.switch_bible_version(3);
+                return;
+            }
             _ => {}
         }
-        
+
         match key.code {
             KeyCode::Esc => {
                 // Clear selection when escaping
                 self.editor.selection_active = false;
-                
+
                 // Check if editor has meaningful content (not just empty lines)
-                let has_content = self.editor.content.iter()
+                let has_content = self
+                    .editor
+                    .content
+                    .iter()
                     .any(|line| !line.trim().is_empty());
-                
+
                 if let Some(item_idx) = self.item_list_state.selected() {
                     if let Some(item) = self.items.get(item_idx) {
                         let item_id = ItemId::new(&item.id);
 
                         if has_content {
                             // Save editor state - this is a custom creation
-                            self.item_states.set_editor(&item_id, Some(self.editor.clone()));
+                            self.item_states
+                                .set_editor(&item_id, Some(self.editor.clone()));
 
                             // Clear any matched file - custom creation and file match are mutually exclusive
                             self.item_states.set_matched_file(&item_id, None);
@@ -984,22 +1024,28 @@ impl App {
             }
             // Select All (Cmd+A or Ctrl+A)
             KeyCode::Char('a') => {
-                if key.modifiers.contains(KeyModifiers::META) || key.modifiers.contains(KeyModifiers::CONTROL) {
+                if key.modifiers.contains(KeyModifiers::META)
+                    || key.modifiers.contains(KeyModifiers::CONTROL)
+                {
                     // Only proceed if we have content to select
                     if !self.editor.content.is_empty() {
                         // Set selection active
                         self.editor.selection_active = true;
-                        
+
                         // Set selection start to beginning of document
                         self.editor.selection_start_x = 0;
                         self.editor.selection_start_y = 0;
-                        
+
                         // Set cursor position to end of document
                         let last_line_idx = self.editor.content.len().saturating_sub(1);
                         self.editor.cursor_y = last_line_idx;
-                        
+
                         // Safely get the length of the last line
-                        let last_line_len = self.editor.content.get(last_line_idx).map_or(0, String::len);
+                        let last_line_len = self
+                            .editor
+                            .content
+                            .get(last_line_idx)
+                            .map_or(0, String::len);
                         self.editor.cursor_x = last_line_len;
                     }
                 } else {
@@ -1008,7 +1054,9 @@ impl App {
             }
             // Cut (Cmd+X or Ctrl+X)
             KeyCode::Char('x') => {
-                if key.modifiers.contains(KeyModifiers::META) || key.modifiers.contains(KeyModifiers::CONTROL) {
+                if key.modifiers.contains(KeyModifiers::META)
+                    || key.modifiers.contains(KeyModifiers::CONTROL)
+                {
                     self.cut_selection();
                 } else {
                     self.insert_char('x');
@@ -1016,7 +1064,9 @@ impl App {
             }
             // Copy (Cmd+C or Ctrl+C)
             KeyCode::Char('c') => {
-                if key.modifiers.contains(KeyModifiers::META) || key.modifiers.contains(KeyModifiers::CONTROL) {
+                if key.modifiers.contains(KeyModifiers::META)
+                    || key.modifiers.contains(KeyModifiers::CONTROL)
+                {
                     self.copy_selection();
                 } else {
                     self.insert_char('c');
@@ -1024,7 +1074,9 @@ impl App {
             }
             // Paste (Cmd+V or Ctrl+V)
             KeyCode::Char('v') => {
-                if key.modifiers.contains(KeyModifiers::META) || key.modifiers.contains(KeyModifiers::CONTROL) {
+                if key.modifiers.contains(KeyModifiers::META)
+                    || key.modifiers.contains(KeyModifiers::CONTROL)
+                {
                     self.paste_from_clipboard();
                 } else {
                     self.insert_char('v');
@@ -1065,7 +1117,8 @@ impl App {
                 } else {
                     String::new()
                 };
-                self.editor.content[self.editor.cursor_y] = current_line[..self.editor.cursor_x].to_string();
+                self.editor.content[self.editor.cursor_y] =
+                    current_line[..self.editor.cursor_x].to_string();
                 self.editor.cursor_y += 1;
                 self.editor.content.insert(self.editor.cursor_y, remainder);
                 self.editor.cursor_x = 0;
@@ -1087,10 +1140,7 @@ impl App {
     }
 
     /// Moves the cursor and manages selection state based on whether Shift is held.
-    const fn handle_cursor_movement(&mut self,
-                              new_y: usize,
-                              new_x: usize,
-                              is_shift_pressed: bool) {
+    const fn handle_cursor_movement(&mut self, new_y: usize, new_x: usize, is_shift_pressed: bool) {
         if is_shift_pressed {
             // Start selection if not already active
             if !self.editor.selection_active {
@@ -1112,7 +1162,7 @@ impl App {
             self.handle_cursor_movement(
                 self.editor.cursor_y,
                 self.editor.cursor_x - 1,
-                is_shift_pressed
+                is_shift_pressed,
             );
         } else if self.editor.cursor_y > 0 {
             let new_y = self.editor.cursor_y - 1;
@@ -1122,29 +1172,32 @@ impl App {
     }
 
     fn handle_right_key(&mut self, is_shift_pressed: bool) {
-        let current_line_len = self.editor.content.get(self.editor.cursor_y).map_or(0, String::len);
-        
+        let current_line_len = self
+            .editor
+            .content
+            .get(self.editor.cursor_y)
+            .map_or(0, String::len);
+
         if self.editor.cursor_x < current_line_len {
             // Simple move right
             self.handle_cursor_movement(
                 self.editor.cursor_y,
                 self.editor.cursor_x + 1,
-                is_shift_pressed
+                is_shift_pressed,
             );
         } else if self.editor.cursor_y < self.editor.content.len() - 1 {
             // Move to start of next line
-            self.handle_cursor_movement(
-                self.editor.cursor_y + 1,
-                0,
-                is_shift_pressed
-            );
+            self.handle_cursor_movement(self.editor.cursor_y + 1, 0, is_shift_pressed);
         }
     }
 
     fn handle_up_key(&mut self, is_shift_pressed: bool) {
         if self.editor.cursor_y > 0 {
             let new_y = self.editor.cursor_y - 1;
-            let new_x = self.editor.content.get(new_y)
+            let new_x = self
+                .editor
+                .content
+                .get(new_y)
                 .map_or(0, |line| self.editor.cursor_x.min(line.len()));
             self.handle_cursor_movement(new_y, new_x, is_shift_pressed);
         }
@@ -1153,7 +1206,10 @@ impl App {
     fn handle_down_key(&mut self, is_shift_pressed: bool) {
         if self.editor.cursor_y < self.editor.content.len() - 1 {
             let new_y = self.editor.cursor_y + 1;
-            let new_x = self.editor.content.get(new_y)
+            let new_x = self
+                .editor
+                .content
+                .get(new_y)
                 .map_or(0, |line| self.editor.cursor_x.min(line.len()));
             self.handle_cursor_movement(new_y, new_x, is_shift_pressed);
         }
@@ -1191,7 +1247,9 @@ impl App {
                     // Don't split the line itself, just insert an empty line at the cursor position
                     self.editor.cursor_y += 1;
                     self.editor.cursor_x = 0;
-                    self.editor.content.insert(self.editor.cursor_y, String::new());
+                    self.editor
+                        .content
+                        .insert(self.editor.cursor_y, String::new());
                 }
             }
             "wrap" => {
@@ -1214,7 +1272,11 @@ impl App {
             }
             _ if cmd.starts_with("export ") || cmd.starts_with("save ") => {
                 // Export with custom filename
-                let filename = cmd.split_whitespace().nth(1).unwrap_or("presentation").to_string();
+                let filename = cmd
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("presentation")
+                    .to_string();
                 self.export_editor_to_pro_with_name(&filename);
             }
             _ => {}
@@ -1223,9 +1285,13 @@ impl App {
 
     /// Open editor for the currently selected item
     fn open_editor_for_item(&mut self) {
-        let Some(idx) = self.item_list_state.selected() else { return };
-        let Some(item) = self.items.get(idx) else { return };
-        
+        let Some(idx) = self.item_list_state.selected() else {
+            return;
+        };
+        let Some(item) = self.items.get(idx) else {
+            return;
+        };
+
         let item_id = item.id.clone();
         let title = item.title.clone();
         let item_id_typed = ItemId::new(&item_id);
@@ -1246,7 +1312,7 @@ impl App {
         if let Some(matched_path) = self.item_states.get_matched_file(&item_id_typed) {
             use crate::propresenter::extract::extract_text_from_pro;
             use std::path::Path;
-            
+
             let path = Path::new(matched_path);
             if path.exists() && path.extension().is_some_and(|e| e == "pro") {
                 match extract_text_from_pro(path) {
@@ -1269,7 +1335,7 @@ impl App {
                 }
             }
         }
-        
+
         // Priority 3: Scripture item - show version picker then load
         if slide_type == SlideType::Scripture {
             // Try to detect version from title
@@ -1286,10 +1352,15 @@ impl App {
 
         // Priority 3.5: Hymnal lookup for lyrics items (curated .txt files)
         if slide_type == SlideType::Lyrics {
-            let hymnal_result = self.hymnal_service.as_mut()
+            let hymnal_result = self
+                .hymnal_service
+                .as_mut()
                 .and_then(|h| h.lookup_from_title(&title));
             if let Some((_title, lines)) = hymnal_result {
-                self.editor = EditorState { content: lines, ..EditorState::default() };
+                self.editor = EditorState {
+                    content: lines,
+                    ..EditorState::default()
+                };
                 self.mode = AppMode::Editor;
                 return;
             }
@@ -1304,55 +1375,61 @@ impl App {
                 new_state.content.push(String::new());
             }
         }
-        
+
         self.editor = new_state;
         self.mode = AppMode::Editor;
     }
-    
+
     /// Detect the slide type for an item based on category and title.
     fn detect_slide_type(category: Category, title: &str) -> SlideType {
         let title_lower = title.to_lowercase();
-        
+
         // Check for explicit scripture indicators
-        if title_lower.starts_with("scripture") || 
-           (title_lower.contains("scripture") && parse_scripture_ref(title).is_some()) ||
-           parse_scripture_ref(title).is_some() {
+        if title_lower.starts_with("scripture")
+            || (title_lower.contains("scripture") && parse_scripture_ref(title).is_some())
+            || parse_scripture_ref(title).is_some()
+        {
             return SlideType::Scripture;
         }
-        
+
         // Song category = Lyrics
         if matches!(category, Category::Song) {
             return SlideType::Lyrics;
         }
-        
+
         // Title/nametag patterns
         if matches!(category, Category::Title) ||
            title_lower.contains("sermon") ||
            title_lower.contains("(robert)") || title_lower.contains("(hope)") ||  // Name patterns
-           title_lower.starts_with("welcome") {
+           title_lower.starts_with("welcome")
+        {
             return SlideType::Title;
         }
-        
+
         // Graphic patterns
-        if matches!(category, Category::Graphic) ||
-           title_lower.contains("pre-service") || title_lower.contains("preservice") ||
-           title_lower.contains("post-service") || title_lower.contains("postservice") ||
-           title_lower.contains("announcement") ||
-           (title_lower.contains("offertory") && !title_lower.contains(':')) {
+        if matches!(category, Category::Graphic)
+            || title_lower.contains("pre-service")
+            || title_lower.contains("preservice")
+            || title_lower.contains("post-service")
+            || title_lower.contains("postservice")
+            || title_lower.contains("announcement")
+            || (title_lower.contains("offertory") && !title_lower.contains(':'))
+        {
             return SlideType::Graphic;
         }
-        
+
         // Default to Text
         SlideType::Text
     }
-    
+
     /// Get slide type for item (cached/overridden or detected)
     pub fn get_slide_type_for_item(&self, item: &Item) -> SlideType {
         let item_id = ItemId::new(&item.id);
-        self.item_states.get_slide_type(&item_id)
+        self.item_states
+            .get_slide_type(&item_id)
             .unwrap_or_else(|| Self::detect_slide_type(item.category, &item.title))
     }
-    
+
     /// Handle input when side pane is focused
     fn handle_side_pane_input(&mut self, key: KeyEvent) {
         match self.current_slide_type {
@@ -1411,7 +1488,7 @@ impl App {
             }
         }
     }
-    
+
     /// Switch Bible version and reload scripture
     fn switch_bible_version(&mut self, version_idx: usize) {
         let versions = BibleVersion::all();
@@ -1421,27 +1498,31 @@ impl App {
             self.reload_scripture();
         }
     }
-    
+
     /// Reload current scripture with selected version
     fn reload_scripture(&mut self) {
-        let Some(idx) = self.item_list_state.selected() else { return };
-        let Some(item) = self.items.get(idx) else { return };
-        
+        let Some(idx) = self.item_list_state.selected() else {
+            return;
+        };
+        let Some(item) = self.items.get(idx) else {
+            return;
+        };
+
         let title = &item.title;
         let version = BibleVersion::all()[self.version_picker_selection];
-        
+
         // Parse scripture reference from title
         let Some(reference) = parse_scripture_ref(title) else {
             self.error_message = Some(format!("Could not parse: {title}"));
             return;
         };
-        
+
         // Look up verses
         let Some(bible) = &mut self.bible_service else {
             self.error_message = Some("Bible data not available".to_string());
             return;
         };
-        
+
         match bible.lookup(&reference, version) {
             Ok((header, lines)) => {
                 self.current_scripture_header = Some(header);
@@ -1456,11 +1537,11 @@ impl App {
             }
         }
     }
-    
+
     /// Handle version picker input
     fn handle_version_picker_input(&mut self, key: KeyEvent) {
         let versions = BibleVersion::all();
-        
+
         match key.code {
             KeyCode::Esc => {
                 self.version_picker_active = false;
@@ -1482,15 +1563,19 @@ impl App {
             _ => {}
         }
     }
-    
+
     /// Load scripture verses into the editor
     fn load_scripture_into_editor(&mut self) {
-        let Some(idx) = self.item_list_state.selected() else { return };
-        let Some(item) = self.items.get(idx) else { return };
-        
+        let Some(idx) = self.item_list_state.selected() else {
+            return;
+        };
+        let Some(item) = self.items.get(idx) else {
+            return;
+        };
+
         let title = &item.title;
         let version = BibleVersion::all()[self.version_picker_selection];
-        
+
         // Parse scripture reference from title
         let Some(reference) = parse_scripture_ref(title) else {
             self.error_message = Some(format!("Could not parse scripture reference: {title}"));
@@ -1499,7 +1584,7 @@ impl App {
             self.editor = EditorState::default();
             return;
         };
-        
+
         // Look up verses
         let Some(bible) = &mut self.bible_service else {
             self.error_message = Some("Bible data not available".to_string());
@@ -1508,11 +1593,14 @@ impl App {
             self.editor = EditorState::default();
             return;
         };
-        
+
         match bible.lookup(&reference, version) {
             Ok((header, lines)) => {
                 self.current_scripture_header = Some(header);
-                self.editor = EditorState { content: lines, ..EditorState::default() };
+                self.editor = EditorState {
+                    content: lines,
+                    ..EditorState::default()
+                };
                 self.mode = AppMode::Editor;
                 self.clamp_cursor();
             }
@@ -1527,35 +1615,44 @@ impl App {
 
     fn export_editor_to_pro(&mut self) {
         // Get the item title as the presentation name
-        let name = self.get_current_item_title()
+        let name = self
+            .get_current_item_title()
             .unwrap_or_else(|| "Untitled".to_string());
         self.export_editor_to_pro_with_name(&name);
     }
 
     fn export_editor_to_pro_with_name(&mut self, name: &str) {
-        use crate::propresenter::template::{TemplateType, build_presentation_from_template_with_options, DEFAULT_MAX_LINES_PER_SLIDE};
         use crate::propresenter::serialize::write_presentation_file;
-        
+        use crate::propresenter::template::{
+            build_presentation_from_template_with_options, TemplateType,
+            DEFAULT_MAX_LINES_PER_SLIDE,
+        };
+
         // Map slide type to template type
         let template_type = match self.current_slide_type {
             SlideType::Scripture => TemplateType::Scripture,
             SlideType::Lyrics => TemplateType::Song,
             SlideType::Title | SlideType::Text | SlideType::Graphic => TemplateType::Info,
         };
-        
+
         // Get template - require it to exist
-        let Some(template) = self.template_cache.as_mut().and_then(|c| c.get(template_type).cloned()) else {
+        let Some(template) = self
+            .template_cache
+            .as_mut()
+            .and_then(|c| c.get(template_type).cloned())
+        else {
             self.error_message = Some(format!(
                 "No template found! Create '{}' in your ProPresenter library with your desired styling.",
                 template_type.filename()
             ));
             return;
         };
-        
+
         // Build presentation from template with auto-splitting
         let wrap_col = self.editor.wrap_column;
+        let presentation_name = Self::canonical_presentation_name(name, self.current_slide_type);
         let Some(presentation) = build_presentation_from_template_with_options(
-            name,
+            &presentation_name,
             &template,
             &self.editor.content,
             wrap_col,
@@ -1564,9 +1661,9 @@ impl App {
             self.error_message = Some("Failed to build presentation from template".to_string());
             return;
         };
-        
+
         // Write to file
-        let output_path = self.get_pro_output_path(name);
+        let output_path = self.get_pro_output_path(&presentation_name);
         match write_presentation_file(&presentation, &output_path) {
             Ok(()) => {
                 // Add to file index so it appears in suggestions immediately
@@ -1600,14 +1697,31 @@ impl App {
         self.items.get(item_idx).map(|i| i.title.clone())
     }
 
+    fn canonical_presentation_name(name: &str, slide_type: SlideType) -> String {
+        use crate::propresenter::playlist::sanitize_filename;
+
+        let normalized = sanitize_filename(name, slide_type);
+        if normalized.is_empty() {
+            "Untitled".to_string()
+        } else {
+            normalized
+        }
+    }
+
     fn get_pro_output_path(&self, name: &str) -> std::path::PathBuf {
         use crate::propresenter::playlist::sanitize_filename;
 
-        let base_path = self.library_path.clone()
+        let base_path = self
+            .library_path
+            .clone()
             .unwrap_or_else(|| std::path::PathBuf::from("."));
 
         let safe_name = sanitize_filename(name, self.current_slide_type);
-        let safe_name = if safe_name.is_empty() { "Untitled" } else { &safe_name };
+        let safe_name = if safe_name.is_empty() {
+            "Untitled"
+        } else {
+            &safe_name
+        };
         base_path.join(format!("{safe_name}.pro"))
     }
 
@@ -1616,8 +1730,15 @@ impl App {
         if self.editor.content.is_empty() {
             self.editor.content.push(String::new());
         }
-        self.editor.cursor_y = self.editor.cursor_y.min(self.editor.content.len().saturating_sub(1));
-        let line_len = self.editor.content.get(self.editor.cursor_y).map_or(0, String::len);
+        self.editor.cursor_y = self
+            .editor
+            .cursor_y
+            .min(self.editor.content.len().saturating_sub(1));
+        let line_len = self
+            .editor
+            .content
+            .get(self.editor.cursor_y)
+            .map_or(0, String::len);
         self.editor.cursor_x = self.editor.cursor_x.min(line_len);
     }
 
@@ -1635,7 +1756,7 @@ impl App {
 
     fn load_items_for_plan(&mut self, plan_id: &str) {
         self.items.clear();
-        self.item_list_state.select(None); 
+        self.item_list_state.select(None);
         self.matching_files.clear();
         self.file_list_state.select(None);
 
@@ -1647,68 +1768,43 @@ impl App {
             let tx_clone = self.async_task_tx.clone(); // Clone sender for the task
 
             // Spawn the async task using tokio::spawn
-            tokio::spawn(async move { // Changed from self.runtime.spawn
+            tokio::spawn(async move {
+                // Changed from self.runtime.spawn
                 let result = client_clone.get_service_items(&plan_id_owned).await;
                 // Send the result back to the main thread
-                if let Err(_e) = tx_clone.send(AppUpdate::ItemsLoaded(result)).await {
-                }
+                if let Err(_e) = tx_clone.send(AppUpdate::ItemsLoaded(result)).await {}
             });
-            
+
             // Don't block here
-
-        } else { 
-             // Load dummy items synchronously if no client
-            self.load_dummy_items();
-        }
-    }
-    
-    fn load_dummy_items(&mut self) {
-        self.items = vec![
-            Item { id: "dummy_song_1".to_string(), position: 1, title: "Dummy Song 1".to_string(), description: None, category: Category::Song, note: None, song: None, scripture: None },
-            Item { id: "dummy_graphic".to_string(), position: 2, title: "Dummy Graphic".to_string(), description: None, category: Category::Graphic, note: None, song: None, scripture: None },
-            Item { id: "dummy_title".to_string(), position: 3, title: "Dummy Title".to_string(), description: None, category: Category::Title, note: None, song: None, scripture: None },
-            Item { id: "dummy_text".to_string(), position: 4, title: "Dummy Text".to_string(), description: None, category: Category::Text, note: None, song: None, scripture: None },
-            Item { id: "dummy_other".to_string(), position: 5, title: "Dummy Other".to_string(), description: None, category: Category::Other, note: None, song: None, scripture: None },
-        ];
-        
-        // Initialize state, restoring from cache where available
-        self.item_states.clear();
-
-        for item in &self.items {
-            let item_id = ItemId::new(&item.id);
-            if let Some(index) = &self.file_index {
-                self.item_states.set_completed(&item_id, index.get_item_completion(&item.id).unwrap_or(false));
-                self.item_states.set_ignored(&item_id, index.get_item_ignored(&item.id).unwrap_or(false));
-                self.item_states.set_editor(&item_id, index.get_editor_state(&item.id).cloned());
-                self.item_states.set_matched_file(&item_id, index.get_selection_for_item(&item.id).cloned());
-            }
-        }
-
-        if !self.items.is_empty() {
-            self.item_list_state.select(Some(0));
-            self.update_matching_files();
+        } else {
+            self.error_message = Some(
+                "Planning Center credentials are required. Set PCO_APP_ID and PCO_SECRET."
+                    .to_string(),
+            );
         }
     }
 
     /// Extracts a numeric identifier like "#510" or a leading number from a title.
     fn extract_item_number(title: &str) -> Option<String> {
-        // Look for patterns like "#123" or "No. 123" 
+        // Look for patterns like "#123" or "No. 123"
         if let Some(pos) = title.find('#') {
             // Extract from # to the next space or end of string
             let start = pos + 1;
-            let end = title[start..].find(|c: char| !c.is_ascii_digit())
+            let end = title[start..]
+                .find(|c: char| !c.is_ascii_digit())
                 .map_or(title.len(), |p| p + start);
             if start < end {
                 return Some(title[start..end].to_string());
             }
-        } 
+        }
         // Check if title starts with a number (without #)
         else {
             let trimmed = title.trim();
             if let Some(first_char) = trimmed.chars().next() {
                 if first_char.is_ascii_digit() {
                     // Get the continuous digits at start
-                    let end = trimmed.find(|c: char| !c.is_ascii_digit())
+                    let end = trimmed
+                        .find(|c: char| !c.is_ascii_digit())
                         .unwrap_or(trimmed.len());
                     if end > 0 {
                         return Some(trimmed[..end].to_string());
@@ -1724,145 +1820,131 @@ impl App {
         self.matching_files.clear();
         self.file_list_state.select(None);
 
-        let Some(selected_item_idx) = self.item_list_state.selected() else { return };
-        let Some(selected_item) = self.items.get(selected_item_idx).cloned() else { return };
-        
+        let Some(selected_item_idx) = self.item_list_state.selected() else {
+            return;
+        };
+        let Some(selected_item) = self.items.get(selected_item_idx).cloned() else {
+            return;
+        };
+
         // Extract title for searching
         let title = selected_item.title.clone();
         let item_id = selected_item.id.clone();
-        
-        // Get enhanced search terms - use capacity-optimized Vector for primary terms
-        let mut primary_terms = Vec::with_capacity(5);
-        primary_terms.push(title.clone());
-        
-        // Add common liturgical element variations
-        let liturgical_mapping = [
-            ("Call to Worship", vec!["Call to Worship", "CTW"]),
-            ("Prayer of Confession", vec!["Confession", "Prayer of Confession"]),
-            ("Greeting", vec!["Greeting", "Welcome"]),
-            ("Prayer", vec!["Prayer", "Prayers"]),
-            ("Lord's Prayer", vec!["Lord's Prayer", "Our Father"]),
-            ("Offertory", vec!["Offertory", "Offering"]),
-            ("Doxology", vec!["Doxology", "Gloria Patri", "Praise God"]),
-            ("Tithes", vec!["Tithe", "Tithes", "Offering"]),
-            ("Offerings", vec!["Offering", "Offerings"]),
-            ("Giving", vec!["Giving", "Offering", "Stewardship"]),
-            ("Benediction", vec!["Benediction", "Blessing"]),
-            ("Scripture", vec!["Scripture", "Bible", "Reading"]),
-            ("Anthem", vec!["Anthem", "Choir"]),
-        ];
-        
-        // Check title for liturgical elements and add relevant search terms
-        for (key, variations) in &liturgical_mapping {
-            if title.contains(key) {
-                for term in variations {
-                    if !primary_terms.contains(&term.to_string()) {
-                        primary_terms.push(term.to_string());
-                    }
-                }
-            }
-        }
-        
+
+        // Build item-specific augmented search terms
+        // Liturgical mappings and fuzzy matching are handled by CompositeSearch
+        let mut augmented_terms: Vec<String> = Vec::new();
+
         // For scripture references, add variations with "v" instead of ":"
-        if title.contains("Scripture") && title.contains(':') {
-            primary_terms.push(title.replace(':', "v"));
+        if self.get_slide_type_for_item(&selected_item) == SlideType::Scripture
+            && title.contains(':')
+        {
+            augmented_terms.push(title.replace(':', "v"));
         }
-        
+
         // Extract any number references (like "#510") and add as search terms
         if let Some(number) = Self::extract_item_number(&title) {
-            primary_terms.push(number.clone());
-            primary_terms.push(format!("#{number}"));
-            primary_terms.push(format!("Hymn {number}"));
-            primary_terms.push(format!("[Hymn] {number}"));
-            
+            augmented_terms.push(number.clone());
+            augmented_terms.push(format!("#{number}"));
+            augmented_terms.push(format!("Hymn {number}"));
+            augmented_terms.push(format!("[Hymn] {number}"));
+
             // Look for significant words after the hymn number to use as additional terms
             if let Some(pos) = title.find(&number) {
                 let after_number = title[pos + number.len()..].trim();
                 if !after_number.is_empty() {
-                    // Remove articles and common short words
                     let key_words: Vec<&str> = after_number
                         .split_whitespace()
-                        .filter(|word| word.len() > 3 && !["with", "from", "your", "thou"].contains(word))
+                        .filter(|word| {
+                            word.len() > 3 && !["with", "from", "your", "thou"].contains(word)
+                        })
                         .collect();
-                    
-                    // Add each significant word
+
                     for word in key_words {
-                        if !primary_terms.contains(&word.to_string()) {
-                            primary_terms.push(word.to_string());
+                        if !augmented_terms.contains(&word.to_string()) {
+                            augmented_terms.push(word.to_string());
                         }
                     }
                 }
             }
         }
-        
+
         // Handle composite items with "and"
         if title.contains(" and ") {
-            // Split by "and" and add each significant part
             let parts: Vec<&str> = title.split(" and ").map(str::trim).collect();
-            
+
             for part in parts {
-                if part.len() > 3 && !primary_terms.contains(&part.to_string()) {
-                    primary_terms.push(part.to_string());
-                    
-                    // Generate variants without common prefixes
+                if part.len() > 3 && !augmented_terms.contains(&part.to_string()) {
+                    augmented_terms.push(part.to_string());
+
                     let clean_part = part.trim_start_matches(|c: char| !c.is_alphanumeric());
                     if clean_part != part && clean_part.len() > 3 {
-                        primary_terms.push(clean_part.to_string());
+                        augmented_terms.push(clean_part.to_string());
                     }
                 }
             }
         }
-        
+
         // For composite terms with slashes like "Prayer/Lord's Prayer"
         if title.contains('/') {
-            // Only add individual parts if they're substantial (more than 3 chars)
             for part in title.split('/').map(str::trim) {
-                if part.len() > 3 && !primary_terms.contains(&part.to_string()) {
-                    primary_terms.push(part.to_string());
+                if part.len() > 3 && !augmented_terms.contains(&part.to_string()) {
+                    augmented_terms.push(part.to_string());
                 }
             }
         }
-        
+
         // For specific formats like "Offertory: O Love", add variations
         if title.contains(':') {
             let parts: Vec<&str> = title.split(':').map(str::trim).collect();
             if parts.len() >= 2 {
-                // Add both parts separately - don't filter on length
-                if !primary_terms.contains(&parts[0].to_string()) {
-                    primary_terms.push(parts[0].to_string());
+                if !augmented_terms.contains(&parts[0].to_string()) {
+                    augmented_terms.push(parts[0].to_string());
                 }
-                if !primary_terms.contains(&parts[1].to_string()) {
-                    primary_terms.push(parts[1].to_string());
+                if !augmented_terms.contains(&parts[1].to_string()) {
+                    augmented_terms.push(parts[1].to_string());
                 }
             }
         }
-        
+
         // For songs, add song title and artist
         if let Some(song) = &selected_item.song {
-            // Add song title if different from item title and not already included
-            if song.title != title && !song.title.is_empty() && !primary_terms.contains(&song.title) {
-                primary_terms.push(song.title.clone());
+            if song.title != title
+                && !song.title.is_empty()
+                && !augmented_terms.contains(&song.title)
+            {
+                augmented_terms.push(song.title.clone());
             }
-            
-            // Add artist name if available and substantial
+
             if let Some(author) = &song.author {
-                if !author.is_empty() && author.len() > 3 && !primary_terms.contains(author) {
-                    primary_terms.push(author.clone());
+                if !author.is_empty() && author.len() > 3 && !augmented_terms.contains(author) {
+                    augmented_terms.push(author.clone());
                 }
             }
         }
-        
+
         // Use the file index if available
         if let Some(index) = &self.file_index {
-            // Search for primary term first with a larger limit
             let mut all_matches = Vec::new();
             let mut seen_paths = std::collections::HashSet::new();
-            
-            // Try each primary term
-            for term in &primary_terms {
+
+            // Primary search: CompositeSearch handles liturgical mapping + fuzzy matching
+            let primary_results: Vec<FileEntry> = self
+                .search
+                .find_matches(&title, &index.entries, 10)
+                .into_iter()
+                .cloned()
+                .collect();
+            for entry in primary_results {
+                let path_str = entry.full_path.to_string_lossy().to_string();
+                if seen_paths.insert(path_str) {
+                    all_matches.push(entry);
+                }
+            }
+
+            // Augmented search: item-specific terms use the file index's scoring
+            for term in &augmented_terms {
                 let matches = index.find_matches(term, 10);
-                
-                // Add all unique matches to our collection
                 for entry in matches {
                     let path_str = entry.full_path.to_string_lossy().to_string();
                     if seen_paths.insert(path_str) {
@@ -1870,13 +1952,14 @@ impl App {
                     }
                 }
             }
-            
+
             // If we have a previous selection for this item, ensure it's always first
             if let Some(selected_path) = index.get_selection_for_item(&item_id) {
                 // Check if it's already in matches
-                if let Some(selected_idx) = all_matches.iter().position(|e| 
-                    e.full_path.to_string_lossy() == *selected_path
-                ) {
+                if let Some(selected_idx) = all_matches
+                    .iter()
+                    .position(|e| e.full_path.to_string_lossy() == *selected_path)
+                {
                     // Move to front
                     if selected_idx > 0 {
                         let selected_entry = all_matches.remove(selected_idx);
@@ -1884,120 +1967,24 @@ impl App {
                     }
                 } else {
                     // Previous selection not in fuzzy results - find it in the index and add it
-                    if let Some(entry) = index.entries.iter().find(|e| 
-                        e.full_path.to_string_lossy() == *selected_path
-                    ) {
+                    if let Some(entry) = index
+                        .entries
+                        .iter()
+                        .find(|e| e.full_path.to_string_lossy() == *selected_path)
+                    {
                         all_matches.insert(0, entry.clone());
                     }
                 }
             }
-            
             self.matching_files = all_matches;
-        } else {
-            // Fall back to old method if no index
-        if self.library_path.is_none() {
-            self.update_dummy_matching_files(&title);
-            return;
         }
-        
-        if let Some(lib_path) = &self.library_path {
-                // Pass category as well just for compatibility with the old function
-                let category = &selected_item.category;
-                let items_iter = std::iter::once((&title, category)); 
-            let matches = find_matches_for_items(items_iter, lib_path, 10);
-            
-            if let Some(file_matches) = matches.get(&title) {
-                    // Convert strings to dummy FileEntry objects
-                    self.matching_files = file_matches.iter()
-                        .map(|name| FileEntry {
-                            file_name: name.clone(),
-                            normalized_name: crate::utils::file_matcher::normalize_name(name),
-                            file_name_lower: name.to_lowercase(),
-                            normalized_lower: crate::utils::file_matcher::normalize_name(name).to_lowercase(),
-                            display_name: name.clone(),
-                            _relative_path: String::new(),
-                            full_path: PathBuf::new(),
-                        })
-                        .collect();
-                    
-                if self.matching_files.is_empty() {
-                    self.update_dummy_matching_files(&title);
-                }
-        } else {
-                self.update_dummy_matching_files(&title);
-                }
-            }
-        }
-    }
-    
-    // Helper to provide dummy matching files for testing
-    fn update_dummy_matching_files(&mut self, search_term: &str) {
-        // For example purposes, populate with mock files based on the selected item name
-        let item_name = search_term.to_lowercase();
-        
-        // Create dummy file entries with owned Strings
-        let dummy_entries: Vec<(String, &str)> = if item_name.contains("amazing grace") {
-            vec![
-                ("Amazing Grace".to_string(), "Songs/Hymns"),
-                ("Amazing Grace (My Chains Are Gone)".to_string(), "Songs/Contemporary"),
-                ("Amazing Grace (Traditional)".to_string(), "Songs/Traditional"),
-            ]
-        } else if item_name.contains("how great thou art") {
-            vec![
-                ("How Great Thou Art".to_string(), "Songs/Hymns"),
-                ("How Great Thou Art (Updated)".to_string(), "Songs/Contemporary"),
-            ]
-        } else if item_name.contains("worship") || item_name.contains("song") {
-            vec![
-                ("Worship Set 1".to_string(), "Songs/Sets"),
-                ("Worship Set 2".to_string(), "Songs/Sets"),
-                ("Worship Background".to_string(), "Backgrounds"),
-            ]
-        } else if item_name.contains("scripture") || item_name.contains("psalm") || item_name.contains("reading") {
-            vec![
-                ("Scripture Backgrounds".to_string(), "Backgrounds"),
-                ("Psalm 23".to_string(), "Scripture"),
-                ("Bible Backgrounds".to_string(), "Backgrounds"),
-            ]
-        } else if item_name.contains("announcements") {
-            vec![
-                ("Announcements Template".to_string(), "Templates"),
-                ("Weekly Announcements".to_string(), "Announcements"),
-                ("Announcement Slides".to_string(), "Announcements"),
-            ]
-        } else if item_name.contains("slide") || item_name.contains("graphic") {
-            vec![
-                ("Title Slides".to_string(), "Graphics"),
-                ("Background Slides".to_string(), "Backgrounds"),
-                ("Graphic Templates".to_string(), "Templates"),
-            ]
-        } else {
-            // Generate generic matches for other items
-            vec![
-                (item_name.clone(), "Presentations"),
-                (format!("{item_name} Template"), "Templates"),
-                (format!("{item_name} Background"), "Backgrounds"),
-            ]
-        };
-        
-        // Convert to FileEntry objects
-        self.matching_files = dummy_entries
-            .into_iter()
-            .map(|(name, path)| FileEntry {
-                file_name: name.clone(),
-                normalized_name: crate::utils::file_matcher::normalize_name(&name),
-                file_name_lower: name.to_lowercase(),
-                normalized_lower: crate::utils::file_matcher::normalize_name(&name).to_lowercase(),
-                display_name: name,
-                _relative_path: path.to_string(),
-                full_path: PathBuf::new(),
-            })
-            .collect();
     }
 
     fn try_generate_playlist(&mut self) {
         // Count how many items are neither completed nor ignored
-        let uncompleted_count = self.items.iter()
+        let uncompleted_count = self
+            .items
+            .iter()
             .filter(|item| {
                 let item_id = ItemId::new(&item.id);
                 let is_completed = self.item_states.is_completed(&item_id);
@@ -2005,7 +1992,7 @@ impl App {
                 !is_completed && !is_ignored
             })
             .count();
-            
+
         if uncompleted_count > 0 {
             self.pending_playlist_confirmation = Some(uncompleted_count);
             self.status_message = Some(format!(
@@ -2019,11 +2006,14 @@ impl App {
 
     #[allow(clippy::too_many_lines)]
     fn generate_playlist(&mut self, allow_incomplete: bool) {
-        use std::path::Path;
         use crate::propresenter::playlist::{build_playlist, write_playlist_file, PlaylistEntry};
-        use crate::propresenter::template::{TemplateType, build_presentation_from_template_with_options, DEFAULT_MAX_LINES_PER_SLIDE};
+        use crate::propresenter::template::{
+            build_presentation_from_template_with_options, TemplateType,
+            DEFAULT_MAX_LINES_PER_SLIDE,
+        };
         use prost::Message;
-        
+        use std::path::Path;
+
         // Collect entries for non-ignored items with matched files
         let mut entries: Vec<PlaylistEntry> = Vec::new();
 
@@ -2042,7 +2032,7 @@ impl App {
                     .and_then(|s| s.to_str())
                     .unwrap_or(&item.title);
                 let entry_name = file_stem.to_string();
-                let slide_type = self.item_states.get_slide_type(&item_id).unwrap_or(SlideType::Text);
+                let slide_type = self.get_slide_type_for_item(item);
 
                 // Read the .pro file and embed it
                 match std::fs::read(matched_path) {
@@ -2079,12 +2069,13 @@ impl App {
                     if allow_incomplete {
                         continue;
                     }
-                    self.error_message = Some(format!("Item '{}' has no content to export.", item.title));
+                    self.error_message =
+                        Some(format!("Item '{}' has no content to export.", item.title));
                     return;
                 }
 
                 // Determine template type based on slide type
-                let slide_type = self.item_states.get_slide_type(&item_id).unwrap_or(SlideType::Text);
+                let slide_type = self.get_slide_type_for_item(item);
                 let template_type = match slide_type {
                     SlideType::Scripture => TemplateType::Scripture,
                     SlideType::Lyrics => TemplateType::Song,
@@ -2092,39 +2083,49 @@ impl App {
                 };
 
                 // Require template - no fallback
-                let Some(template) = self.template_cache.as_mut().and_then(|c| c.get(template_type).cloned()) else {
+                let Some(template) = self
+                    .template_cache
+                    .as_mut()
+                    .and_then(|c| c.get(template_type).cloned())
+                else {
                     self.error_message = Some(format!(
                         "No template found! Create '{}' in your ProPresenter library with your desired styling.",
                         template_type.filename()
                     ));
                     return;
                 };
-                
+
                 // Use the item's wrap column for splitting, clamped to minimum
                 let wrap_col = state.wrap_column.max(MIN_SLIDE_WRAP);
+                let entry_name = if slide_type == SlideType::Lyrics {
+                    item.song
+                        .as_ref()
+                        .map_or_else(|| item.title.clone(), |s| s.title.clone())
+                } else {
+                    item.title.clone()
+                };
+                let entry_name = Self::canonical_presentation_name(&entry_name, slide_type);
+
                 let Some(presentation) = build_presentation_from_template_with_options(
-                    &item.title,
+                    &entry_name,
                     &template,
                     &state.content,
                     wrap_col,
                     DEFAULT_MAX_LINES_PER_SLIDE,
                 ) else {
-                    self.error_message = Some(format!("Failed to build presentation for '{}'", item.title));
+                    self.error_message =
+                        Some(format!("Failed to build presentation for '{}'", item.title));
                     return;
                 };
-                
+
                 let mut data = Vec::new();
                 if presentation.encode(&mut data).is_err() {
-                    self.error_message = Some(format!("Failed to encode presentation for '{}'", item.title));
+                    self.error_message = Some(format!(
+                        "Failed to encode presentation for '{}'",
+                        item.title
+                    ));
                     return;
                 }
-
-                // For songs, use the canonical title from the song database
-                let entry_name = if slide_type == SlideType::Lyrics {
-                    item.song.as_ref().map_or(item.title.clone(), |s| s.title.clone())
-                } else {
-                    item.title.clone()
-                };
 
                 entries.push(PlaylistEntry {
                     name: entry_name,
@@ -2151,7 +2152,8 @@ impl App {
         }
 
         // Generate playlist name from plan date/title
-        let playlist_name = self.get_current_plan_title()
+        let playlist_name = self
+            .get_current_plan_title()
             .unwrap_or_else(|| "Service Playlist".to_string());
 
         // Determine output path
@@ -2159,7 +2161,7 @@ impl App {
 
         // Build and write the playlist
         let playlist = build_playlist(&playlist_name, &entries);
-        
+
         match write_playlist_file(&playlist, &entries, &output_path) {
             Ok(()) => {
                 self.status_message = Some(format!(
@@ -2178,11 +2180,15 @@ impl App {
         let plan_idx = self.plan_list_state.selected()?;
         let service_id = self.active_service_id.as_ref()?;
 
-        let plan = self.plans.iter()
+        let plan = self
+            .plans
+            .iter()
             .filter(|p| &p.service_id == service_id)
             .nth(plan_idx)?;
 
-        let service_name = self.services.iter()
+        let service_name = self
+            .services
+            .iter()
             .find(|s| &s.id == service_id)
             .map(|s| s.name.as_str());
 
@@ -2193,10 +2199,13 @@ impl App {
     }
 
     fn get_playlist_output_path(&self, name: &str) -> std::path::PathBuf {
-        let base_path = self.library_path.clone()
+        let base_path = self
+            .library_path
+            .clone()
             .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-        let safe_name: String = name.chars()
+        let safe_name: String = name
+            .chars()
             .map(|c| {
                 if c.is_alphanumeric() || matches!(c, ' ' | '-' | ',' | '(' | ')') {
                     c
@@ -2235,26 +2244,36 @@ impl App {
     fn get_selected_text(&self) -> String {
         if !self.editor.selection_active {
             // No selection: return current line (VSCode behavior)
-            return self.editor.content.get(self.editor.cursor_y)
+            return self
+                .editor
+                .content
+                .get(self.editor.cursor_y)
                 .map(|line| format!("{line}\n"))
                 .unwrap_or_default();
         }
 
         let (start_y, start_x, end_y, end_x) = self.get_selection_bounds();
-        
+
         if start_y == end_y {
             // Single line selection
-            return self.editor.content.get(start_y)
+            return self
+                .editor
+                .content
+                .get(start_y)
                 .map(|line| {
                     let end = end_x.min(line.len());
-                    if start_x <= end { line[start_x..end].to_string() } else { String::new() }
+                    if start_x <= end {
+                        line[start_x..end].to_string()
+                    } else {
+                        String::new()
+                    }
                 })
                 .unwrap_or_default();
         }
-        
+
         // Selection spans multiple lines
         let mut result = String::new();
-        
+
         // First line
         if let Some(line) = self.editor.content.get(start_y) {
             let start_idx = start_x.min(line.len());
@@ -2263,37 +2282,42 @@ impl App {
             }
             result.push('\n');
         }
-        
+
         // Middle lines - use iterator approach
         result.extend(
-            self.editor.content.iter()
+            self.editor
+                .content
+                .iter()
                 .skip(start_y + 1)
                 .take(end_y - start_y - 1)
-                .flat_map(|line| [line.as_str(), "\n"].into_iter())
+                .flat_map(|line| [line.as_str(), "\n"].into_iter()),
         );
-        
+
         // Last line
         if let Some(line) = self.editor.content.get(end_y) {
             let end_idx = end_x.min(line.len());
             result.push_str(&line[..end_idx]);
         }
-        
+
         result
     }
-    
+
     // Ensure there's always an empty line at the end of content
     fn ensure_empty_line_at_end(&mut self) {
         if self.editor.content.is_empty() {
             self.editor.content.push(String::new());
             return;
         }
-        
+
         let last_idx = self.editor.content.len() - 1;
         if !self.editor.content[last_idx].is_empty() {
             self.editor.content.push(String::new());
         } else if self.editor.content.len() == 1 && self.editor.content[0].is_empty() {
             // Already has exactly one empty line, nothing to do
-        } else if last_idx > 0 && self.editor.content[last_idx-1].is_empty() && self.editor.content[last_idx].is_empty() {
+        } else if last_idx > 0
+            && self.editor.content[last_idx - 1].is_empty()
+            && self.editor.content[last_idx].is_empty()
+        {
             // Already has multiple empty lines, reduce to just one
             self.editor.content.truncate(last_idx + 1);
         }
@@ -2303,10 +2327,10 @@ impl App {
         if !self.editor.selection_active {
             return;
         }
-        
+
         // Determine the actual start and end points
         let (start_y, start_x, end_y, end_x) = self.get_selection_bounds();
-        
+
         if start_y == end_y {
             // Selection is on a single line
             if let Some(line) = self.editor.content.get_mut(start_y) {
@@ -2320,73 +2344,84 @@ impl App {
         } else {
             // Selection spans multiple lines
             let mut new_content = Vec::new();
-            
+
             // Add lines before selection
             new_content.extend(self.editor.content[0..start_y].iter().cloned());
-            
-            // Add first line (up to selection start) + last line (from selection end)
-            let first_part = self.editor.content.get(start_y)
-                .map_or_else(String::new, |line| line[..start_x.min(line.len())].to_string());
 
-            let last_part = self.editor.content.get(end_y)
+            // Add first line (up to selection start) + last line (from selection end)
+            let first_part = self
+                .editor
+                .content
+                .get(start_y)
+                .map_or_else(String::new, |line| {
+                    line[..start_x.min(line.len())].to_string()
+                });
+
+            let last_part = self
+                .editor
+                .content
+                .get(end_y)
                 .map_or_else(String::new, |line| {
                     let end_idx = end_x.min(line.len());
                     line[end_idx..].to_string()
                 });
-            
+
             // Combine the parts and add to new content
             new_content.push(first_part + &last_part);
-            
+
             // Add lines after selection
             new_content.extend(self.editor.content[end_y + 1..].iter().cloned());
-            
+
             self.editor.content = new_content;
         }
-        
+
         // Reset cursor to start of selection
         self.editor.cursor_y = start_y;
         self.editor.cursor_x = start_x;
         self.editor.selection_active = false;
     }
-    
+
     const fn get_selection_bounds(&self) -> (usize, usize, usize, usize) {
         if !self.editor.selection_active {
             // If no selection, return cursor position for both start and end
             return (
-                self.editor.cursor_y, 
-                self.editor.cursor_x, 
-                self.editor.cursor_y, 
-                self.editor.cursor_x
+                self.editor.cursor_y,
+                self.editor.cursor_x,
+                self.editor.cursor_y,
+                self.editor.cursor_x,
             );
         }
-        
+
         // Determine start and end points based on selection direction
-        let (start_y, start_x, end_y, end_x) = if (self.editor.selection_start_y < self.editor.cursor_y) || 
-           (self.editor.selection_start_y == self.editor.cursor_y && self.editor.selection_start_x < self.editor.cursor_x) {
+        let (start_y, start_x, end_y, end_x) = if (self.editor.selection_start_y
+            < self.editor.cursor_y)
+            || (self.editor.selection_start_y == self.editor.cursor_y
+                && self.editor.selection_start_x < self.editor.cursor_x)
+        {
             // Normal selection (top to bottom)
             (
-                self.editor.selection_start_y, 
-                self.editor.selection_start_x, 
-                self.editor.cursor_y, 
-                self.editor.cursor_x
+                self.editor.selection_start_y,
+                self.editor.selection_start_x,
+                self.editor.cursor_y,
+                self.editor.cursor_x,
             )
         } else {
             // Reverse selection (bottom to top)
             (
-                self.editor.cursor_y, 
-                self.editor.cursor_x, 
-                self.editor.selection_start_y, 
-                self.editor.selection_start_x
+                self.editor.cursor_y,
+                self.editor.cursor_x,
+                self.editor.selection_start_y,
+                self.editor.selection_start_x,
             )
         };
-        
+
         (start_y, start_x, end_y, end_x)
     }
 
     /// Returns the `(start_line, end_line)` bounds of the paragraph containing the cursor.
     pub fn get_current_paragraph_bounds(&self) -> Option<(usize, usize)> {
         let y = self.editor.cursor_y;
-        
+
         // Ensure cursor is within content bounds
         if y >= self.editor.content.len() {
             return None;
@@ -2397,9 +2432,14 @@ impl App {
             .rev()
             .find(|&i| i == 0 || self.editor.content.get(i - 1).is_some_and(String::is_empty))
             .unwrap_or(y); // Should always find at least y
-            
+
         // If the line at start_y is itself empty, it's not really a paragraph start
-        if self.editor.content.get(start_y).is_none_or(String::is_empty) {
+        if self
+            .editor
+            .content
+            .get(start_y)
+            .is_none_or(String::is_empty)
+        {
             return None;
         }
 
@@ -2407,7 +2447,7 @@ impl App {
         let end_y = (y..self.editor.content.len())
             .find(|&i| self.editor.content.get(i).is_none_or(String::is_empty))
             .map_or(self.editor.content.len() - 1, |i| i.saturating_sub(1));
-            
+
         // Ensure start_y is actually before or at end_y (handles edge cases)
         if start_y <= end_y {
             Some((start_y, end_y))
@@ -2415,46 +2455,55 @@ impl App {
             None // This can happen if the cursor is on an isolated empty line
         }
     }
-    
+
     // Helper function to determine if cursor is in a stanza
     fn is_cursor_in_stanza(&self) -> bool {
         // Look for non-empty lines above and below the cursor
         let cursor_y = self.editor.cursor_y;
-        
+
         // Check if line at cursor is non-empty
-        let current_line_empty = self.editor.content
+        let current_line_empty = self
+            .editor
+            .content
             .get(cursor_y)
             .is_none_or(String::is_empty);
-        
+
         if !current_line_empty {
             return true;
         }
-        
+
         // If cursor is on an empty line, check adjacent lines
-        
+
         // Check if any non-empty line exists above
-        let has_text_above = self.editor.content
+        let has_text_above = self
+            .editor
+            .content
             .iter()
             .take(cursor_y)
             .rev()
             .take_while(|line| line.is_empty())
-            .count() < cursor_y;
-        
+            .count()
+            < cursor_y;
+
         // Check if any non-empty line exists below
-        let has_text_below = self.editor.content
+        let has_text_below = self
+            .editor
+            .content
             .iter()
             .skip(cursor_y + 1)
             .take_while(|line| line.is_empty())
-            .count() < self.editor.content.len() - cursor_y - 1;
-        
+            .count()
+            < self.editor.content.len() - cursor_y - 1;
+
         // Cursor is in a stanza if there are non-empty lines both above and below
         has_text_above && has_text_below
     }
-    
+
     // Find the start of the current stanza
     fn find_stanza_start(&self, y: usize) -> usize {
         // Find the first empty line above the current position
-        self.editor.content
+        self.editor
+            .content
             .iter()
             .take(y)
             .enumerate()
@@ -2468,7 +2517,7 @@ impl App {
             })
             .unwrap_or(0) // If no empty line found, start is at beginning of document
     }
-    
+
     /// Insert a verse marker (e.g., "[Verse 1]") with appropriate blank line handling
     fn insert_verse_marker(&mut self, marker_text: &str) {
         let marker_line = format!("[{marker_text}]");
@@ -2476,33 +2525,51 @@ impl App {
         let content_len = self.editor.content.len();
 
         // Check if cursor is touching a stanza (inside or directly below)
-        let is_touching_stanza = self.is_cursor_in_stanza() || 
-            (cursor_y > 0 && 
-             cursor_y < content_len && 
-             self.editor.content.get(cursor_y - 1).is_some_and(|line| !line.is_empty()) &&
-             self.editor.content.get(cursor_y).is_some_and(String::is_empty));
+        let is_touching_stanza = self.is_cursor_in_stanza()
+            || (cursor_y > 0
+                && cursor_y < content_len
+                && self
+                    .editor
+                    .content
+                    .get(cursor_y - 1)
+                    .is_some_and(|line| !line.is_empty())
+                && self
+                    .editor
+                    .content
+                    .get(cursor_y)
+                    .is_some_and(String::is_empty));
 
         if is_touching_stanza {
             // Insert within or before a stanza
-            let original_cursor_y = cursor_y; 
+            let original_cursor_y = cursor_y;
             let original_cursor_x = self.editor.cursor_x;
-            
-            let effective_y = if self.is_cursor_in_stanza() { cursor_y } else { cursor_y - 1 }; 
+
+            let effective_y = if self.is_cursor_in_stanza() {
+                cursor_y
+            } else {
+                cursor_y - 1
+            };
             let stanza_start = self.find_stanza_start(effective_y);
             let mut insert_pos = stanza_start;
             let mut lines_inserted_above = 0;
 
             // Ensure blank line above if needed
-            if stanza_start > 0 && self.editor.content.get(stanza_start - 1).is_some_and(|line| !line.is_empty()) {
+            if stanza_start > 0
+                && self
+                    .editor
+                    .content
+                    .get(stanza_start - 1)
+                    .is_some_and(|line| !line.is_empty())
+            {
                 self.editor.content.insert(insert_pos, String::new());
                 insert_pos += 1;
                 lines_inserted_above += 1;
             }
-            
+
             // Insert marker
             self.editor.content.insert(insert_pos, marker_line);
             lines_inserted_above += 1;
-            
+
             // Restore cursor position, adjusted for inserted lines
             self.editor.cursor_y = original_cursor_y + lines_inserted_above;
             self.editor.cursor_x = original_cursor_x;
@@ -2518,7 +2585,13 @@ impl App {
             }
 
             // Ensure blank line BEFORE marker (unless at top)
-            if marker_idx > 0 && self.editor.content.get(marker_idx - 1).is_some_and(|line| !line.is_empty()) {
+            if marker_idx > 0
+                && self
+                    .editor
+                    .content
+                    .get(marker_idx - 1)
+                    .is_some_and(|line| !line.is_empty())
+            {
                 self.editor.content.insert(marker_idx, String::new());
                 marker_idx += 1;
             }
@@ -2527,7 +2600,12 @@ impl App {
             let after_idx = marker_idx + 1;
             if after_idx >= self.editor.content.len() {
                 self.editor.content.push(String::new());
-            } else if self.editor.content.get(after_idx).is_some_and(|line| !line.is_empty()) {
+            } else if self
+                .editor
+                .content
+                .get(after_idx)
+                .is_some_and(|line| !line.is_empty())
+            {
                 self.editor.content.insert(after_idx, String::new());
             }
 
@@ -2539,12 +2617,15 @@ impl App {
             self.editor.cursor_y = target_y;
             self.editor.cursor_x = 0;
         }
-        
+
         // Final clamp and ensure empty line at end
-        self.editor.cursor_y = self.editor.cursor_y.min(self.editor.content.len().saturating_sub(1));
+        self.editor.cursor_y = self
+            .editor
+            .cursor_y
+            .min(self.editor.content.len().saturating_sub(1));
         self.ensure_empty_line_at_end();
     }
-    
+
     fn copy_selection(&self) {
         if !self.editor.selection_active {
             if let Some(line) = self.editor.content.get(self.editor.cursor_y) {
@@ -2557,7 +2638,7 @@ impl App {
         let selected_text = self.get_selected_text();
         Self::clipboard_write(&selected_text);
     }
-    
+
     // Cut selection or current line to clipboard
     fn cut_selection(&mut self) {
         if self.editor.selection_active {
@@ -2566,16 +2647,18 @@ impl App {
                 Self::clipboard_write(&selected_text);
                 self.delete_selected_text();
             }
-        } else if !self.editor.content.is_empty() && self.editor.cursor_y < self.editor.content.len() {
+        } else if !self.editor.content.is_empty()
+            && self.editor.cursor_y < self.editor.content.len()
+        {
             // Fall back to cutting current line if no selection
             let line = self.editor.content.remove(self.editor.cursor_y);
             Self::clipboard_write(&(line + "\n"));
-            
+
             // If we removed the last line, add an empty one
             if self.editor.content.is_empty() {
                 self.editor.content.push(String::new());
             }
-            
+
             // Adjust cursor position
             if self.editor.cursor_y >= self.editor.content.len() {
                 self.editor.cursor_y = self.editor.content.len() - 1;
@@ -2584,7 +2667,7 @@ impl App {
         }
         self.editor.selection_active = false;
     }
-    
+
     // Paste from clipboard at current cursor position
     fn paste_from_clipboard(&mut self) {
         // Delete selected text before pasting if selection is active
@@ -2592,7 +2675,7 @@ impl App {
             self.delete_selected_text();
             self.editor.selection_active = false;
         }
-        
+
         // Paste from clipboard
         if let Some(content) = Self::clipboard_read() {
             let normalized_content = content.replace("\r\n", "\n");
@@ -2609,14 +2692,13 @@ impl App {
                     self.editor.cursor_x += lines[0].len();
                 }
             } else {
-                let current_line = self.editor.content.get(self.editor.cursor_y)
-                    .map_or_else(
-                        || (String::new(), String::new()),
-                        |line| {
-                            let x = self.editor.cursor_x.min(line.len());
-                            (line[..x].to_string(), line[x..].to_string())
-                        },
-                    );
+                let current_line = self.editor.content.get(self.editor.cursor_y).map_or_else(
+                    || (String::new(), String::new()),
+                    |line| {
+                        let x = self.editor.cursor_x.min(line.len());
+                        (line[..x].to_string(), line[x..].to_string())
+                    },
+                );
 
                 if self.editor.cursor_y < self.editor.content.len() {
                     self.editor.content[self.editor.cursor_y] = current_line.0 + lines[0];
@@ -2646,22 +2728,28 @@ impl App {
     fn initialize_data(&mut self) {
         // Set loading state immediately
         self.is_loading = true;
-        
+
         if let Some(client) = &self.pco_client {
             let client_clone = client.clone();
-            let config_clone = self.config.clone(); 
+            let config_clone = self.config.clone();
             let tx_clone = self.async_task_tx.clone();
 
             // Spawn the async task using tokio::spawn
             tokio::spawn(async move {
-                let result = client_clone.get_upcoming_services(config_clone.days_ahead).await;
-                if let Err(_e) = tx_clone.send(AppUpdate::DataLoaded(result)).await {
-                }
+                let result = client_clone
+                    .get_upcoming_services(config_clone.days_ahead)
+                    .await;
+                if let Err(_e) = tx_clone.send(AppUpdate::DataLoaded(result)).await {}
             });
         } else {
-           // Load dummy data synchronously
-           self.initialize_selection_state();
-           self.is_loading = false; 
+            self.services.clear();
+            self.plans.clear();
+            self.initialize_selection_state();
+            self.error_message = Some(
+                "Planning Center credentials are required. Set PCO_APP_ID and PCO_SECRET."
+                    .to_string(),
+            );
+            self.is_loading = false;
         }
     }
 
@@ -2691,12 +2779,12 @@ impl App {
                                 self.services = services;
                                 self.plans = plans;
                                 self.initialize_selection_state();
-                            },
+                            }
                             Err(e) => {
                                 self.error_message = Some(format!("Failed to load services: {e}"));
                             }
                         }
-                    },
+                    }
                     AppUpdate::ItemsLoaded(result) => {
                         self.is_loading = false; // Stop loading indicator
                         match result {
@@ -2709,26 +2797,39 @@ impl App {
                                 for item in &self.items {
                                     let item_id = ItemId::new(&item.id);
                                     if let Some(index) = &self.file_index {
-                                        self.item_states.set_completed(&item_id, index.get_item_completion(&item.id).unwrap_or(false));
-                                        self.item_states.set_ignored(&item_id, index.get_item_ignored(&item.id).unwrap_or(false));
-                                        self.item_states.set_editor(&item_id, index.get_editor_state(&item.id).cloned());
-                                        self.item_states.set_matched_file(&item_id, index.get_selection_for_item(&item.id).cloned());
+                                        self.item_states.set_completed(
+                                            &item_id,
+                                            index.get_item_completion(&item.id).unwrap_or(false),
+                                        );
+                                        self.item_states.set_ignored(
+                                            &item_id,
+                                            index.get_item_ignored(&item.id).unwrap_or(false),
+                                        );
+                                        self.item_states.set_editor(
+                                            &item_id,
+                                            index.get_editor_state(&item.id).cloned(),
+                                        );
+                                        self.item_states.set_matched_file(
+                                            &item_id,
+                                            index.get_selection_for_item(&item.id).cloned(),
+                                        );
                                     }
                                 }
-                                
+
                                 if !self.items.is_empty() {
                                     self.item_list_state.select(Some(0));
                                     self.update_matching_files();
                                 }
-                            },
+                            }
                             Err(e) => {
-                                self.error_message = Some(format!("Failed to load service items: {e}"));
+                                self.error_message =
+                                    Some(format!("Failed to load service items: {e}"));
                             }
                         }
-                    },
+                    }
                 }
-            },
-            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {},
+            }
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {}
         }
     }
 
@@ -2736,12 +2837,12 @@ impl App {
     pub fn retry_data_loading(&mut self) {
         // Clear error message if present
         self.error_message = None;
-        
+
         match self.mode {
             AppMode::ServiceList => {
                 // Retry loading services and plans
                 self.initialize_data();
-            },
+            }
             AppMode::ItemList => {
                 // If we have a selected plan, retry loading its items
                 let plan_id = self.get_selected_plan_id();
@@ -2750,19 +2851,21 @@ impl App {
                 } else {
                     self.error_message = Some("No plan selected to reload".to_string());
                 }
-            },
+            }
             _ => {} // Other modes don't have data to reload
         }
     }
-    
+
     // Helper method to get the currently selected plan ID
     fn get_selected_plan_id(&self) -> Option<String> {
         if let Some(selected_idx_filtered) = self.plan_list_state.selected() {
             if let Some(service_id) = &self.active_service_id {
-                let filtered_plans: Vec<_> = self.plans.iter()
+                let filtered_plans: Vec<_> = self
+                    .plans
+                    .iter()
                     .filter(|p| &p.service_id == service_id)
                     .collect();
-                
+
                 if let Some(plan) = filtered_plans.get(selected_idx_filtered) {
                     return Some(plan.id.clone());
                 }
@@ -2772,11 +2875,19 @@ impl App {
     }
 
     fn select_file_for_item(&mut self) {
-        let Some(selected_file_idx) = self.file_list_state.selected() else { return };
-        let Some(selected_item_idx) = self.item_list_state.selected() else { return };
-        let Some(selected_item) = self.items.get(selected_item_idx) else { return };
-        let Some(selected_file) = self.matching_files.get(selected_file_idx) else { return };
-        
+        let Some(selected_file_idx) = self.file_list_state.selected() else {
+            return;
+        };
+        let Some(selected_item_idx) = self.item_list_state.selected() else {
+            return;
+        };
+        let Some(selected_item) = self.items.get(selected_item_idx) else {
+            return;
+        };
+        let Some(selected_file) = self.matching_files.get(selected_file_idx) else {
+            return;
+        };
+
         let item_id_str = selected_item.id.clone();
         let item_id = ItemId::new(&item_id_str);
         let file_path = selected_file.full_path.to_string_lossy().to_string();
@@ -2800,7 +2911,7 @@ impl App {
             index.save_item_completion(&item_id_str, true);
             index.persist();
         }
-        
+
         // Move to the next item if possible, otherwise deselect file list
         if let Some(next_idx) = self.find_next_uncompleted_item(selected_item_idx) {
             self.item_list_state.select(Some(next_idx));
@@ -2813,12 +2924,11 @@ impl App {
 
     // Helper to find next uncompleted item index
     fn find_next_uncompleted_item(&self, current_idx: usize) -> Option<usize> {
-        ((current_idx + 1)..self.items.len())
-            .find(|&i| {
-                self.items.get(i).is_some_and(|item| {
-                    let item_id = ItemId::new(&item.id);
-                    !self.item_states.is_completed(&item_id) && !self.item_states.is_ignored(&item_id)
-                })
+        ((current_idx + 1)..self.items.len()).find(|&i| {
+            self.items.get(i).is_some_and(|item| {
+                let item_id = ItemId::new(&item.id);
+                !self.item_states.is_completed(&item_id) && !self.item_states.is_ignored(&item_id)
             })
+        })
     }
-} 
+}

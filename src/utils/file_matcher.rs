@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
-use crate::planning_center::types::Category;
 
 /// Cache file name
 const CACHE_FILE: &str = "library_cache.json";
@@ -39,6 +38,18 @@ fn cache_path(library_path: &Path) -> PathBuf {
         || library_path.join(".proflow_cache.json"),
         |d| d.join(CACHE_FILE),
     )
+}
+
+fn latest_library_mtime(library_path: &Path) -> Option<SystemTime> {
+    WalkDir::new(library_path)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_dir() || entry.path().extension().is_some_and(|ext| ext == "pro")
+        })
+        .filter_map(|entry| entry.metadata().ok()?.modified().ok())
+        .max()
 }
 
 /// A file entry representing a `ProPresenter` file
@@ -106,7 +117,11 @@ mod humantime_serde {
     #[allow(clippy::ref_option)]
     pub fn serialize<S: Serializer>(time: &Option<SystemTime>, s: S) -> Result<S::Ok, S::Error> {
         match time {
-            Some(t) => t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs().serialize(s),
+            Some(t) => t
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_secs()
+                .serialize(s),
             None => s.serialize_none(),
         }
     }
@@ -166,12 +181,13 @@ impl FileIndex {
             .filter_map(|entry| {
                 let stem = entry.path().file_stem()?.to_str()?;
                 let normalized = normalize_name(stem);
-                let relative_path = entry.path()
+                let relative_path = entry
+                    .path()
                     .strip_prefix(library_path)
                     .unwrap_or_else(|_| entry.path())
                     .to_string_lossy()
                     .to_string();
-                
+
                 Some(FileEntry {
                     file_name: stem.to_string(),
                     normalized_name: normalized.clone(),
@@ -214,12 +230,10 @@ impl FileIndex {
             return None;
         }
 
-        // Check if cache is stale (library modified after cache built)
-        if let (Some(built_at), Ok(meta)) = (cache.built_at, std::fs::metadata(library_path)) {
-            if let Ok(modified) = meta.modified() {
-                if modified > built_at {
-                    return None; // Cache is stale
-                }
+        // Check if cache is stale (any indexed directory or .pro file changed after cache build)
+        if let Some(built_at) = cache.built_at {
+            if latest_library_mtime(library_path).is_some_and(|modified| modified > built_at) {
+                return None;
             }
         }
 
@@ -262,7 +276,8 @@ impl FileIndex {
     /// Record a file selection for an item
     pub fn record_selection(&mut self, item_id: &str, file_path: &Path) {
         let path_str = file_path.to_string_lossy().to_string();
-        self.item_file_selections.insert(item_id.to_string(), path_str.clone());
+        self.item_file_selections
+            .insert(item_id.to_string(), path_str.clone());
         *self.selection_frequency.entry(path_str).or_insert(0) += 1;
 
         // Persist after each selection
@@ -276,7 +291,8 @@ impl FileIndex {
 
     /// Save editor state for an item
     pub fn save_editor_state(&mut self, item_id: &str, state: &crate::app::EditorState) {
-        self.editor_states.insert(item_id.to_string(), state.clone());
+        self.editor_states
+            .insert(item_id.to_string(), state.clone());
         self.persist();
     }
 
@@ -344,42 +360,55 @@ impl FileIndex {
         if query_str.is_empty() {
             return Vec::new();
         }
-        
+
         let query_lower = query_str.to_lowercase();
         let normalized_query = normalize_name(query_str);
-        let effective = if normalized_query.is_empty() { query_str } else { &normalized_query };
+        let effective = if normalized_query.is_empty() {
+            query_str
+        } else {
+            &normalized_query
+        };
         let effective_lower = effective.to_lowercase();
-        
+
         let matcher = SkimMatcherV2::default();
         let hymn_number = extract_hymn_number(query_str);
         let composite_parts = parse_composite_query(effective);
         let tokens = tokenize_query(&effective_lower);
 
         // Score all entries in parallel
-        let mut scored: Vec<(i64, &FileEntry)> = self.entries.par_iter()
+        let mut scored: Vec<(i64, &FileEntry)> = self
+            .entries
+            .par_iter()
             .filter_map(|entry| {
                 let score = self.score_entry(
-                    &matcher, entry, effective, &effective_lower,
-                    &query_lower, hymn_number.as_deref(), &composite_parts, &tokens,
+                    &matcher,
+                    entry,
+                    effective,
+                    &effective_lower,
+                    &query_lower,
+                    hymn_number.as_deref(),
+                    &composite_parts,
+                    &tokens,
                 )?;
                 Some((score, entry))
             })
             .collect();
-        
+
         // Sort by score descending
         scored.par_sort_unstable_by(|a, b| b.0.cmp(&a.0));
 
         // Apply adaptive threshold filtering
         let filtered = apply_threshold_filter(scored, 5);
 
-        filtered.into_iter()
+        filtered
+            .into_iter()
             .take(max_results)
             .map(|(_, e)| e.clone())
             .collect()
     }
 
     /// Score a single entry against the query
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn score_entry(
         &self,
         matcher: &SkimMatcherV2,
@@ -395,7 +424,9 @@ impl FileIndex {
         let mut quality = 0u8; // 0=none, 1=weak, 2=moderate, 3=strong
 
         // Fuzzy match score
-        let fuzzy = matcher.fuzzy_match(&entry.normalized_name, term).unwrap_or(0)
+        let fuzzy = matcher
+            .fuzzy_match(&entry.normalized_name, term)
+            .unwrap_or(0)
             .max(matcher.fuzzy_match(&entry.file_name, term).unwrap_or(0));
         score = score.max(fuzzy);
 
@@ -408,7 +439,8 @@ impl FileIndex {
             let len_bonus = (entry.file_name_lower.len() as i64) * 100;
             score = score.max(25000 + len_bonus);
             quality = 3;
-        } else if query_lower.contains(&entry.normalized_lower) && entry.normalized_lower.len() > 5 {
+        } else if query_lower.contains(&entry.normalized_lower) && entry.normalized_lower.len() > 5
+        {
             #[allow(clippy::cast_possible_wrap)]
             let len_bonus = (entry.normalized_lower.len() as i64) * 100;
             score = score.max(22000 + len_bonus);
@@ -439,12 +471,14 @@ impl FileIndex {
         // Composite query handling (e.g., "Prayer/Lord's Prayer")
         if let Some(last_part) = composite_parts.last() {
             let last_lower = last_part.to_lowercase();
-            if entry.normalized_name.eq_ignore_ascii_case(last_part) || 
-               entry.file_name.eq_ignore_ascii_case(last_part) {
+            if entry.normalized_name.eq_ignore_ascii_case(last_part)
+                || entry.file_name.eq_ignore_ascii_case(last_part)
+            {
                 score = score.max(20000);
                 quality = 3;
-            } else if entry.normalized_lower.starts_with(&last_lower) ||
-                      entry.file_name_lower.starts_with(&last_lower) {
+            } else if entry.normalized_lower.starts_with(&last_lower)
+                || entry.file_name_lower.starts_with(&last_lower)
+            {
                 score = score.max(15000);
                 quality = 3;
             } else if entry.normalized_lower.contains(&last_lower) {
@@ -457,16 +491,20 @@ impl FileIndex {
         for &token in tokens {
             if let Some(token_score) = score_token(matcher, entry, token) {
                 score = score.max(token_score);
-                if token_score > 3000 { quality = quality.max(2); }
-                else if token_score > 1000 { quality = quality.max(1); }
+                if token_score > 3000 {
+                    quality = quality.max(2);
+                } else if token_score > 1000 {
+                    quality = quality.max(1);
+                }
             }
         }
 
         // Hymn number matching
         if let Some(num) = hymn_number {
-            if entry.file_name_lower.contains(&format!("#{num}")) ||
-               entry.file_name_lower.contains(&format!(" {num} ")) ||
-               entry.file_name_lower.contains(&format!("-{num}")) {
+            if entry.file_name_lower.contains(&format!("#{num}"))
+                || entry.file_name_lower.contains(&format!(" {num} "))
+                || entry.file_name_lower.contains(&format!("-{num}"))
+            {
                 score = score.max(9000);
                 quality = 3;
             }
@@ -492,7 +530,12 @@ impl FileIndex {
         // Frequency bonus (previously selected files rank higher)
         let path_str = entry.full_path.to_string_lossy();
         #[allow(clippy::cast_possible_wrap)]
-        let freq_bonus = i64::from(self.selection_frequency.get(path_str.as_ref()).copied().unwrap_or(0)) * 500;
+        let freq_bonus = i64::from(
+            self.selection_frequency
+                .get(path_str.as_ref())
+                .copied()
+                .unwrap_or(0),
+        ) * 500;
         score += freq_bonus;
 
         // Filter out completely irrelevant matches
@@ -510,8 +553,7 @@ pub fn normalize_name(name: &str) -> String {
 
     static RE_BRACKETS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*\[[^\]]+\]\s*").unwrap());
-    static RE_HASH_NUM: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^\s*#\d+\s*").unwrap());
+    static RE_HASH_NUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*#\d+\s*").unwrap());
     static RE_HYMN_NUM: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*(?i)hymn\s+(?:#?\d+\s*|)").unwrap());
     static RE_ANTHEM: LazyLock<Regex> =
@@ -520,8 +562,7 @@ pub fn normalize_name(name: &str) -> String {
         LazyLock::new(|| Regex::new(r"^\s*\d+[\.:\-\s]+").unwrap());
     static RE_PUNCTUATION: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"[,;:\(\)\[\]'!?]").unwrap());
-    static RE_SPACES: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\s+").unwrap());
+    static RE_SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
     let mut s = RE_BRACKETS.replace(name, "").to_string();
     s = RE_HASH_NUM.replace(&s, "").to_string();
@@ -544,30 +585,35 @@ pub fn get_default_library_path() -> Option<PathBuf> {
 fn extract_hymn_number(text: &str) -> Option<String> {
     if let Some(pos) = text.find('#') {
         let start = pos + 1;
-        let end = text[start..].find(|c: char| !c.is_ascii_digit())
+        let end = text[start..]
+            .find(|c: char| !c.is_ascii_digit())
             .map_or(text.len(), |p| p + start);
         if start < end {
             return Some(text[start..end].to_string());
         }
     }
 
-        let lower = text.to_lowercase();
-        if let Some(pos) = lower.find("hymn") {
+    let lower = text.to_lowercase();
+    if let Some(pos) = lower.find("hymn") {
         let after = &text[pos + 4..];
         if let Some(digit_start) = after.find(|c: char| c.is_ascii_digit()) {
             let num_part = &after[digit_start..];
-            let end = num_part.find(|c: char| !c.is_ascii_digit()).unwrap_or(num_part.len());
-                if end > 0 {
+            let end = num_part
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(num_part.len());
+            if end > 0 {
                 return Some(num_part[..end].to_string());
             }
         }
     }
 
-        let trimmed = text.trim();
+    let trimmed = text.trim();
     if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
-        let end = trimmed.find(|c: char| !c.is_ascii_digit()).unwrap_or(trimmed.len());
-            if end > 0 {
-                return Some(trimmed[..end].to_string());
+        let end = trimmed
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(trimmed.len());
+        if end > 0 {
+            return Some(trimmed[..end].to_string());
         }
     }
 
@@ -577,9 +623,17 @@ fn extract_hymn_number(text: &str) -> Option<String> {
 /// Parse composite query parts (split by / or "and")
 fn parse_composite_query(query: &str) -> Vec<&str> {
     if query.contains('/') {
-        query.split('/').map(str::trim).filter(|s| !s.is_empty()).collect()
+        query
+            .split('/')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect()
     } else if query.to_lowercase().contains(" and ") {
-        query.split(" and ").map(str::trim).filter(|s| !s.is_empty()).collect()
+        query
+            .split(" and ")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect()
     } else {
         Vec::new()
     }
@@ -606,8 +660,9 @@ fn score_token(matcher: &SkimMatcherV2, entry: &FileEntry, token: &str) -> Optio
     if token.len() <= 2 && SKIP_WORDS.contains(&token) {
         return None;
     }
-    
-    let mut score = matcher.fuzzy_match(&entry.normalized_name, token)
+
+    let mut score = matcher
+        .fuzzy_match(&entry.normalized_name, token)
         .or_else(|| matcher.fuzzy_match(&entry.file_name, token))
         .unwrap_or(0);
 
@@ -620,21 +675,25 @@ fn score_token(matcher: &SkimMatcherV2, entry: &FileEntry, token: &str) -> Optio
     if entry.normalized_lower.contains(token) {
         score += 3000 + boost;
         // Word boundary bonus
-        if entry.normalized_lower.contains(&format!(" {token} ")) ||
-           entry.normalized_lower.starts_with(&format!("{token} ")) ||
-           entry.normalized_lower.ends_with(&format!(" {token}")) ||
-           entry.normalized_lower == token {
+        if entry.normalized_lower.contains(&format!(" {token} "))
+            || entry.normalized_lower.starts_with(&format!("{token} "))
+            || entry.normalized_lower.ends_with(&format!(" {token}"))
+            || entry.normalized_lower == token
+        {
             score += 2000;
         }
     } else if entry.file_name_lower.contains(token) {
         score += 2000 + boost;
     }
-    
+
     (score > 0).then_some(score)
 }
 
 /// Apply adaptive threshold filtering to results
-fn apply_threshold_filter(results: Vec<(i64, &FileEntry)>, min_desired: usize) -> Vec<(i64, &FileEntry)> {
+fn apply_threshold_filter(
+    results: Vec<(i64, &FileEntry)>,
+    min_desired: usize,
+) -> Vec<(i64, &FileEntry)> {
     if results.len() <= min_desired {
         return results;
     }
@@ -647,7 +706,8 @@ fn apply_threshold_filter(results: Vec<(i64, &FileEntry)>, min_desired: usize) -
     };
 
     if results.len() > min_desired * 2 {
-        let filtered: Vec<_> = results.iter()
+        let filtered: Vec<_> = results
+            .iter()
             .filter(|(s, _)| *s >= threshold)
             .copied()
             .collect();
@@ -659,26 +719,3 @@ fn apply_threshold_filter(results: Vec<(i64, &FileEntry)>, min_desired: usize) -
 
     results
 }
-
-/// Find matching files for multiple items (batch operation)
-pub fn find_matches_for_items<'a, I>(
-    items: I,
-    library_path: &Path,
-    max_results: usize,
-) -> HashMap<String, Vec<String>> 
-where
-    I: Iterator<Item = (&'a String, &'a Category)>,
-{
-    let Ok(index) = FileIndex::build(library_path) else {
-        return HashMap::new();
-    };
-
-    items.map(|(title, _)| {
-        let matches: Vec<String> = index.find_matches(title, max_results)
-            .into_iter()
-            .map(|e| e.file_name)
-                .collect();
-        (title.clone(), matches)
-    }).collect()
-    }
-    

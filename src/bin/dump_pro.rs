@@ -8,10 +8,15 @@
 //! slide generation issues.
 
 // Development/debug binary - allow expect/unwrap for simpler error handling
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::uninlined_format_args,
+    clippy::too_many_lines
+)]
 
-use prost::Message;
 use proflow::propresenter::generated::rv_data;
+use prost::Message;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -54,20 +59,41 @@ fn dump_json(path: &Path) {
     println!("{}", serde_json::to_string_pretty(&presentation).unwrap());
 }
 
+#[allow(clippy::too_many_lines)]
 fn dump_presentation(path: &Path) {
     let presentation = load_presentation(path);
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║ ProPresenter File Analysis: {}", path.file_name().unwrap().to_string_lossy());
+    println!(
+        "║ ProPresenter File Analysis: {}",
+        path.file_name().unwrap().to_string_lossy()
+    );
     println!("╚══════════════════════════════════════════════════════════════════╝");
     println!();
 
     // Basic info
     println!("📄 PRESENTATION INFO");
     println!("├─ Name: {}", presentation.name);
-    println!("├─ UUID: {:?}", presentation.uuid.as_ref().map(|u| &u.string));
-    println!("├─ Category: {:?}", if presentation.category.is_empty() { None } else { Some(&presentation.category) });
-    println!("└─ Notes: {:?}", if presentation.notes.is_empty() { None } else { Some(&presentation.notes) });
+    println!(
+        "├─ UUID: {:?}",
+        presentation.uuid.as_ref().map(|u| &u.string)
+    );
+    println!(
+        "├─ Category: {:?}",
+        if presentation.category.is_empty() {
+            None
+        } else {
+            Some(&presentation.category)
+        }
+    );
+    println!(
+        "└─ Notes: {:?}",
+        if presentation.notes.is_empty() {
+            None
+        } else {
+            Some(&presentation.notes)
+        }
+    );
     println!();
 
     // Application info
@@ -76,7 +102,10 @@ fn dump_presentation(path: &Path) {
         println!("├─ Application: {}", app.application);
         println!("├─ Platform: {}", app.platform);
         if let Some(v) = &app.application_version {
-            println!("└─ Version: {}.{}.{} ({})", v.major_version, v.minor_version, v.patch_version, v.build);
+            println!(
+                "└─ Version: {}.{}.{} ({})",
+                v.major_version, v.minor_version, v.patch_version, v.build
+            );
         }
         println!();
     }
@@ -89,10 +118,15 @@ fn dump_presentation(path: &Path) {
         let child_prefix = if is_last { " " } else { "│" };
 
         println!("{prefix}─ Cue {i}: \"{}\"", cue.name);
-        println!("{child_prefix}  ├─ UUID: {:?}", cue.uuid.as_ref().map(|u| &u.string));
+        println!(
+            "{child_prefix}  ├─ UUID: {:?}",
+            cue.uuid.as_ref().map(|u| &u.string)
+        );
         println!("{child_prefix}  ├─ Enabled: {}", cue.is_enabled);
-        println!("{child_prefix}  ├─ Completion: target={:?} action={}",
-            cue.completion_target_type, cue.completion_action_type);
+        println!(
+            "{child_prefix}  ├─ Completion: target={:?} action={}",
+            cue.completion_target_type, cue.completion_action_type
+        );
         println!("{child_prefix}  └─ Actions ({} total):", cue.actions.len());
 
         for (j, action) in cue.actions.iter().enumerate() {
@@ -100,12 +134,22 @@ fn dump_presentation(path: &Path) {
             let action_prefix = if is_last_action { "└" } else { "├" };
             let action_child = if is_last_action { " " } else { "│" };
 
-            println!("{child_prefix}     {action_prefix}─ Action {j}: \"{}\" (type={})",
-                action.name, action.r#type);
-            println!("{child_prefix}     {action_child}  ├─ UUID: {:?}",
-                action.uuid.as_ref().map(|u| &u.string));
-            println!("{child_prefix}     {action_child}  ├─ Enabled: {}", action.is_enabled);
-            println!("{child_prefix}     {action_child}  ├─ Duration: {}", action.duration);
+            println!(
+                "{child_prefix}     {action_prefix}─ Action {j}: \"{}\" (type={})",
+                action.name, action.r#type
+            );
+            println!(
+                "{child_prefix}     {action_child}  ├─ UUID: {:?}",
+                action.uuid.as_ref().map(|u| &u.string)
+            );
+            println!(
+                "{child_prefix}     {action_child}  ├─ Enabled: {}",
+                action.is_enabled
+            );
+            println!(
+                "{child_prefix}     {action_child}  ├─ Duration: {}",
+                action.duration
+            );
 
             // Analyze action type data
             if let Some(ref type_data) = action.action_type_data {
@@ -124,28 +168,47 @@ fn dump_presentation(path: &Path) {
         if let Some(g) = &group.group {
             println!("{prefix}─ Group: \"{}\"", g.name);
             println!("   ├─ UUID: {:?}", g.uuid.as_ref().map(|u| &u.string));
-            println!("   ├─ Color: r={:.2} g={:.2} b={:.2} a={:.2}",
+            println!(
+                "   ├─ Color: r={:.2} g={:.2} b={:.2} a={:.2}",
                 g.color.as_ref().map_or(0.0, |c| c.red),
                 g.color.as_ref().map_or(0.0, |c| c.green),
                 g.color.as_ref().map_or(0.0, |c| c.blue),
-                g.color.as_ref().map_or(0.0, |c| c.alpha));
-            println!("   ├─ App Group ID: {:?}", g.application_group_identifier.as_ref().map(|u| &u.string));
-            println!("   └─ Cue IDs: {:?}", group.cue_identifiers.iter()
-                .map(|u| &u.string).collect::<Vec<_>>());
+                g.color.as_ref().map_or(0.0, |c| c.alpha)
+            );
+            println!(
+                "   ├─ App Group ID: {:?}",
+                g.application_group_identifier.as_ref().map(|u| &u.string)
+            );
+            println!(
+                "   └─ Cue IDs: {:?}",
+                group
+                    .cue_identifiers
+                    .iter()
+                    .map(|u| &u.string)
+                    .collect::<Vec<_>>()
+            );
         }
     }
     println!();
 
     // Arrangements
-    println!("🎼 ARRANGEMENTS ({} total)", presentation.arrangements.len());
+    println!(
+        "🎼 ARRANGEMENTS ({} total)",
+        presentation.arrangements.len()
+    );
     for (i, arr) in presentation.arrangements.iter().enumerate() {
         let is_last = i == presentation.arrangements.len() - 1;
         let prefix = if is_last { "└" } else { "├" };
 
         println!("{prefix}─ Arrangement: \"{}\"", arr.name);
         println!("   ├─ UUID: {:?}", arr.uuid.as_ref().map(|u| &u.string));
-        println!("   └─ Group IDs: {:?}", arr.group_identifiers.iter()
-            .map(|u| &u.string).collect::<Vec<_>>());
+        println!(
+            "   └─ Group IDs: {:?}",
+            arr.group_identifiers
+                .iter()
+                .map(|u| &u.string)
+                .collect::<Vec<_>>()
+        );
     }
 
     if let Some(sel) = &presentation.selected_arrangement {
@@ -153,7 +216,11 @@ fn dump_presentation(path: &Path) {
     }
 }
 
-fn dump_action_type_data(type_data: &rv_data::action::ActionTypeData, parent_prefix: &str, child_prefix: &str) {
+fn dump_action_type_data(
+    type_data: &rv_data::action::ActionTypeData,
+    parent_prefix: &str,
+    child_prefix: &str,
+) {
     match type_data {
         rv_data::action::ActionTypeData::Slide(slide_type) => {
             println!("{parent_prefix}     {child_prefix}  └─ SlideType:");
@@ -163,7 +230,9 @@ fn dump_action_type_data(type_data: &rv_data::action::ActionTypeData, parent_pre
                         dump_presentation_slide(pres_slide, parent_prefix, child_prefix);
                     }
                     rv_data::action::slide_type::Slide::Prop(prop_slide) => {
-                        println!("{parent_prefix}     {child_prefix}     └─ PropSlide (not expanded)");
+                        println!(
+                            "{parent_prefix}     {child_prefix}     └─ PropSlide (not expanded)"
+                        );
                         let _ = prop_slide;
                     }
                 }
@@ -172,9 +241,11 @@ fn dump_action_type_data(type_data: &rv_data::action::ActionTypeData, parent_pre
         rv_data::action::ActionTypeData::Media(media_type) => {
             println!("{parent_prefix}     {child_prefix}  └─ MediaType:");
             if let Some(el) = &media_type.element {
-                println!("{parent_prefix}     {child_prefix}     └─ URL: storage={:?} platform={:?}",
+                println!(
+                    "{parent_prefix}     {child_prefix}     └─ URL: storage={:?} platform={:?}",
                     el.url.as_ref().map(|u| &u.storage),
-                    el.url.as_ref().map(|u| u.platform));
+                    el.url.as_ref().map(|u| u.platform)
+                );
             }
         }
         _ => {
@@ -183,7 +254,11 @@ fn dump_action_type_data(type_data: &rv_data::action::ActionTypeData, parent_pre
     }
 }
 
-fn dump_presentation_slide(slide: &rv_data::PresentationSlide, parent_prefix: &str, child_prefix: &str) {
+fn dump_presentation_slide(
+    slide: &rv_data::PresentationSlide,
+    parent_prefix: &str,
+    child_prefix: &str,
+) {
     println!("{parent_prefix}     {child_prefix}     ├─ PresentationSlide:");
 
     if let Some(notes) = &slide.notes {
@@ -192,8 +267,14 @@ fn dump_presentation_slide(slide: &rv_data::PresentationSlide, parent_prefix: &s
         println!("{parent_prefix}     {child_prefix}     │  ├─ Notes RTF: \"{preview}...\"");
     }
 
-    println!("{parent_prefix}     {child_prefix}     │  ├─ Transition: {:?}", slide.transition.is_some());
-    println!("{parent_prefix}     {child_prefix}     │  └─ Guidelines: {} items", slide.template_guidelines.len());
+    println!(
+        "{parent_prefix}     {child_prefix}     │  ├─ Transition: {:?}",
+        slide.transition.is_some()
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}     │  └─ Guidelines: {} items",
+        slide.template_guidelines.len()
+    );
 
     if let Some(base_slide) = &slide.base_slide {
         dump_base_slide(base_slide, parent_prefix, child_prefix);
@@ -202,28 +283,49 @@ fn dump_presentation_slide(slide: &rv_data::PresentationSlide, parent_prefix: &s
 
 fn dump_base_slide(slide: &rv_data::Slide, parent_prefix: &str, child_prefix: &str) {
     println!("{parent_prefix}     {child_prefix}     └─ BaseSlide:");
-    println!("{parent_prefix}     {child_prefix}        ├─ UUID: {:?}",
-        slide.uuid.as_ref().map(|u| &u.string));
-    println!("{parent_prefix}     {child_prefix}        ├─ Size: {:?}",
-        slide.size.as_ref().map(|s| format!("{}x{}", s.width, s.height)));
-    println!("{parent_prefix}     {child_prefix}        ├─ Draws BG: {}", slide.draws_background_color);
+    println!(
+        "{parent_prefix}     {child_prefix}        ├─ UUID: {:?}",
+        slide.uuid.as_ref().map(|u| &u.string)
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}        ├─ Size: {:?}",
+        slide
+            .size
+            .as_ref()
+            .map(|s| format!("{}x{}", s.width, s.height))
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}        ├─ Draws BG: {}",
+        slide.draws_background_color
+    );
 
     if let Some(bg) = &slide.background_color {
         println!("{parent_prefix}     {child_prefix}        ├─ BG Color: r={:.2} g={:.2} b={:.2} a={:.2}",
             bg.red, bg.green, bg.blue, bg.alpha);
     }
 
-    println!("{parent_prefix}     {child_prefix}        └─ Elements ({}):", slide.elements.len());
+    println!(
+        "{parent_prefix}     {child_prefix}        └─ Elements ({}):",
+        slide.elements.len()
+    );
 
     for (i, element) in slide.elements.iter().enumerate() {
         let is_last = i == slide.elements.len() - 1;
         let elem_prefix = if is_last { "└" } else { "├" };
 
         println!("{parent_prefix}     {child_prefix}           {elem_prefix}─ SlideElement {i}:");
-        println!("{parent_prefix}     {child_prefix}              ├─ Info: {} (flags)", element.info);
-        println!("{parent_prefix}     {child_prefix}              ├─ Reveal: type={} from_idx={}",
-            element.reveal_type, element.reveal_from_index);
-        println!("{parent_prefix}     {child_prefix}              ├─ DataLinks: {} items", element.data_links.len());
+        println!(
+            "{parent_prefix}     {child_prefix}              ├─ Info: {} (flags)",
+            element.info
+        );
+        println!(
+            "{parent_prefix}     {child_prefix}              ├─ Reveal: type={} from_idx={}",
+            element.reveal_type, element.reveal_from_index
+        );
+        println!(
+            "{parent_prefix}     {child_prefix}              ├─ DataLinks: {} items",
+            element.data_links.len()
+        );
 
         if let Some(graphics_element) = &element.element {
             dump_graphics_element(graphics_element, parent_prefix, child_prefix);
@@ -232,28 +334,58 @@ fn dump_base_slide(slide: &rv_data::Slide, parent_prefix: &str, child_prefix: &s
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn dump_graphics_element(elem: &rv_data::graphics::Element, parent_prefix: &str, child_prefix: &str) {
+#[allow(clippy::too_many_lines)]
+fn dump_graphics_element(
+    elem: &rv_data::graphics::Element,
+    parent_prefix: &str,
+    child_prefix: &str,
+) {
     println!("{parent_prefix}     {child_prefix}              └─ Graphics.Element:");
-    println!("{parent_prefix}     {child_prefix}                 ├─ Name: \"{}\"", elem.name);
-    println!("{parent_prefix}     {child_prefix}                 ├─ UUID: {:?}",
-        elem.uuid.as_ref().map(|u| &u.string));
+    println!(
+        "{parent_prefix}     {child_prefix}                 ├─ Name: \"{}\"",
+        elem.name
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}                 ├─ UUID: {:?}",
+        elem.uuid.as_ref().map(|u| &u.string)
+    );
 
     if let Some(bounds) = &elem.bounds {
         if let (Some(origin), Some(size)) = (&bounds.origin, &bounds.size) {
-            println!("{parent_prefix}     {child_prefix}                 ├─ Bounds: ({:.0},{:.0}) {}x{}",
-                origin.x, origin.y, size.width as i32, size.height as i32);
+            println!(
+                "{parent_prefix}     {child_prefix}                 ├─ Bounds: ({:.0},{:.0}) {}x{}",
+                origin.x, origin.y, size.width as i32, size.height as i32
+            );
         }
     }
 
-    println!("{parent_prefix}     {child_prefix}                 ├─ Rotation: {}", elem.rotation);
-    println!("{parent_prefix}     {child_prefix}                 ├─ Opacity: {}", elem.opacity);
-    println!("{parent_prefix}     {child_prefix}                 ├─ Locked: {}", elem.locked);
-    println!("{parent_prefix}     {child_prefix}                 ├─ Hidden: {}", elem.hidden);
-    println!("{parent_prefix}     {child_prefix}                 ├─ FlipMode: {}", elem.flip_mode);
+    println!(
+        "{parent_prefix}     {child_prefix}                 ├─ Rotation: {}",
+        elem.rotation
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}                 ├─ Opacity: {}",
+        elem.opacity
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}                 ├─ Locked: {}",
+        elem.locked
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}                 ├─ Hidden: {}",
+        elem.hidden
+    );
+    println!(
+        "{parent_prefix}     {child_prefix}                 ├─ FlipMode: {}",
+        elem.flip_mode
+    );
 
     // Fill
     if let Some(fill) = &elem.fill {
-        println!("{parent_prefix}     {child_prefix}                 ├─ Fill: enabled={}", fill.enable);
+        println!(
+            "{parent_prefix}     {child_prefix}                 ├─ Fill: enabled={}",
+            fill.enable
+        );
         if let Some(fill_type) = &fill.fill_type {
             match fill_type {
                 rv_data::graphics::fill::FillType::Color(c) => {
@@ -267,7 +399,9 @@ fn dump_graphics_element(elem: &rv_data::graphics::Element, parent_prefix: &str,
                     println!("{parent_prefix}     {child_prefix}                 │  └─ Media");
                 }
                 rv_data::graphics::fill::FillType::BackgroundEffect(_) => {
-                    println!("{parent_prefix}     {child_prefix}                 │  └─ BackgroundEffect");
+                    println!(
+                        "{parent_prefix}     {child_prefix}                 │  └─ BackgroundEffect"
+                    );
                 }
             }
         }
@@ -275,8 +409,10 @@ fn dump_graphics_element(elem: &rv_data::graphics::Element, parent_prefix: &str,
 
     // Stroke
     if let Some(stroke) = &elem.stroke {
-        println!("{parent_prefix}     {child_prefix}                 ├─ Stroke: enabled={} width={}",
-            stroke.enable, stroke.width);
+        println!(
+            "{parent_prefix}     {child_prefix}                 ├─ Stroke: enabled={} width={}",
+            stroke.enable, stroke.width
+        );
     }
 
     // Shadow
@@ -288,7 +424,10 @@ fn dump_graphics_element(elem: &rv_data::graphics::Element, parent_prefix: &str,
     // Path/Shape
     if let Some(path) = &elem.path {
         if let Some(shape) = &path.shape {
-            println!("{parent_prefix}     {child_prefix}                 ├─ Shape: type={}", shape.r#type);
+            println!(
+                "{parent_prefix}     {child_prefix}                 ├─ Shape: type={}",
+                shape.r#type
+            );
         }
     }
 
@@ -302,10 +441,22 @@ fn dump_graphics_element(elem: &rv_data::graphics::Element, parent_prefix: &str,
         println!("{parent_prefix}     {child_prefix}                    ├─ RTF ({} bytes): \"{preview}...\"",
             text.rtf_data.len());
 
-        println!("{parent_prefix}     {child_prefix}                    ├─ VertAlign: {}", text.vertical_alignment);
-        println!("{parent_prefix}     {child_prefix}                    ├─ ScaleBehavior: {}", text.scale_behavior);
-        println!("{parent_prefix}     {child_prefix}                    ├─ SuperscriptStd: {}", text.is_superscript_standardized);
-        println!("{parent_prefix}     {child_prefix}                    ├─ Transform: {}", text.transform);
+        println!(
+            "{parent_prefix}     {child_prefix}                    ├─ VertAlign: {}",
+            text.vertical_alignment
+        );
+        println!(
+            "{parent_prefix}     {child_prefix}                    ├─ ScaleBehavior: {}",
+            text.scale_behavior
+        );
+        println!(
+            "{parent_prefix}     {child_prefix}                    ├─ SuperscriptStd: {}",
+            text.is_superscript_standardized
+        );
+        println!(
+            "{parent_prefix}     {child_prefix}                    ├─ Transform: {}",
+            text.transform
+        );
 
         if let Some(margins) = &text.margins {
             println!("{parent_prefix}     {child_prefix}                    ├─ Margins: L={} R={} T={} B={}",
@@ -351,8 +502,14 @@ fn dump_graphics_element(elem: &rv_data::graphics::Element, parent_prefix: &str,
                     para.alignment, para.line_height_multiple);
             }
 
-            println!("{parent_prefix}     {child_prefix}                       ├─ Kerning: {}", attrs.kerning);
-            println!("{parent_prefix}     {child_prefix}                       └─ Superscript: {}", attrs.superscript);
+            println!(
+                "{parent_prefix}     {child_prefix}                       ├─ Kerning: {}",
+                attrs.kerning
+            );
+            println!(
+                "{parent_prefix}     {child_prefix}                       └─ Superscript: {}",
+                attrs.superscript
+            );
         }
     }
 }

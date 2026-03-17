@@ -15,7 +15,7 @@ pub fn string_to_uuid_or_generate(input: Option<&str>) -> String {
     match input {
         Some(s) if !s.is_empty() => {
             SystemUuid::parse_str(s).map_or_else(|_| generate_uuid(), |uuid| uuid.to_string())
-        },
+        }
         _ => generate_uuid(),
     }
 }
@@ -57,4 +57,4 @@ mod tests {
         let result = string_to_uuid_or_generate(None);
         assert_eq!(result.len(), 36);
     }
-} 
+}

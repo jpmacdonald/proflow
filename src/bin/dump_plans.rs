@@ -1,6 +1,8 @@
 //! Dump upcoming plan items from Planning Center for analysis.
 //!
-//! Usage: cargo run --bin dump_plans [-- --days 60]
+//! Usage: `cargo run --bin dump_plans [-- --days 60]`
+
+#![allow(clippy::expect_used, clippy::uninlined_format_args)]
 
 use proflow::config::Config;
 use proflow::planning_center::api::PlanningCenterClient;
@@ -28,7 +30,12 @@ async fn main() {
 
     println!("\n=== Plans ({}) ===\n", plans.len());
     for plan in &plans {
-        println!("--- {} | {} | {} ---", plan.service_name, plan.title, plan.date.format("%Y-%m-%d"));
+        println!(
+            "--- {} | {} | {} ---",
+            plan.service_name,
+            plan.title,
+            plan.date.format("%Y-%m-%d")
+        );
 
         let items = client
             .get_service_items(&plan.id)
@@ -40,19 +47,29 @@ async fn main() {
 
         for item in &items {
             let cat = format!("{:?}", item.category);
-            let song_info = item.song.as_ref().map(|s| {
-                format!(
-                    " [song: \"{}\", author: {:?}, arr: {:?}]",
-                    s.title,
-                    s.author.as_deref().unwrap_or("-"),
-                    s.arrangement.as_deref().unwrap_or("-"),
-                )
-            }).unwrap_or_default();
-            let scripture_info = item.scripture.as_ref().map(|s| {
-                format!(" [scripture: \"{}\"]", s.reference)
-            }).unwrap_or_default();
+            let song_info = item
+                .song
+                .as_ref()
+                .map(|s| {
+                    format!(
+                        " [song: \"{}\", author: {:?}, arr: {:?}]",
+                        s.title,
+                        s.author.as_deref().unwrap_or("-"),
+                        s.arrangement.as_deref().unwrap_or("-"),
+                    )
+                })
+                .unwrap_or_default();
+            let scripture_info = item
+                .scripture
+                .as_ref()
+                .map(|s| format!(" [scripture: \"{}\"]", s.reference))
+                .unwrap_or_default();
             let note = item.note.as_deref().unwrap_or("");
-            let note_info = if note.is_empty() { String::new() } else { format!(" (note: {note})") };
+            let note_info = if note.is_empty() {
+                String::new()
+            } else {
+                format!(" (note: {note})")
+            };
 
             println!(
                 "  {:>2}. [{:<8}] {}{}{}{}",

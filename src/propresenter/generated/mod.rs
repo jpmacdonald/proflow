@@ -4,12 +4,9 @@
 //! Only exposing the modules we need for our implementation.
 
 // Suppress warnings for auto-generated code
-#![allow(
-    missing_docs,
-    clippy::all,
-    clippy::pedantic,
-    clippy::nursery
-)]
+#![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 /// The rv_data module contains the Presentation and PropDocument types
+#[allow(dead_code, unused_imports)]
+#[rustfmt::skip]
 pub mod rv_data;

@@ -6,13 +6,18 @@
 // Development/debug binary - allow expect/unwrap for simpler error handling
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use proflow::propresenter::template::{TemplateCache, TemplateType, extract_template_slide, clone_slide_with_text, build_presentation_from_template};
+use proflow::propresenter::template::{
+    build_presentation_from_template_with_options, clone_slide_with_text, extract_template_slide,
+    TemplateCache, TemplateType, DEFAULT_MAX_LINES_PER_SLIDE,
+};
 use prost::Message;
 use std::path::PathBuf;
 
 fn main() {
     // Find templates
-    let template_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data").join("templates");
+    let template_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("templates");
     println!("Looking for templates in: {}", template_dir.display());
 
     let mut cache = TemplateCache::new(vec![template_dir]);
@@ -91,7 +96,13 @@ fn main() {
         "¹⁷and the fruitful field is deemed a forest.".to_string(),
     ];
 
-    let Some(presentation) = build_presentation_from_template("Test Scripture - Isaiah 32:15-17", &template, &content) else {
+    let Some(presentation) = build_presentation_from_template_with_options(
+        "Test Scripture - Isaiah 32:15-17",
+        &template,
+        &content,
+        45,
+        DEFAULT_MAX_LINES_PER_SLIDE,
+    ) else {
         eprintln!("Failed to build presentation!");
         return;
     };
@@ -103,11 +114,16 @@ fn main() {
 
     // Encode and write to file for inspection
     let encoded = presentation.encode_to_vec();
-    let output_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test_scripture.pro");
+    let output_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("test_scripture.pro");
     std::fs::write(&output_path, &encoded).expect("Failed to write test file");
 
     println!("\n📁 Written test file to: {}", output_path.display());
     println!("   {} bytes", encoded.len());
 
-    println!("\n🔍 Run 'cargo run --bin dump_pro -- {}' to inspect", output_path.display());
+    println!(
+        "\n🔍 Run 'cargo run --bin dump_pro -- {}' to inspect",
+        output_path.display()
+    );
 }

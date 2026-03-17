@@ -33,33 +33,6 @@ pub struct ItemState {
     pub slide_type: Option<SlideType>,
 }
 
-impl ItemState {
-    /// Create a new empty `ItemState`.
-    pub const fn new() -> Self {
-        Self {
-            completed: false,
-            ignored: false,
-            matched_file: None,
-            editor: None,
-            slide_type: None,
-        }
-    }
-
-    /// Check if this item has any meaningful state that should be persisted.
-    pub const fn has_content(&self) -> bool {
-        self.completed
-            || self.ignored
-            || self.matched_file.is_some()
-            || self.editor.is_some()
-            || self.slide_type.is_some()
-    }
-
-    /// Reset all state for this item.
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-}
-
 /// Thread-safe item state store with persistence support.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ItemStateStore {
@@ -82,14 +55,6 @@ impl ItemStateStore {
     /// Get a mutable reference to the state for an item, creating it if needed.
     pub fn get_mut(&mut self, id: &ItemId) -> &mut ItemState {
         self.states.entry(id.clone()).or_default()
-    }
-
-    /// Update state for an item using a closure.
-    pub fn update<F>(&mut self, id: &ItemId, f: F)
-    where
-        F: FnOnce(&mut ItemState),
-    {
-        f(self.get_mut(id));
     }
 
     /// Check if an item is completed.
@@ -146,31 +111,6 @@ impl ItemStateStore {
     pub fn clear(&mut self) {
         self.states.clear();
     }
-
-    /// Remove items that have no meaningful state.
-    pub fn compact(&mut self) {
-        self.states.retain(|_, state| state.has_content());
-    }
-
-    /// Get an iterator over all item IDs with state.
-    pub fn item_ids(&self) -> impl Iterator<Item = &ItemId> {
-        self.states.keys()
-    }
-
-    /// Get the number of items with state.
-    pub fn len(&self) -> usize {
-        self.states.len()
-    }
-
-    /// Check if the store is empty.
-    pub fn is_empty(&self) -> bool {
-        self.states.is_empty()
-    }
-
-    /// Remove state for a specific item.
-    pub fn remove(&mut self, id: &ItemId) -> Option<ItemState> {
-        self.states.remove(id)
-    }
 }
 
 #[cfg(test)]
@@ -185,7 +125,6 @@ mod tests {
         assert!(state.matched_file.is_none());
         assert!(state.editor.is_none());
         assert!(state.slide_type.is_none());
-        assert!(!state.has_content());
     }
 
     #[test]
@@ -202,40 +141,5 @@ mod tests {
         // Should exist now
         assert!(store.get(&id).is_some());
         assert!(store.is_completed(&id));
-    }
-
-    #[test]
-    fn test_store_update() {
-        let mut store = ItemStateStore::new();
-        let id = ItemId::new("test-item");
-
-        store.update(&id, |state| {
-            state.completed = true;
-            state.ignored = true;
-        });
-
-        assert!(store.is_completed(&id));
-        assert!(store.is_ignored(&id));
-    }
-
-    #[test]
-    fn test_store_compact() {
-        let mut store = ItemStateStore::new();
-        let id1 = ItemId::new("item1");
-        let id2 = ItemId::new("item2");
-
-        // id1 has content
-        store.set_completed(&id1, true);
-
-        // id2 was created but has no meaningful state
-        let _ = store.get_mut(&id2);
-
-        assert_eq!(store.len(), 2);
-
-        store.compact();
-
-        assert_eq!(store.len(), 1);
-        assert!(store.get(&id1).is_some());
-        assert!(store.get(&id2).is_none());
     }
 }
