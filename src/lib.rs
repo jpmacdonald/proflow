@@ -7,14 +7,13 @@
 pub mod app;
 pub mod bible;
 pub mod config;
-pub mod constants;
+pub mod mcp;
+pub mod editor;
 pub mod error;
 pub mod hymnal;
 pub mod item_state;
-pub mod lyrics;
 pub mod planning_center;
 pub mod propresenter;
 pub mod services;
-pub mod types;
 pub mod ui;
 pub mod utils;

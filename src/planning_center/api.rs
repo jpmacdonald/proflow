@@ -30,6 +30,8 @@ pub struct PlanningCenterClient {
     secret: String,
     /// HTTP client with timeout configuration
     client: Client,
+    /// Base URL used for API requests (allows overriding in tests)
+    base_url: String,
 }
 
 #[derive(Default)]
@@ -41,6 +43,15 @@ struct PaginatedResponse {
 impl PlanningCenterClient {
     /// Create a new Planning Center client from config
     pub fn new(config: &Config) -> Self {
+        Self::new_with_base_url(config, BASE_URL)
+    }
+
+    fn new_with_base_url(config: &Config, base_url: impl Into<String>) -> Self {
+        let base_url = base_url.into();
+        Self::with_base_url(config, normalize_base_url(&base_url))
+    }
+
+    fn with_base_url(config: &Config, base_url: String) -> Self {
         // Client::build() should never fail with default settings, but if it does,
         // we create a client without timeout rather than silently failing
         let client = Client::builder()
@@ -56,6 +67,7 @@ impl PlanningCenterClient {
             app_id: config.pco_app_id.clone(),
             secret: config.pco_secret.clone(),
             client,
+            base_url,
         }
     }
 
@@ -67,7 +79,7 @@ impl PlanningCenterClient {
 
     /// Internal method that performs the actual request with retry logic
     async fn get_url_with_retry(&self, url: &str, query: &[(&str, &str)]) -> Result<Value> {
-        let label = url.strip_prefix(BASE_URL).unwrap_or(url);
+        let label = url.strip_prefix(&self.base_url).unwrap_or(url);
         let mut last_error: Option<Error> = None;
         let mut backoff_ms = INITIAL_BACKOFF_MS;
 
@@ -153,7 +165,7 @@ impl PlanningCenterClient {
         query: &[(&str, &str)],
     ) -> Result<PaginatedResponse> {
         let mut response = PaginatedResponse::default();
-        let mut next_url = format!("{BASE_URL}{path}");
+        let mut next_url = join_base_and_path(&self.base_url, path);
         let mut is_first_page = true;
 
         loop {
@@ -423,27 +435,214 @@ fn classify_item(title: &str, has_song: bool) -> Category {
         return Category::Song;
     }
 
-    let upper = title.to_uppercase();
-    match () {
-        () if title.contains("Scripture") || title.contains("Reading") => Category::Title,
-        () if title.contains("Sermon") || title.contains("Message") => Category::Title,
-        () if title.contains("Announcements") || title.contains("Welcome") => Category::Graphic,
-        () if [
-            "PRE-SERVICE",
-            "SERVICE",
-            "POST-SERVICE",
-            "PRAISE",
-            "OFFERING",
-            "GIVING",
-            "PRAYER",
-            "LORD'S PRAYER",
-            "GREETING",
-        ]
-        .iter()
-        .any(|h| upper.contains(h)) =>
-        {
-            Category::Other
+    if title.contains("Scripture")
+        || title.contains("Reading")
+        || title.contains("Sermon")
+        || title.contains("Message")
+    {
+        Category::Title
+    } else if title.contains("Announcements") || title.contains("Welcome") {
+        Category::Graphic
+    } else if [
+        "PRE-SERVICE",
+        "SERVICE",
+        "POST-SERVICE",
+        "PRAISE",
+        "OFFERING",
+        "GIVING",
+        "PRAYER",
+        "LORD'S PRAYER",
+        "GREETING",
+    ]
+    .iter()
+    .any(|h| title.to_uppercase().contains(h))
+    {
+        Category::Other
+    } else {
+        Category::Text
+    }
+}
+
+fn normalize_base_url(base_url: &str) -> String {
+    base_url.trim_end_matches('/').to_string()
+}
+
+fn join_base_and_path(base_url: &str, path: &str) -> String {
+    let normalized_base = base_url.trim_end_matches('/');
+    let normalized_path = path.strip_prefix('/').unwrap_or(path);
+    format!("{normalized_base}/{normalized_path}")
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use httptest::{
+        matchers::request,
+        matchers::{all_of, contains, url_decoded},
+        responders::json_encoded,
+        Expectation, Server,
+    };
+    use serde_json::json;
+
+    fn test_config() -> Config {
+        Config {
+            pco_app_id: "dummy-app".to_string(),
+            pco_secret: "dummy-secret".to_string(),
+            ..Default::default()
         }
-        () => Category::Text,
+    }
+
+    #[test]
+    fn join_base_and_path_normalizes_slashes() {
+        assert_eq!(
+            join_base_and_path("https://example.test/", "/service_types"),
+            "https://example.test/service_types"
+        );
+        assert_eq!(
+            join_base_and_path("https://example.test", "plans/123/items"),
+            "https://example.test/plans/123/items"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_paginated_with_query_accumulates_pages() {
+        let server = Server::run();
+        let base_url = server.url_str("").trim_end_matches('/').to_string();
+
+        server.expect(
+            Expectation::matching(all_of![
+                request::method("GET"),
+                request::path("/service_types"),
+                request::query(url_decoded(contains(("per_page", "25")))),
+            ])
+            .respond_with(json_encoded(json!({
+                "data": [
+                    { "id": "1", "attributes": { "name": "Sunday" } }
+                ],
+                "links": {
+                    "next": format!("{base_url}/service_types?page=2")
+                }
+            }))),
+        );
+
+        server.expect(
+            Expectation::matching(all_of![
+                request::method("GET"),
+                request::path("/service_types"),
+                request::query(url_decoded(contains(("page", "2")))),
+            ])
+            .respond_with(json_encoded(json!({
+                "data": [
+                    { "id": "2", "attributes": { "name": "Wednesday" } }
+                ],
+                "links": {
+                    "next": null
+                }
+            }))),
+        );
+
+        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
+        let response = client
+            .get_paginated_with_query("/service_types", &[("per_page", "25")])
+            .await
+            .expect("pagination should succeed");
+
+        let ids: Vec<_> = response
+            .data
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+
+        assert_eq!(ids, vec!["1", "2"]);
+    }
+
+    #[tokio::test]
+    async fn get_service_items_merges_paginated_included_payloads() {
+        let server = Server::run();
+        let base_url = server.url_str("").trim_end_matches('/').to_string();
+
+        server.expect(
+            Expectation::matching(all_of![
+                request::method("GET"),
+                request::path("/plans/plan-1/items"),
+                request::query(url_decoded(contains(("include", "song,arrangement")))),
+                request::query(url_decoded(contains(("per_page", "100")))),
+            ])
+            .respond_with(json_encoded(json!({
+                "data": [
+                    {
+                        "id": "item-1",
+                        "attributes": {
+                            "title": "Amazing Grace",
+                            "description": "Opening song",
+                            "notes": "Sing all verses"
+                        },
+                        "relationships": {
+                            "song": { "data": { "id": "song-1" } },
+                            "arrangement": { "data": { "id": "arr-1" } }
+                        }
+                    }
+                ],
+                "included": [
+                    {
+                        "type": "Song",
+                        "id": "song-1",
+                        "attributes": {
+                            "title": "Amazing Grace",
+                            "author": "John Newton",
+                            "copyright": "Public Domain",
+                            "ccli_number": "12345"
+                        }
+                    }
+                ],
+                "links": {
+                    "next": format!("{base_url}/plans/plan-1/items?page=2")
+                }
+            }))),
+        );
+
+        server.expect(
+            Expectation::matching(all_of![
+                request::method("GET"),
+                request::path("/plans/plan-1/items"),
+                request::query(url_decoded(contains(("page", "2")))),
+            ])
+            .respond_with(json_encoded(json!({
+                "data": [],
+                "included": [
+                    {
+                        "type": "Arrangement",
+                        "id": "arr-1",
+                        "attributes": {
+                            "name": "Default Arrangement",
+                            "lyrics": "[Verse 1]\nAmazing grace"
+                        }
+                    }
+                ],
+                "links": {
+                    "next": null
+                }
+            }))),
+        );
+
+        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
+        let items = client
+            .get_service_items("plan-1")
+            .await
+            .expect("service items should resolve merged includes");
+
+        assert_eq!(items.len(), 1);
+
+        let item = &items[0];
+        assert_eq!(item.title, "Amazing Grace");
+        assert_eq!(item.category, Category::Song);
+
+        let song = item.song.as_ref().expect("song data should be linked");
+        assert_eq!(song.title, "Amazing Grace");
+        assert_eq!(song.author.as_deref(), Some("John Newton"));
+        assert_eq!(song.arrangement.as_deref(), Some("Default Arrangement"));
+        assert_eq!(song.lyrics.as_deref(), Some("[Verse 1]\nAmazing grace"));
     }
 }

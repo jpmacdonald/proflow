@@ -22,7 +22,7 @@ use crate::app::find_data_subdir;
 use crate::bible::{parse_scripture_ref, BibleService, BibleVersion};
 use crate::config::Config;
 use crate::planning_center::PlanningCenterClient;
-use crate::playlist_gen::{canonical_presentation_name, playlist_output_path};
+use crate::propresenter::playlist::{canonical_presentation_name, playlist_output_path};
 use crate::propresenter::playlist::{build_playlist, write_playlist_file, PlaylistEntry};
 use crate::propresenter::rtf::StyledSegment;
 use crate::propresenter::serialize::write_presentation_file;
@@ -31,13 +31,13 @@ use crate::propresenter::template::{
     build_combined_scripture_presentation, build_presentation_from_template_with_options,
     build_scripture_presentation, ScripturePassage, ThemeCache, DEFAULT_MAX_LINES_PER_SLIDE,
 };
-use crate::types::SlideType;
-use crate::utils::file_matcher::FileIndex;
+use crate::propresenter::SlideType;
+use crate::utils::file_index::FileIndex;
 
 use description_parser::to_styled_segments;
 
-/// Path to the item mappings file relative to the data directory.
-const ITEM_MAPPINGS_FILE: &str = "item_mappings.json";
+/// Path to the service config file relative to the data directory.
+const SERVICE_CONFIG_FILE: &str = "proflow.config.json";
 
 // ---------------------------------------------------------------------------
 // Server struct
@@ -73,7 +73,7 @@ impl ProFlowServer {
         let library_path = std::env::var("LIBRARY_DIR")
             .ok()
             .map(|s| PathBuf::from(shellexpand::tilde(&s).to_string()))
-            .or_else(crate::utils::file_matcher::get_default_library_path)
+            .or_else(crate::utils::file_index::get_default_library_path)
             .or_else(|| {
                 config.propresenter_path.as_ref().and_then(|pro_dir| {
                     let path = PathBuf::from(shellexpand::tilde(pro_dir).to_string())
@@ -94,8 +94,8 @@ impl ProFlowServer {
 
         // Load mappings to get theme name
         let data_dir = find_data_subdir("");
-        let mappings: preview::ItemMappings =
-            std::fs::read_to_string(data_dir.join(ITEM_MAPPINGS_FILE))
+        let mappings: preview::ServiceConfig =
+            std::fs::read_to_string(data_dir.join(SERVICE_CONFIG_FILE))
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
@@ -121,8 +121,8 @@ impl ProFlowServer {
 // ---------------------------------------------------------------------------
 
 impl ProFlowServer {
-    /// Infer the `SlideType` from a preview entry's type key.
-    fn infer_slide_type(entry: &preview::PreviewEntry) -> SlideType {
+    /// Resolve the `SlideType` for a preview entry from its type key.
+    fn slide_type_for_entry(entry: &preview::PreviewEntry) -> SlideType {
         match entry.item_type.as_deref() {
             Some("scripture") => SlideType::Scripture,
             Some("song") => SlideType::Lyrics,
@@ -152,11 +152,11 @@ impl ProFlowServer {
             .and_then(|u| uuid::Uuid::parse_str(&u.string).ok())
     }
 
-    /// Generate a presentation for an "edited" preview entry.
+    /// Generate a presentation from a preview entry's parsed description content.
     ///
-    /// Uses `parsed_content` if available, otherwise falls back to raw description.
+    /// Uses `parsed_content` if available, otherwise falls back to the library file as-is.
     #[allow(clippy::too_many_lines)]
-    async fn generate_edited_entry(
+    async fn generate_from_description(
         &self,
         entry: &preview::PreviewEntry,
         bg_override: Option<&str>,
@@ -179,7 +179,7 @@ impl ProFlowServer {
                 return Ok((
                     PlaylistEntry {
                         name: file_stem.to_string(),
-                        slide_type: Self::infer_slide_type(entry),
+                        slide_type: Self::slide_type_for_entry(entry),
                         from_matched_file: true,
                         presentation_path: file_path.clone(),
                         arrangement_uuid: None,
@@ -218,7 +218,7 @@ impl ProFlowServer {
             .ok_or_else(|| mcp_err(format!("No template slide: {slide_name}")))?;
 
         let presentation_name =
-            canonical_presentation_name(&entry.playlist_name, Self::infer_slide_type(entry));
+            canonical_presentation_name(&entry.playlist_name, Self::slide_type_for_entry(entry));
 
         let mut presentation = build_presentation_from_template_with_options(
             &presentation_name,
@@ -279,7 +279,7 @@ impl ProFlowServer {
         Ok((
             PlaylistEntry {
                 name: presentation_name,
-                slide_type: Self::infer_slide_type(entry),
+                slide_type: Self::slide_type_for_entry(entry),
                 from_matched_file: false,
                 presentation_path: output_path.display().to_string(),
                 arrangement_uuid: None,
@@ -289,13 +289,13 @@ impl ProFlowServer {
         ))
     }
 
-    /// Generate a presentation for a "created" preview entry (typically scripture).
+    /// Generate a scripture presentation from a preview entry's reference data.
     ///
     /// Handles both single-reference and multi-reference items. Multi-ref entries
     /// (identified by `scripture_refs`) produce a combined presentation with
     /// title → verses → blank divider for each passage.
     #[allow(clippy::too_many_lines)]
-    async fn generate_created_entry(
+    async fn generate_scripture(
         &self,
         entry: &preview::PreviewEntry,
         bg_override: Option<&str>,
@@ -744,8 +744,8 @@ impl ProFlowServer {
     #[tool(description = "Get formatting rules and context for preparing worship service slides. Call this FIRST before processing any plan — it explains how to handle responsive readings, scripture, songs, and other item types.")]
     async fn get_context(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         let data_dir = find_data_subdir("");
-        let mappings: preview::ItemMappings =
-            std::fs::read_to_string(data_dir.join(ITEM_MAPPINGS_FILE))
+        let mappings: preview::ServiceConfig =
+            std::fs::read_to_string(data_dir.join(SERVICE_CONFIG_FILE))
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
@@ -757,7 +757,7 @@ impl ProFlowServer {
 
         let macro_names = self.macro_cache.names().into_iter().map(String::from).collect::<Vec<_>>();
 
-        Ok(text_result(render_context(&mappings, theme_name.as_deref(), &slide_names, &macro_names)))
+        Ok(text_result(render_mcp_context(&mappings, theme_name.as_deref(), &slide_names, &macro_names)))
     }
 
     /// Fetch upcoming service plans from Planning Center.
@@ -851,8 +851,8 @@ impl ProFlowServer {
 
         // Load mappings
         let data_dir = find_data_subdir("");
-        let mappings: preview::ItemMappings =
-            std::fs::read_to_string(data_dir.join(ITEM_MAPPINGS_FILE))
+        let mappings: preview::ServiceConfig =
+            std::fs::read_to_string(data_dir.join(SERVICE_CONFIG_FILE))
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
@@ -1081,8 +1081,8 @@ impl ProFlowServer {
 
         // 2. Load mappings and build preview (re-derive everything — no stale state)
         let data_dir = find_data_subdir("");
-        let mappings: preview::ItemMappings =
-            std::fs::read_to_string(data_dir.join(ITEM_MAPPINGS_FILE))
+        let mappings: preview::ServiceConfig =
+            std::fs::read_to_string(data_dir.join(SERVICE_CONFIG_FILE))
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
@@ -1173,7 +1173,7 @@ impl ProFlowServer {
                         None
                     };
 
-                    let slide_type = Self::infer_slide_type(entry);
+                    let slide_type = Self::slide_type_for_entry(entry);
                     let file_stem = std::path::Path::new(&file_path)
                         .file_stem()
                         .and_then(|s| s.to_str())
@@ -1200,7 +1200,7 @@ impl ProFlowServer {
                 preview::PreviewStatus::Edited => {
                     // Generate from parsed content or description
                     let result = self
-                        .generate_edited_entry(entry, bg_override, arr_override)
+                        .generate_from_description(entry, bg_override, arr_override)
                         .await?;
                     let slides = result.1;
                     playlist_entries.push(result.0);
@@ -1217,7 +1217,7 @@ impl ProFlowServer {
                 preview::PreviewStatus::Created => {
                     // Scripture or other created items
                     let result = self
-                        .generate_created_entry(entry, bg_override)
+                        .generate_scripture(entry, bg_override)
                         .await?;
                     let slides = result.1;
                     playlist_entries.push(result.0);
@@ -1302,14 +1302,14 @@ impl ProFlowServer {
 }
 
 // ---------------------------------------------------------------------------
-// Context rendering — single source of truth from item_mappings.json
+// Context rendering — single source of truth from proflow.config.json
 // ---------------------------------------------------------------------------
 
 /// Render context documentation from the mappings config.
 ///
-/// Replaces `mcp_context.md` — everything derives from `item_mappings.json`.
+/// Replaces `mcp_context.md` — everything derives from `proflow.config.json`.
 #[allow(clippy::too_many_lines)]
-fn render_context(mappings: &preview::ItemMappings, theme_name: Option<&str>, theme_slides: &[String], macro_names: &[String]) -> String {
+fn render_mcp_context(mappings: &preview::ServiceConfig, theme_name: Option<&str>, theme_slides: &[String], macro_names: &[String]) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(4096);
 
@@ -1363,7 +1363,7 @@ fn render_context(mappings: &preview::ItemMappings, theme_name: Option<&str>, th
     out.push_str("Call `build_service` with `skip_positions` for any items the user wants removed,\n");
     out.push_str("and `overrides` for any corrections (different name, background, arrangement).\n\n");
     out.push_str("### Learning:\n");
-    out.push_str("If the user says \"X always maps to Y\", update `data/item_mappings.json` so\n");
+    out.push_str("If the user says \"X always maps to Y\", update `data/proflow.config.json` so\n");
     out.push_str("the mapping is permanent. This reduces future uncertain items.\n\n");
 
     // Presentation types table

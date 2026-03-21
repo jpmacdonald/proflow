@@ -62,7 +62,7 @@ impl HymnalService {
     pub fn lookup_from_title(&mut self, item_title: &str) -> Option<(String, Vec<String>)> {
         self.ensure_loaded();
 
-        if let Some(num) = extract_hymn_number(item_title) {
+        if let Some(num) = extract_hymn_number(item_title).and_then(|s| s.parse::<u32>().ok()) {
             if let Some(entry) = self.lookup_by_number(num) {
                 return Some((entry.title.clone(), entry.content.clone()));
             }
@@ -166,15 +166,33 @@ impl HymnalService {
     }
 }
 
-/// Extract a hymn number from an item title.
+/// Extract a hymn/item number from text.
 ///
-/// Recognizes patterns like `#510`, `Hymn #510`, `Hymn 510`.
-fn extract_hymn_number(text: &str) -> Option<u32> {
-    RE_HASH
-        .captures(text)
-        .or_else(|| RE_HYMN.captures(text))
-        .and_then(|caps| caps.get(1))
-        .and_then(|m| m.as_str().parse::<u32>().ok())
+/// Recognizes `#510`, `Hymn #510`, `Hymn 510`, and leading digits like `510 Title`.
+/// Returns the numeric string (e.g. `"510"`), not the surrounding text.
+pub fn extract_hymn_number(text: &str) -> Option<String> {
+    // Try "#123" pattern first
+    if let Some(caps) = RE_HASH.captures(text) {
+        return caps.get(1).map(|m| m.as_str().to_string());
+    }
+
+    // Try "Hymn 123" / "Hymn #123" pattern
+    if let Some(caps) = RE_HYMN.captures(text) {
+        return caps.get(1).map(|m| m.as_str().to_string());
+    }
+
+    // Fall back to leading digits
+    let trimmed = text.trim();
+    if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+        let end = trimmed
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(trimmed.len());
+        if end > 0 {
+            return Some(trimmed[..end].to_string());
+        }
+    }
+
+    None
 }
 
 /// Parse a hymnal filename like `#510 - Jesus Shall Reign` into (510, "Jesus Shall Reign").
@@ -193,14 +211,14 @@ mod tests {
 
     #[test]
     fn test_extract_hymn_number_hash() {
-        assert_eq!(extract_hymn_number("#510 Jesus Shall Reign"), Some(510));
-        assert_eq!(extract_hymn_number("Hymn #42 Amazing Grace"), Some(42));
+        assert_eq!(extract_hymn_number("#510 Jesus Shall Reign"), Some("510".to_string()));
+        assert_eq!(extract_hymn_number("Hymn #42 Amazing Grace"), Some("42".to_string()));
     }
 
     #[test]
     fn test_extract_hymn_number_word() {
-        assert_eq!(extract_hymn_number("Hymn 123"), Some(123));
-        assert_eq!(extract_hymn_number("hymn 7"), Some(7));
+        assert_eq!(extract_hymn_number("Hymn 123"), Some("123".to_string()));
+        assert_eq!(extract_hymn_number("hymn 7"), Some("7".to_string()));
     }
 
     #[test]

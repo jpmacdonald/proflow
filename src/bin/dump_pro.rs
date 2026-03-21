@@ -56,7 +56,10 @@ fn load_presentation(path: &Path) -> rv_data::Presentation {
 
 fn dump_json(path: &Path) {
     let presentation = load_presentation(path);
-    println!("{}", serde_json::to_string_pretty(&presentation).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&presentation).expect("failed to serialize presentation as JSON")
+    );
 }
 
 #[allow(clippy::too_many_lines)]
@@ -66,7 +69,7 @@ fn dump_presentation(path: &Path) {
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!(
         "║ ProPresenter File Analysis: {}",
-        path.file_name().unwrap().to_string_lossy()
+        path.file_name().expect("path has no filename").to_string_lossy()
     );
     println!("╚══════════════════════════════════════════════════════════════════╝");
     println!();
@@ -498,8 +501,11 @@ fn dump_graphics_element(
 
             // Paragraph style
             if let Some(para) = &attrs.paragraph_style {
-                println!("{parent_prefix}     {child_prefix}                       ├─ Paragraph: align={} lineHeight={}",
-                    para.alignment, para.line_height_multiple);
+                println!("{parent_prefix}     {child_prefix}                       ├─ Paragraph: align={} lineHeightMultiple={} lineSpacing={} minLineHeight={} maxLineHeight={} paraSpacing={} paraSpacingBefore={} firstLineIndent={} headIndent={} tailIndent={}",
+                    para.alignment, para.line_height_multiple, para.line_spacing,
+                    para.minimum_line_height, para.maximum_line_height,
+                    para.paragraph_spacing, para.paragraph_spacing_before,
+                    para.first_line_head_indent, para.head_indent, para.tail_indent);
             }
 
             println!(
@@ -518,13 +524,13 @@ fn diff_presentations(path1: &Path, path2: &Path) {
     let pres1 = load_presentation(path1);
     let pres2 = load_presentation(path2);
 
-    let json1 = serde_json::to_string_pretty(&pres1).unwrap();
-    let json2 = serde_json::to_string_pretty(&pres2).unwrap();
+    let json1 = serde_json::to_string_pretty(&pres1).expect("failed to serialize presentation 1 as JSON");
+    let json2 = serde_json::to_string_pretty(&pres2).expect("failed to serialize presentation 2 as JSON");
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║ Comparing:");
-    println!("║ 1: {}", path1.file_name().unwrap().to_string_lossy());
-    println!("║ 2: {}", path2.file_name().unwrap().to_string_lossy());
+    println!("║ 1: {}", path1.file_name().expect("path1 has no filename").to_string_lossy());
+    println!("║ 2: {}", path2.file_name().expect("path2 has no filename").to_string_lossy());
     println!("╚══════════════════════════════════════════════════════════════════╝");
     println!();
 

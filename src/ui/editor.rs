@@ -9,9 +9,10 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, SlideType, VerseGroup};
+use crate::app::{App, SlideType};
+use crate::editor::VerseGroup;
 use crate::bible::BibleVersion;
-use crate::constants::editor::MIN_WRAP_COLUMN;
+use crate::editor::MIN_WRAP_COLUMN;
 
 /// A visual line with its source content line index and character offset
 #[derive(Debug, Clone)]
@@ -123,12 +124,8 @@ pub fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
     let editor_area = main_layout[0];
     let side_pane_area = main_layout[1];
 
-    // Track viewport width for auto wrap column calculation
-    let new_width = editor_area.width as usize;
-    if app.editor.last_viewport_width != Some(new_width) {
-        app.editor.last_viewport_width = Some(new_width);
-        app.update_wrap_column_from_viewport();
-    }
+    // Synchronize editor viewport state with the current layout
+    let viewport_width = editor_area.width as usize;
 
     // Draw the side pane based on slide type
     draw_side_pane(f, app, side_pane_area);
@@ -158,34 +155,27 @@ pub fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) {
     // Get the inner area for the editor content
     let inner_area = editor_block.inner(editor_area);
 
-    // Compute visual lines with soft-wrapping
+    // Sync viewport dimensions and compute visual lines
+    app.editor
+        .sync_viewport(viewport_width, inner_area.height as usize);
     let visual_lines = compute_visual_lines(&app.editor.content, app.editor.wrap_column);
     let total_visual_lines = visual_lines.len();
 
-    // Update the viewport height
-    app.editor.viewport_height = inner_area.height as usize;
-
-    // Map cursor to visual line for scroll adjustment
+    // Map cursor to visual line and adjust scroll to keep it visible
     let (cursor_visual_y, cursor_visual_x) =
         cursor_to_visual(app.editor.cursor_y, app.editor.cursor_x, &visual_lines);
-
-    // Adjust scroll offset to keep cursor visible (in visual line space)
-    if cursor_visual_y < app.editor.scroll_offset {
-        app.editor.scroll_offset = cursor_visual_y;
-    } else if cursor_visual_y >= app.editor.scroll_offset + app.editor.viewport_height {
-        app.editor.scroll_offset = cursor_visual_y.saturating_sub(app.editor.viewport_height - 1);
-    }
+    app.editor.adjust_scroll(cursor_visual_y);
 
     // Calculate visible visual lines
     let start_visual = app.editor.scroll_offset;
     let end_visual = (start_visual + inner_area.height as usize).min(total_visual_lines);
 
     // Get the paragraph bounds for highlighting (in content line space)
-    let paragraph_bounds = app.get_current_paragraph_bounds();
+    let paragraph_bounds = app.editor.get_current_paragraph_bounds();
 
     // Convert selection coordinates to absolute positions for highlighting
     let selection_bounds = if app.editor.selection_active {
-        let (start_y, start_x, end_y, end_x) = get_selection_bounds(app);
+        let (start_y, start_x, end_y, end_x) = app.editor.get_selection_bounds();
         Some((start_y, start_x, end_y, end_x))
     } else {
         None
@@ -561,38 +551,4 @@ fn add_selection_spans_owned(
     }
 }
 
-const fn get_selection_bounds(app: &App) -> (usize, usize, usize, usize) {
-    if !app.editor.selection_active {
-        // If no selection, return cursor position for both start and end
-        return (
-            app.editor.cursor_y,
-            app.editor.cursor_x,
-            app.editor.cursor_y,
-            app.editor.cursor_x,
-        );
-    }
 
-    // Determine start and end points based on selection direction
-    let (start_y, start_x, end_y, end_x) = if (app.editor.selection_start_y < app.editor.cursor_y)
-        || (app.editor.selection_start_y == app.editor.cursor_y
-            && app.editor.selection_start_x < app.editor.cursor_x)
-    {
-        // Normal selection (top to bottom)
-        (
-            app.editor.selection_start_y,
-            app.editor.selection_start_x,
-            app.editor.cursor_y,
-            app.editor.cursor_x,
-        )
-    } else {
-        // Reverse selection (bottom to top)
-        (
-            app.editor.cursor_y,
-            app.editor.cursor_x,
-            app.editor.selection_start_y,
-            app.editor.selection_start_x,
-        )
-    };
-
-    (start_y, start_x, end_y, end_x)
-}

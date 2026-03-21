@@ -68,12 +68,18 @@ async fn main() {
             let note_info = if note.is_empty() {
                 String::new()
             } else {
-                format!(" (note: {note})")
+                format!("\n      note: {}", note.replace('\n', "\n            "))
             };
+            let desc_info = item
+                .description
+                .as_deref()
+                .filter(|d| !d.is_empty())
+                .map(|d| format!("\n      desc: {}", d.replace('\n', "\n            ")))
+                .unwrap_or_default();
 
             println!(
-                "  {:>2}. [{:<8}] {}{}{}{}",
-                item.position, cat, item.title, song_info, scripture_info, note_info
+                "  {:>2}. [{:<8}] {}{}{}{}{}",
+                item.position, cat, item.title, song_info, scripture_info, note_info, desc_info
             );
         }
         println!();

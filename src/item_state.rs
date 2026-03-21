@@ -5,9 +5,11 @@
 //! matched files, editor state, and slide types.
 
 use crate::app::EditorState;
-use crate::types::{ItemId, SlideType};
+use crate::planning_center::types::ItemId;
+use crate::propresenter::SlideType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// All persistent state for a single `Planning Center` item.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -110,6 +112,33 @@ impl ItemStateStore {
     /// Clear all state (for reload).
     pub fn clear(&mut self) {
         self.states.clear();
+    }
+
+    /// Application cache directory (`~/Library/Application Support/proflow/` on macOS).
+    /// Creates the directory if it does not exist.
+    pub fn cache_dir() -> Option<PathBuf> {
+        let dir = dirs::data_dir()?.join("proflow");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    }
+
+    /// Load persisted item states from `{cache_dir}/item_states.json`.
+    /// Returns a default (empty) store if the file is missing or corrupt.
+    pub fn load(cache_dir: &Path) -> Self {
+        let path = cache_dir.join("item_states.json");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|data| serde_json::from_str(&data).ok())
+            .unwrap_or_default()
+    }
+
+    /// Persist item states to `{cache_dir}/item_states.json`.
+    /// Silently ignores write errors (same strategy as `FileIndex`).
+    pub fn persist(&self, cache_dir: &Path) {
+        let path = cache_dir.join("item_states.json");
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(path, json);
+        }
     }
 }
 
