@@ -18,12 +18,18 @@ pub enum BibleVersion {
     NIV,
     /// King James Version
     KJV,
+    /// New King James Version
+    NKJV,
+    /// New Living Translation
+    NLT,
+    /// New American Standard Bible
+    NASB,
 }
 
 impl BibleVersion {
     /// Returns all available Bible versions.
     pub const fn all() -> &'static [Self] {
-        &[Self::NRSVue, Self::NRSV, Self::NIV, Self::KJV]
+        &[Self::NRSVue, Self::NRSV, Self::NIV, Self::KJV, Self::NKJV, Self::NLT, Self::NASB]
     }
 
     /// Returns the human-readable name of this version.
@@ -33,6 +39,9 @@ impl BibleVersion {
             Self::NRSV => "NRSV",
             Self::NIV => "NIV",
             Self::KJV => "KJV",
+            Self::NKJV => "NKJV",
+            Self::NLT => "NLT",
+            Self::NASB => "NASB",
         }
     }
 
@@ -43,6 +52,9 @@ impl BibleVersion {
             Self::NRSV => "NRSV.json",
             Self::NIV => "NIV.json",
             Self::KJV => "KJV.json",
+            Self::NKJV => "NKJV.json",
+            Self::NLT => "NLT.json",
+            Self::NASB => "NASB.json",
         }
     }
 
@@ -55,8 +67,17 @@ impl BibleVersion {
         if upper.contains("NRSV") {
             return Some(Self::NRSV);
         }
+        if upper.contains("NKJV") {
+            return Some(Self::NKJV);
+        }
         if upper.contains("NIV") {
             return Some(Self::NIV);
+        }
+        if upper.contains("NASB") {
+            return Some(Self::NASB);
+        }
+        if upper.contains("NLT") {
+            return Some(Self::NLT);
         }
         if upper.contains("KJV") {
             return Some(Self::KJV);
@@ -233,7 +254,7 @@ const SUPERSCRIPT_DIGITS: &[char] = &['⁰', '¹', '²', '³', '⁴', '⁵', '�
 /// Convert a number to superscript Unicode characters.
 ///
 /// These will be converted to RTF `\super` tags during `.pro` export.
-fn to_superscript(n: u32) -> String {
+pub fn to_superscript(n: u32) -> String {
     n.to_string()
         .chars()
         .map(|c| SUPERSCRIPT_DIGITS[c.to_digit(10).unwrap_or(0) as usize])
@@ -290,7 +311,10 @@ pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
         .trim_end_matches("NRSVue")
         .trim_end_matches("NRSVUE")
         .trim_end_matches("NRSV")
+        .trim_end_matches("NKJV")
         .trim_end_matches("NIV")
+        .trim_end_matches("NLT")
+        .trim_end_matches("NASB")
         .trim_end_matches("KJV")
         .trim_end_matches("ESV")
         .trim();
@@ -349,82 +373,111 @@ impl BibleService {
     }
 
     /// Load a Bible version into cache
-    fn load_version(&mut self, version: BibleVersion) -> Result<(), String> {
+    fn load_version(&mut self, version: BibleVersion) -> Result<(), crate::error::Error> {
         if self.cache.contains_key(&version) {
             return Ok(());
         }
 
         let path = self.data_path.join(version.file_name());
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            crate::error::Error::Scripture(format!("Failed to read {}: {e}", path.display()))
+        })?;
 
-        let data: BibleData = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
+        let data: BibleData = serde_json::from_str(&content).map_err(|e| {
+            crate::error::Error::Scripture(format!("Failed to parse {}: {e}", path.display()))
+        })?;
 
         self.cache.insert(version, data);
         Ok(())
     }
 
-    /// Look up verses and format with superscript verse numbers.
+    /// Look up individual verses preserving verse boundaries.
     ///
-    /// Returns a header for display and the verse text lines.
-    pub fn lookup(
+    /// Returns a header (with any missing verse numbers) and a `Vec<Verse>`.
+    pub fn lookup_verses(
         &mut self,
         reference: &ScriptureRef,
         version: BibleVersion,
-    ) -> Result<(ScriptureHeader, Vec<String>), String> {
+    ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
         self.load_version(version)?;
 
         let bible = self
             .cache
             .get(&version)
-            .ok_or_else(|| "Bible data not loaded".to_string())?;
+            .ok_or_else(|| crate::error::Error::Scripture("Bible data not loaded".to_string()))?;
 
-        let book_data = bible
-            .get(&reference.book)
-            .ok_or_else(|| format!("Book not found: {}", reference.book))?;
+        let book_data = bible.get(&reference.book).ok_or_else(|| {
+            crate::error::Error::Scripture(format!("Book not found: {}", reference.book))
+        })?;
 
         let chapter_data = book_data
             .get(&reference.chapter.to_string())
             .ok_or_else(|| {
-                format!(
+                crate::error::Error::Scripture(format!(
                     "Chapter {} not found in {}",
                     reference.chapter, reference.book
-                )
+                ))
             })?;
 
         let end = reference.end_verse.unwrap_or(reference.start_verse);
-        let mut lines = Vec::new();
+        let mut verses = Vec::new();
+        let mut missing_verses = Vec::new();
 
-        // Build header info (for pane title, not content)
+        for verse_num in reference.start_verse..=end {
+            if let Some(text) = chapter_data.get(&verse_num.to_string()) {
+                let clean_text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                verses.push(Verse {
+                    number: verse_num,
+                    text: clean_text,
+                });
+            } else {
+                missing_verses.push(verse_num);
+            }
+        }
+
         let header = ScriptureHeader {
             book: reference.book.clone(),
             chapter: reference.chapter,
             start_verse: reference.start_verse,
             end_verse: reference.end_verse,
             version,
+            missing_verses,
         };
 
-        // Build all verses as one continuous block of text
-        // User will add line breaks to create slides
+        Ok((header, verses))
+    }
+
+    /// Look up verses and format with superscript verse numbers.
+    ///
+    /// Returns a header for display and the verse text lines.
+    /// Legacy API — delegates to `lookup_verses()` and concatenates.
+    pub fn lookup(
+        &mut self,
+        reference: &ScriptureRef,
+        version: BibleVersion,
+    ) -> Result<(ScriptureHeader, Vec<String>), crate::error::Error> {
+        let (header, verses) = self.lookup_verses(reference, version)?;
+
         let mut verse_text = String::new();
-        for verse_num in reference.start_verse..=end {
-            if let Some(text) = chapter_data.get(&verse_num.to_string()) {
-                // Normalize whitespace in source text
-                let clean_text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                if !verse_text.is_empty() {
-                    verse_text.push(' ');
-                }
-                let _ = write!(verse_text, "{}{clean_text}", to_superscript(verse_num));
+        for verse in &verses {
+            if !verse_text.is_empty() {
+                verse_text.push(' ');
             }
+            let _ = write!(verse_text, "{}{}", to_superscript(verse.number), verse.text);
         }
 
-        // Single line of text - user will wrap/split as needed
-        lines.push(verse_text);
-        lines.push(String::new()); // Trailing empty line for editor
-
+        let lines = vec![verse_text, String::new()];
         Ok((header, lines))
     }
+}
+
+/// A single verse with its number and plain text content.
+#[derive(Debug, Clone)]
+pub struct Verse {
+    /// 1-based verse number.
+    pub number: u32,
+    /// Verse text without superscript prefix.
+    pub text: String,
 }
 
 /// Scripture header info for display in pane title
@@ -440,6 +493,8 @@ pub struct ScriptureHeader {
     pub end_verse: Option<u32>,
     /// Bible version used for lookup
     pub version: BibleVersion,
+    /// Verse numbers in the requested range that were not found in the data.
+    pub missing_verses: Vec<u32>,
 }
 
 impl ScriptureHeader {
