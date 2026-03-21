@@ -1,6 +1,8 @@
 //! RTF conversion utilities for `ProPresenter`.
 //!
 //! Provides RTF parsing and generation for `ProPresenter` slide content.
+//! All text generation flows through `StyledSegment` — a block of text with
+//! an optional color override. Plain text is just a segment with `color: None`.
 
 // Allow unwrap for compile-time constant regex patterns in LazyLock blocks
 #![allow(dead_code, clippy::unwrap_used)]
@@ -34,7 +36,10 @@ const fn superscript_to_digit(c: char) -> char {
     }
 }
 
-/// RTF generation options for `ProPresenter` compatibility
+/// RTF generation options for `ProPresenter` compatibility.
+///
+/// Represents the template's baseline style. Per-segment overrides in
+/// `StyledSegment` layer on top of these defaults.
 #[derive(Debug, Clone)]
 pub struct RtfOptions {
     /// Font name (default: Helvetica)
@@ -45,6 +50,10 @@ pub struct RtfOptions {
     pub color: (u8, u8, u8),
     /// Kerning value (default: 5)
     pub kerning: i32,
+    /// Whether the template baseline is bold
+    pub bold: bool,
+    /// Whether the template baseline is italic
+    pub italic: bool,
 }
 
 impl Default for RtfOptions {
@@ -54,60 +63,105 @@ impl Default for RtfOptions {
             font_size: 80,
             color: (255, 255, 255), // White
             kerning: 5,
+            bold: false,
+            italic: false,
         }
     }
 }
 
-/// Convert plain text to RTF format (simple version for backwards compatibility)
+// ---------------------------------------------------------------------------
+// StyledSegment — the universal text primitive
+// ---------------------------------------------------------------------------
+
+/// A section of text with an optional color override.
 ///
-/// Handles:
-/// - Unicode superscript digits → RTF \super tags
-/// - Newlines → \par
-/// - Basic escaping
-pub fn text_to_rtf(text: &str) -> String {
-    text_to_rtf_styled(text, &RtfOptions::default())
+/// This is the universal primitive for slide text. Every slide is built
+/// from segments. Segments with `color: None` use the template's default.
+/// Multiple segments on the same slide can have different colors (e.g.,
+/// white for LEADER and yellow for ALL in a responsive reading).
+#[derive(Debug, Clone, Default)]
+pub struct StyledSegment {
+    /// The text content of this segment.
+    pub text: String,
+    /// RGB color override. `None` = template default.
+    pub color: Option<(u8, u8, u8)>,
+    /// Bold override. `None` = template default.
+    pub bold: Option<bool>,
+    /// Italic override. `None` = template default.
+    pub italic: Option<bool>,
 }
 
-/// Convert plain text to ProPresenter-compatible RTF format with styling
+impl StyledSegment {
+    /// Create a segment with no style overrides (all template defaults).
+    pub fn unstyled(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Convert plain text lines into unstyled segments.
+    pub fn from_plain(lines: &[String]) -> Vec<Self> {
+        lines.iter().map(|l| Self::unstyled(l.as_str())).collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTF generation — single path for all text
+// ---------------------------------------------------------------------------
+
+/// Generate `ProPresenter`-compatible RTF from styled segments.
 ///
-/// Generates RTF that matches `ProPresenter`'s expected format including:
-/// - Proper color table with the specified color
-/// - Font table with the specified font
-/// - Paragraph formatting
-/// - Superscript support
-pub fn text_to_rtf_styled(text: &str, options: &RtfOptions) -> String {
-    let (r, g, b) = options.color;
+/// Builds a color table from all unique colors, then emits RTF that
+/// switches `\cfN` at each segment boundary. Segments without a color
+/// override use the base color from `options`.
+pub fn segments_to_rtf(segments: &[StyledSegment], options: &RtfOptions) -> String {
+    let base = options.color;
+
+    // Collect unique override colors for the color table
+    let mut extra_colors: Vec<(u8, u8, u8)> = Vec::new();
+    for seg in segments {
+        if let Some(c) = seg.color {
+            if c != base && !extra_colors.contains(&c) {
+                extra_colors.push(c);
+            }
+        }
+    }
+
+    let (r, g, b) = base;
     let font_size_halfpoints = options.font_size * 2;
 
-    // Build RTF header matching ProPresenter's format
     let mut rtf = String::new();
 
     // RTF header
     rtf.push_str(r"{\rtf1\ansi\ansicpg1252\cocoartf2821");
     rtf.push('\n');
-
-    // Cocoa platform settings
     rtf.push_str(r"\cocoatextscaling0\cocoaplatform0");
 
     // Font table
     let font_name = &options.font_name;
     let _ = write!(rtf, r"{{\fonttbl\f0\fswiss\fcharset0 {font_name};}}");
-
     rtf.push('\n');
 
-    // Color table - index 0 is auto, index 1 and 2 are our color
-    let _ = write!(
-        rtf,
-        r"{{\colortbl;\red{r}\green{g}\blue{b};\red{r}\green{g}\blue{b};}}"
-    );
-
+    // Color table: ;auto; base(1); base(2); extra(3)...
+    rtf.push_str(r"{\colortbl;");
+    let _ = write!(rtf, r"\red{r}\green{g}\blue{b};");
+    let _ = write!(rtf, r"\red{r}\green{g}\blue{b};");
+    for (er, eg, eb) in &extra_colors {
+        let _ = write!(rtf, r"\red{er}\green{eg}\blue{eb};");
+    }
+    rtf.push('}');
     rtf.push('\n');
 
-    // Expanded color table for Cocoa
-    rtf.push_str(r"{\*\expandedcolortbl;;\cssrgb\c100000\c100000\c100000;}");
+    // Expanded color table (Cocoa compatibility)
+    rtf.push_str(r"{\*\expandedcolortbl;;");
+    rtf.push_str(r"\cssrgb\c100000\c100000\c100000;");
+    for _ in &extra_colors {
+        rtf.push(';');
+    }
+    rtf.push('}');
     rtf.push('\n');
 
-    // Default tab width
     rtf.push_str(r"\deftab1680");
     rtf.push('\n');
 
@@ -116,84 +170,142 @@ pub fn text_to_rtf_styled(text: &str, options: &RtfOptions) -> String {
     rtf.push('\n');
     rtf.push('\n');
 
-    // Font size, color reference (cf2 = color table index 2), and kerning
-    // expnd is in quarter-points, expndtw is in twentieths of a point
-    // 1 quarter-point = 5 twentieths of a point (20/4 = 5)
     let kerning = options.kerning;
-    let kerning_tw = options.kerning * 5; // expndtw = expnd * 5 (quarter-points to twentieths)
-    let _ = write!(
-        rtf,
-        r"\f0\fs{font_size_halfpoints} \cf2 \kerning1\expnd{kerning}\expndtw{kerning_tw}"
-    );
+    let kerning_tw = options.kerning * 5;
 
-    rtf.push('\n');
+    // Resolve a segment's color to a color table index
+    let color_index = |seg: &StyledSegment| -> usize {
+        match seg.color {
+            None => 2,
+            Some(c) if c == base => 2,
+            Some(c) => extra_colors
+                .iter()
+                .position(|ec| *ec == c)
+                .map_or(2, |i| i + 3),
+        }
+    };
 
-    // Write the actual text content with proper RTF encoding
+    for (i, seg) in segments.iter().enumerate() {
+        if i > 0 {
+            rtf.push_str(r"\par ");
+        }
+
+        let cf = color_index(seg);
+        let _ = write!(
+            rtf,
+            r"\f0\fs{font_size_halfpoints} \cf{cf} \kerning1\expnd{kerning}\expndtw{kerning_tw}"
+        );
+
+        // Bold: segment override > template baseline
+        let is_bold = seg.bold.unwrap_or(options.bold);
+        rtf.push_str(if is_bold { r"\b" } else { r"\b0" });
+
+        // Italic: segment override > template baseline
+        let is_italic = seg.italic.unwrap_or(options.italic);
+        rtf.push_str(if is_italic { r"\i" } else { r"\i0" });
+
+        rtf.push('\n');
+
+        write_rtf_text(&mut rtf, &seg.text);
+    }
+
+    rtf.push('}');
+    rtf
+}
+
+/// Generate RTF bytes from styled segments.
+pub fn segments_to_rtf_bytes(segments: &[StyledSegment], options: &RtfOptions) -> Vec<u8> {
+    segments_to_rtf(segments, options).into_bytes()
+}
+
+// ---------------------------------------------------------------------------
+// Convenience wrappers for plain text
+// ---------------------------------------------------------------------------
+
+/// Convert plain text to `ProPresenter`-compatible RTF with styling options.
+///
+/// Thin wrapper around `segments_to_rtf` — splits text on newlines into
+/// default-colored segments.
+pub fn text_to_rtf_styled(text: &str, options: &RtfOptions) -> String {
+    let segments: Vec<StyledSegment> = text
+        .split('\n')
+        .map(StyledSegment::unstyled)
+        .collect();
+    segments_to_rtf(&segments, options)
+}
+
+/// Convert plain text to RTF format with default styling.
+pub fn text_to_rtf(text: &str) -> String {
+    text_to_rtf_styled(text, &RtfOptions::default())
+}
+
+/// Convert plain text to RTF bytes with default styling.
+pub fn text_to_rtf_bytes(text: &str) -> Vec<u8> {
+    text_to_rtf(text).into_bytes()
+}
+
+/// Convert plain text to RTF bytes with styling options.
+pub fn text_to_rtf_bytes_styled(text: &str, options: &RtfOptions) -> Vec<u8> {
+    text_to_rtf_styled(text, options).into_bytes()
+}
+
+// ---------------------------------------------------------------------------
+// RTF text encoding helpers
+// ---------------------------------------------------------------------------
+
+/// Write a block of text with RTF encoding (superscripts, escaping).
+fn write_rtf_text(rtf: &mut String, text: &str) {
     let mut in_super = false;
-
     for c in text.chars() {
         if is_superscript(c) {
-            // Start superscript if not already
             if !in_super {
                 rtf.push_str(r"{\super ");
                 in_super = true;
             }
             rtf.push(superscript_to_digit(c));
         } else {
-            // End superscript if we were in one
             if in_super {
                 rtf.push('}');
                 in_super = false;
             }
-
-            match c {
-                '\n' => rtf.push_str(r"\par "),
-                '\\' => rtf.push_str(r"\\"),
-                '{' => rtf.push_str(r"\{"),
-                '}' => rtf.push_str(r"\}"),
-                // Handle common Unicode characters that need escaping for Windows-1252
-                '\u{2019}' => rtf.push_str(r"\'92"), // Right single quote (')
-                '\u{2018}' => rtf.push_str(r"\'91"), // Left single quote (')
-                '\u{201C}' => rtf.push_str(r"\'93"), // Left double quote (")
-                '\u{201D}' => rtf.push_str(r"\'94"), // Right double quote (")
-                '\u{2013}' => rtf.push_str(r"\'96"), // En dash (–)
-                '\u{2014}' => rtf.push_str(r"\'97"), // Em dash (—)
-                '\u{2026}' => rtf.push_str(r"\'85"), // Ellipsis (…)
-                // Any other non-ASCII: use Unicode RTF escape
-                _ if c as u32 > 127 => {
-                    // \uN? where N is the Unicode code point, ? is a fallback char
-                    let code = c as i32;
-                    let _ = write!(rtf, r"\u{code}?");
-                }
-                _ => rtf.push(c),
-            }
+            write_rtf_char(rtf, c);
         }
     }
-
-    // Close any open superscript
     if in_super {
         rtf.push('}');
     }
-
-    // Close RTF document
-    rtf.push('}');
-    rtf
 }
 
-/// Convert plain text to RTF bytes (for `ProPresenter`)
-pub fn text_to_rtf_bytes(text: &str) -> Vec<u8> {
-    text_to_rtf(text).into_bytes()
+/// Write a single character with RTF escaping.
+fn write_rtf_char(rtf: &mut String, c: char) {
+    match c {
+        '\n' => rtf.push_str(r"\par "),
+        '\\' => rtf.push_str(r"\\"),
+        '{' => rtf.push_str(r"\{"),
+        '}' => rtf.push_str(r"\}"),
+        '\u{2019}' => rtf.push_str(r"\'92"), // Right single quote
+        '\u{2018}' => rtf.push_str(r"\'91"), // Left single quote
+        '\u{201C}' => rtf.push_str(r"\'93"), // Left double quote
+        '\u{201D}' => rtf.push_str(r"\'94"), // Right double quote
+        '\u{2013}' => rtf.push_str(r"\'96"), // En dash
+        '\u{2014}' => rtf.push_str(r"\'97"), // Em dash
+        '\u{2026}' => rtf.push_str(r"\'85"), // Ellipsis
+        _ if c as u32 > 127 => {
+            let code = c as i32;
+            let _ = write!(rtf, r"\u{code}?");
+        }
+        _ => rtf.push(c),
+    }
 }
 
-/// Convert plain text to RTF bytes with styling options
-pub fn text_to_rtf_bytes_styled(text: &str, options: &RtfOptions) -> Vec<u8> {
-    text_to_rtf_styled(text, options).into_bytes()
-}
+// ---------------------------------------------------------------------------
+// RTF extraction / parsing
+// ---------------------------------------------------------------------------
 
-/// Extract RTF options from existing RTF data
+/// Extract RTF options from existing RTF data.
 ///
 /// Parses RTF to extract font name, size, and color settings.
-/// This can be used to match the style of an existing template.
+/// Used to match the style of an existing template.
 #[allow(clippy::unnecessary_wraps)] // Returns None for future invalid-input cases
 pub fn extract_rtf_options(rtf_data: &[u8]) -> Option<RtfOptions> {
     let rtf = String::from_utf8_lossy(rtf_data);
@@ -253,49 +365,38 @@ pub fn extract_rtf_options(rtf_data: &[u8]) -> Option<RtfOptions> {
         }
     }
 
+    // Detect bold/italic — present means on, absent or \b0/\i0 means off
+    options.bold = rtf.contains(r"\b ") || rtf.contains(r"\b\");
+    options.italic = rtf.contains(r"\i ") || rtf.contains(r"\i\");
+
     Some(options)
 }
 
-/// Convert RTF data to plain text
+/// Convert RTF data to plain text.
 ///
-/// This is a simplified parser that handles common RTF patterns.
-/// For complex RTF documents, consider using a full RTF library.
+/// Simplified parser for common RTF patterns.
 pub fn rtf_to_text(rtf_data: &str) -> Option<String> {
-    // Header groups: fonttbl, colortbl, expandedcolortbl, stylesheet, etc.
     static RE_HEADER_GROUPS: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
         r"\{\\\*?\\(?:fonttbl|colortbl|expandedcolortbl|stylesheet|info|generator)[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"
     ).unwrap()
     });
-    // Convert \par and \line to newlines
     static RE_NEWLINE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\\(?:par|line)\s?").unwrap());
-    // Control words with optional numeric parameter and trailing space
     static RE_CONTROL: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\\[a-zA-Z]+[-]?\d*\s?").unwrap());
-    // Remaining braces
     static RE_BRACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[{}]").unwrap());
 
-    // Check if it looks like RTF
     if !rtf_data.starts_with("{\\rtf") {
         return None;
     }
 
     let mut text = rtf_data.to_string();
-
-    // Strip header groups (fonttbl, colortbl, etc.) that contain no user text
     text = RE_HEADER_GROUPS.replace_all(&text, "").to_string();
-
-    // Convert paragraph breaks to newlines
     text = RE_NEWLINE.replace_all(&text, "\n").to_string();
-
-    // Remove control words
     text = RE_CONTROL.replace_all(&text, "").to_string();
-
-    // Remove braces
     text = RE_BRACES.replace_all(&text, "").to_string();
 
-    // Clean up whitespace
     let text = text
         .lines()
         .map(str::trim)
@@ -335,5 +436,35 @@ mod tests {
         let result = rtf_to_text(rtf).unwrap();
         assert!(result.contains("Line 1"));
         assert!(result.contains("Line 2"));
+    }
+
+    #[test]
+    fn test_styled_segments_unstyled() {
+        let segments = StyledSegment::from_plain(&["Hello".to_string(), "World".to_string()]);
+        let rtf = segments_to_rtf(&segments, &RtfOptions::default());
+        assert!(rtf.contains("Hello"));
+        assert!(rtf.contains("World"));
+        assert!(!rtf.contains("\\red255\\green255\\blue0"));
+    }
+
+    #[test]
+    fn test_styled_segments_mixed_styles() {
+        let segments = vec![
+            StyledSegment::unstyled("Leader line"),
+            StyledSegment {
+                text: "Response line".to_string(),
+                color: Some((255, 255, 0)),
+                bold: Some(true),
+                ..StyledSegment::default()
+            },
+        ];
+        let rtf = segments_to_rtf(&segments, &RtfOptions::default());
+        // Yellow in color table
+        assert!(rtf.contains("\\red255\\green255\\blue0"));
+        // Bold on the response segment (followed by italic state)
+        assert!(rtf.contains("\\b\\i0"));
+        // Both texts present
+        assert!(rtf.contains("Leader line"));
+        assert!(rtf.contains("Response line"));
     }
 }

@@ -7,9 +7,8 @@
 #![allow(clippy::expect_used)]
 
 use crate::bible::{parse_scripture_ref, BibleService, BibleVersion, ScriptureHeader};
-use crate::hymnal::HymnalService;
-use crate::utils::file_matcher::{FileEntry, FileIndex};
-use arboard::Clipboard;
+use crate::hymnal::{extract_hymn_number, HymnalService};
+use crate::utils::file_index::{FileEntry, FileIndex};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 use ratatui::widgets::ListState;
@@ -17,16 +16,19 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::config::Config;
-use crate::constants::async_tasks::CHANNEL_BUFFER_SIZE;
-use crate::constants::editor::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_WRAP_COLUMN, MIN_WRAP_COLUMN};
-use crate::constants::search::MAX_SEARCH_RESULTS;
-use crate::constants::template::MIN_SLIDE_WRAP;
+use crate::editor::MIN_WRAP_COLUMN;
+
+/// Maximum number of search results to display.
+const MAX_SEARCH_RESULTS: usize = 20;
+
+/// Channel buffer size for async task communication.
+const CHANNEL_BUFFER_SIZE: usize = 10;
 use crate::error::Result;
 use crate::item_state::ItemStateStore;
 use crate::planning_center::types::{Category, Item, Plan, Service};
 use crate::planning_center::PlanningCenterClient;
 use crate::services::search::{CompositeSearch, SearchStrategy};
-use crate::types::ItemId;
+use crate::planning_center::types::ItemId;
 
 /// Messages sent from async tasks back to the main thread.
 #[derive(Debug)]
@@ -51,91 +53,12 @@ pub enum AppMode {
 }
 
 // Re-export SlideType from types module for backward compatibility
-pub use crate::types::SlideType;
+pub use crate::propresenter::SlideType;
 
-/// Persistent and transient state for the slide content editor.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct EditorState {
-    /// Lines of text content being edited.
-    pub content: Vec<String>,
-    /// Horizontal cursor position (column index).
-    #[serde(default)]
-    pub cursor_x: usize,
-    /// Vertical cursor position (line index).
-    #[serde(default)]
-    pub cursor_y: usize,
-    /// Number of lines scrolled past the top of the viewport.
-    #[serde(default)]
-    pub scroll_offset: usize,
-    /// Column at which text wraps for slide splitting.
-    #[serde(default = "default_wrap_column")]
-    pub wrap_column: usize,
-    /// Whether wrap column auto-adjusts to viewport width.
-    #[serde(default = "default_wrap_auto")]
-    pub wrap_auto: bool,
-    /// Last known viewport width for auto-wrap calculation.
-    #[serde(skip)]
-    pub last_viewport_width: Option<usize>,
-    /// Buffer for the `:command` being typed.
-    #[serde(skip)]
-    pub command_buffer: String,
-    /// Whether the editor is in `:command` entry mode.
-    #[serde(skip)]
-    pub is_command_mode: bool,
-    /// Visible line count for scroll calculations.
-    #[serde(skip, default = "default_viewport_height")]
-    pub viewport_height: usize,
-    /// Whether a text selection is currently active.
-    #[serde(skip)]
-    pub selection_active: bool,
-    /// Column where the current selection began.
-    #[serde(skip)]
-    pub selection_start_x: usize,
-    /// Line where the current selection began.
-    #[serde(skip)]
-    pub selection_start_y: usize,
-}
-
-const fn default_wrap_column() -> usize {
-    DEFAULT_WRAP_COLUMN
-}
-const fn default_wrap_auto() -> bool {
-    true
-}
-const fn default_viewport_height() -> usize {
-    DEFAULT_VIEWPORT_HEIGHT
-}
-
-/// A labeled song-section marker (e.g., Verse, Chorus) with its shorthand command.
-#[derive(Debug, Clone)]
-pub struct VerseGroup {
-    /// Full display name (e.g., "Verse 1").
-    pub name: String,
-    /// Short command string to insert this marker (e.g., "v1").
-    pub command: String,
-    /// Color used when rendering this marker in the UI.
-    pub color: Color,
-}
-
-impl Default for EditorState {
-    fn default() -> Self {
-        Self {
-            content: vec![String::new(), String::new()],
-            cursor_x: 0,
-            cursor_y: 0,
-            scroll_offset: 0,
-            wrap_column: default_wrap_column(),
-            wrap_auto: default_wrap_auto(),
-            last_viewport_width: None,
-            command_buffer: String::new(),
-            is_command_mode: false,
-            viewport_height: DEFAULT_VIEWPORT_HEIGHT,
-            selection_active: false,
-            selection_start_x: 0,
-            selection_start_y: 0,
-        }
-    }
-}
+// EditorState and VerseGroup are defined in crate::editor and re-exported here
+// for backward compatibility with external consumers.
+pub use crate::editor::EditorState;
+pub use crate::editor::VerseGroup;
 
 /// Root application state holding UI state, data caches, and service clients.
 #[allow(clippy::struct_excessive_bools)]
@@ -175,7 +98,7 @@ pub struct App {
     /// Whether the global `:command` bar is active.
     pub is_global_command_mode: bool,
     /// Flag to signal the application should exit.
-    pub should_quit: bool,
+    should_quit: bool,
     /// Loaded application configuration.
     pub config: Config,
     /// Planning Center API client, if credentials are configured.
@@ -229,7 +152,7 @@ pub struct App {
 /// 2. `<data_dir>/proflow/<subdir>` (installed location via `dirs::data_dir`)
 /// 3. `<exe_dir>/data/<subdir>` (next to the binary)
 /// 4. `data/<subdir>` (cwd fallback, works during `cargo run`)
-fn find_data_subdir(subdir: &str) -> PathBuf {
+pub fn find_data_subdir(subdir: &str) -> PathBuf {
     // Explicit override
     if let Ok(base) = std::env::var("PROFLOW_DATA") {
         let p = PathBuf::from(base).join(subdir);
@@ -282,7 +205,7 @@ impl App {
         let library_path = std::env::var("LIBRARY_DIR")
             .ok()
             .map(|s| PathBuf::from(shellexpand::tilde(&s).to_string()))
-            .or_else(crate::utils::file_matcher::get_default_library_path)
+            .or_else(crate::utils::file_index::get_default_library_path)
             .or_else(|| {
                 config.propresenter_path.as_ref().and_then(|pro_dir| {
                     let path = PathBuf::from(shellexpand::tilde(pro_dir).to_string())
@@ -394,7 +317,7 @@ impl App {
                     paths.push(lib.clone());
                 }
                 paths.push(find_data_subdir("templates"));
-                Some(crate::propresenter::template::TemplateCache::new(paths))
+                Some(crate::propresenter::template::ThemeCache::new(None, paths))
             },
             search: CompositeSearch::with_defaults(),
         }
@@ -517,6 +440,11 @@ impl App {
                 }
             }
 
+            // Load persisted item states from disk
+            if let Some(dir) = ItemStateStore::cache_dir() {
+                self.item_states = ItemStateStore::load(&dir);
+            }
+
             self.initialized = true;
         }
 
@@ -568,34 +496,15 @@ impl App {
             _ => {
                 // If we don't recognize it as global, maybe it's a verse marker
                 // Try to find a matching verse group
-                if let Some(marker) = self.parse_verse_marker(&self.global_command_buffer) {
+                if let Some(marker) = EditorState::parse_verse_marker(&self.global_command_buffer, &self.verse_groups) {
                     if self.mode == AppMode::Editor {
-                        self.insert_verse_marker(&marker);
+                        self.editor.insert_verse_marker(&marker);
                     }
                 }
             }
         }
     }
 
-    fn parse_verse_marker(&self, command: &str) -> Option<String> {
-        for group in &self.verse_groups {
-            // Check if command starts with a verse group command
-            if command.starts_with(&group.command) {
-                let remainder = &command[group.command.len()..];
-
-                // If there's nothing after the command, just use the base name
-                if remainder.is_empty() {
-                    return Some(group.name.clone());
-                }
-
-                // Otherwise, try to parse a number
-                if let Ok(num) = remainder.parse::<u32>() {
-                    return Some(format!("{} {num}", group.name));
-                }
-            }
-        }
-        None
-    }
 
     fn handle_service_list_input(&mut self, key: KeyEvent) {
         let service_focused = self.service_list_state.selected().is_some();
@@ -774,17 +683,11 @@ impl App {
                             let new_ignored = !currently_ignored;
                             self.item_states.set_ignored(&item_id, new_ignored);
 
-                            // Save to cache
-                            if let Some(index) = &mut self.file_index {
-                                index.save_item_ignored(&item.id, new_ignored);
-                            }
-
                             if new_ignored {
                                 self.item_states.set_completed(&item_id, false);
-                                if let Some(index) = &mut self.file_index {
-                                    index.save_item_completion(&item.id, false);
-                                }
                             }
+
+                            self.persist_item_states();
 
                             if let Some(next_idx) = self.find_next_uncompleted_item(selected_idx) {
                                 self.item_list_state.select(Some(next_idx));
@@ -897,7 +800,7 @@ impl App {
         }
 
         // Ensure there's always an empty line at the end
-        self.ensure_empty_line_at_end();
+        self.editor.ensure_empty_line_at_end();
 
         // Update the stored editor state in the store
         if let Some(item_idx) = self.item_list_state.selected() {
@@ -994,30 +897,20 @@ impl App {
                         let item_id = ItemId::new(&item.id);
 
                         if has_content {
-                            // Save editor state - this is a custom creation
+                            // Save editor state — this is a custom creation
                             self.item_states
                                 .set_editor(&item_id, Some(self.editor.clone()));
 
-                            // Clear any matched file - custom creation and file match are mutually exclusive
+                            // Clear any matched file — custom creation and file match are mutually exclusive
                             self.item_states.set_matched_file(&item_id, None);
 
                             // Mark as complete since we have content
                             self.item_states.set_completed(&item_id, true);
-
-                            // Persist to cache
-                            if let Some(index) = &mut self.file_index {
-                                index.save_editor_state(&item.id, &self.editor);
-                                index.item_file_selections.remove(&item.id);
-                                index.save_item_completion(&item.id, true);
-                            }
                         } else {
-                            // No content - clear editor state
+                            // No content — clear editor state
                             self.item_states.set_editor(&item_id, None);
-                            if let Some(index) = &mut self.file_index {
-                                index.editor_states.remove(&item.id);
-                                index.persist();
-                            }
                         }
+                        self.persist_item_states();
                     }
                 }
                 self.mode = AppMode::ItemList;
@@ -1049,7 +942,7 @@ impl App {
                         self.editor.cursor_x = last_line_len;
                     }
                 } else {
-                    self.insert_char('a');
+                    self.editor.insert_char('a');
                 }
             }
             // Cut (Cmd+X or Ctrl+X)
@@ -1057,9 +950,9 @@ impl App {
                 if key.modifiers.contains(KeyModifiers::META)
                     || key.modifiers.contains(KeyModifiers::CONTROL)
                 {
-                    self.cut_selection();
+                    self.editor.cut_selection();
                 } else {
-                    self.insert_char('x');
+                    self.editor.insert_char('x');
                 }
             }
             // Copy (Cmd+C or Ctrl+C)
@@ -1067,9 +960,9 @@ impl App {
                 if key.modifiers.contains(KeyModifiers::META)
                     || key.modifiers.contains(KeyModifiers::CONTROL)
                 {
-                    self.copy_selection();
+                    self.editor.copy_selection();
                 } else {
-                    self.insert_char('c');
+                    self.editor.insert_char('c');
                 }
             }
             // Paste (Cmd+V or Ctrl+V)
@@ -1077,9 +970,9 @@ impl App {
                 if key.modifiers.contains(KeyModifiers::META)
                     || key.modifiers.contains(KeyModifiers::CONTROL)
                 {
-                    self.paste_from_clipboard();
+                    self.editor.paste_from_clipboard();
                 } else {
-                    self.insert_char('v');
+                    self.editor.insert_char('v');
                 }
             }
             // Terminal-friendly keybindings for wrap guide
@@ -1095,20 +988,20 @@ impl App {
             }
             // Handle keyboard selection with Shift+Arrow keys
             KeyCode::Left => {
-                self.handle_left_key(key.modifiers.contains(KeyModifiers::SHIFT));
+                self.editor.handle_left_key(key.modifiers.contains(KeyModifiers::SHIFT));
             }
             KeyCode::Right => {
-                self.handle_right_key(key.modifiers.contains(KeyModifiers::SHIFT));
+                self.editor.handle_right_key(key.modifiers.contains(KeyModifiers::SHIFT));
             }
             KeyCode::Up => {
-                self.handle_up_key(key.modifiers.contains(KeyModifiers::SHIFT));
+                self.editor.handle_up_key(key.modifiers.contains(KeyModifiers::SHIFT));
             }
             KeyCode::Down => {
-                self.handle_down_key(key.modifiers.contains(KeyModifiers::SHIFT));
+                self.editor.handle_down_key(key.modifiers.contains(KeyModifiers::SHIFT));
             }
             // Regular character input - HJKL keys now work correctly
             KeyCode::Char(c) => {
-                self.insert_char(c);
+                self.editor.insert_char(c);
             }
             KeyCode::Enter => {
                 let current_line = &self.editor.content[self.editor.cursor_y];
@@ -1139,102 +1032,6 @@ impl App {
         }
     }
 
-    /// Moves the cursor and manages selection state based on whether Shift is held.
-    const fn handle_cursor_movement(&mut self, new_y: usize, new_x: usize, is_shift_pressed: bool) {
-        if is_shift_pressed {
-            // Start selection if not already active
-            if !self.editor.selection_active {
-                self.editor.selection_active = true;
-                self.editor.selection_start_x = self.editor.cursor_x;
-                self.editor.selection_start_y = self.editor.cursor_y;
-            }
-        } else {
-            // Clear selection when moving without shift
-            self.editor.selection_active = false;
-        }
-
-        self.editor.cursor_y = new_y;
-        self.editor.cursor_x = new_x;
-    }
-
-    fn handle_left_key(&mut self, is_shift_pressed: bool) {
-        if self.editor.cursor_x > 0 {
-            self.handle_cursor_movement(
-                self.editor.cursor_y,
-                self.editor.cursor_x - 1,
-                is_shift_pressed,
-            );
-        } else if self.editor.cursor_y > 0 {
-            let new_y = self.editor.cursor_y - 1;
-            let new_x = self.editor.content.get(new_y).map_or(0, String::len);
-            self.handle_cursor_movement(new_y, new_x, is_shift_pressed);
-        }
-    }
-
-    fn handle_right_key(&mut self, is_shift_pressed: bool) {
-        let current_line_len = self
-            .editor
-            .content
-            .get(self.editor.cursor_y)
-            .map_or(0, String::len);
-
-        if self.editor.cursor_x < current_line_len {
-            // Simple move right
-            self.handle_cursor_movement(
-                self.editor.cursor_y,
-                self.editor.cursor_x + 1,
-                is_shift_pressed,
-            );
-        } else if self.editor.cursor_y < self.editor.content.len() - 1 {
-            // Move to start of next line
-            self.handle_cursor_movement(self.editor.cursor_y + 1, 0, is_shift_pressed);
-        }
-    }
-
-    fn handle_up_key(&mut self, is_shift_pressed: bool) {
-        if self.editor.cursor_y > 0 {
-            let new_y = self.editor.cursor_y - 1;
-            let new_x = self
-                .editor
-                .content
-                .get(new_y)
-                .map_or(0, |line| self.editor.cursor_x.min(line.len()));
-            self.handle_cursor_movement(new_y, new_x, is_shift_pressed);
-        }
-    }
-
-    fn handle_down_key(&mut self, is_shift_pressed: bool) {
-        if self.editor.cursor_y < self.editor.content.len() - 1 {
-            let new_y = self.editor.cursor_y + 1;
-            let new_x = self
-                .editor
-                .content
-                .get(new_y)
-                .map_or(0, |line| self.editor.cursor_x.min(line.len()));
-            self.handle_cursor_movement(new_y, new_x, is_shift_pressed);
-        }
-    }
-
-    // Helper method to safely add or update content at a specific position
-    fn insert_or_append_at(&mut self, pos: usize, content: String) {
-        if pos < self.editor.content.len() {
-            self.editor.content.insert(pos, content);
-        } else {
-            self.editor.content.push(content);
-        }
-    }
-
-    fn insert_char(&mut self, c: char) {
-        if self.editor.cursor_y >= self.editor.content.len() {
-            self.editor.content.push(String::new());
-        }
-        let line = &mut self.editor.content[self.editor.cursor_y];
-        if self.editor.cursor_x > line.len() {
-            line.push_str(&" ".repeat(self.editor.cursor_x - line.len()));
-        }
-        line.insert(self.editor.cursor_x, c);
-        self.editor.cursor_x += 1;
-    }
 
     fn execute_editor_command(&mut self) {
         let cmd = self.editor.command_buffer.clone();
@@ -1476,7 +1273,7 @@ impl App {
                         // Insert selected marker
                         if let Some(group) = self.verse_groups.get(self.editor_side_pane_idx) {
                             let marker = group.name.clone();
-                            self.insert_verse_marker(&marker);
+                            self.editor.insert_verse_marker(&marker);
                         }
                         self.editor_side_pane_focused = false;
                     }
@@ -1530,7 +1327,7 @@ impl App {
                 self.editor.cursor_x = 0;
                 self.editor.cursor_y = 0;
                 self.editor.scroll_offset = 0;
-                self.clamp_cursor();
+                self.editor.clamp_cursor();
             }
             Err(e) => {
                 self.error_message = Some(format!("Failed: {e}"));
@@ -1602,7 +1399,7 @@ impl App {
                     ..EditorState::default()
                 };
                 self.mode = AppMode::Editor;
-                self.clamp_cursor();
+                self.editor.clamp_cursor();
             }
             Err(e) => {
                 self.error_message = Some(format!("Failed to load scripture: {e}"));
@@ -1624,39 +1421,63 @@ impl App {
     fn export_editor_to_pro_with_name(&mut self, name: &str) {
         use crate::propresenter::serialize::write_presentation_file;
         use crate::propresenter::template::{
-            build_presentation_from_template_with_options, TemplateType,
+            build_presentation_from_template_with_options,
             DEFAULT_MAX_LINES_PER_SLIDE,
         };
 
-        // Map slide type to template type
-        let template_type = match self.current_slide_type {
-            SlideType::Scripture => TemplateType::Scripture,
-            SlideType::Lyrics => TemplateType::Song,
-            SlideType::Title | SlideType::Text | SlideType::Graphic => TemplateType::Info,
+        // Map slide type to template slide name
+        let slide_name = match self.current_slide_type {
+            SlideType::Scripture => "scripture",
+            SlideType::Lyrics => "song",
+            SlideType::Title | SlideType::Text | SlideType::Graphic => "info",
         };
 
-        // Get template - require it to exist
-        let Some(template) = self
+        // Get template slide - require it to exist
+        let Some(template_slide) = self
             .template_cache
             .as_mut()
-            .and_then(|c| c.get(template_type).cloned())
+            .and_then(|c| c.get(slide_name).cloned())
         else {
             self.error_message = Some(format!(
-                "No template found! Create '{}' in your ProPresenter library with your desired styling.",
-                template_type.filename()
+                "No template slide '{slide_name}' found! Configure a theme or add template files."
             ));
             return;
         };
 
         // Build presentation from template with auto-splitting
         let wrap_col = self.editor.wrap_column;
-        let presentation_name = Self::canonical_presentation_name(name, self.current_slide_type);
+
+        // For scripture, include version in filename and add a title slide
+        let (presentation_name, title_slide) = if self.current_slide_type == SlideType::Scripture {
+            if let Some(ref header) = self.current_scripture_header {
+                (
+                    crate::propresenter::playlist::canonical_presentation_name(
+                        &header.display(),
+                        self.current_slide_type,
+                    ),
+                    Some(header.display()),
+                )
+            } else {
+                (
+                    crate::propresenter::playlist::canonical_presentation_name(name, self.current_slide_type),
+                    None,
+                )
+            }
+        } else {
+            (
+                crate::propresenter::playlist::canonical_presentation_name(name, self.current_slide_type),
+                None,
+            )
+        };
+
+        let segments = crate::propresenter::rtf::StyledSegment::from_plain(&self.editor.content);
         let Some(presentation) = build_presentation_from_template_with_options(
             &presentation_name,
-            &template,
-            &self.editor.content,
+            &template_slide,
+            &segments,
             wrap_col,
             DEFAULT_MAX_LINES_PER_SLIDE,
+            title_slide.as_deref(),
         ) else {
             self.error_message = Some("Failed to build presentation from template".to_string());
             return;
@@ -1680,6 +1501,7 @@ impl App {
                             Some(output_path.to_string_lossy().to_string()),
                         );
                         self.item_states.set_completed(&item_id, true);
+                        self.persist_item_states();
                     }
                 }
 
@@ -1697,17 +1519,6 @@ impl App {
         self.items.get(item_idx).map(|i| i.title.clone())
     }
 
-    fn canonical_presentation_name(name: &str, slide_type: SlideType) -> String {
-        use crate::propresenter::playlist::sanitize_filename;
-
-        let normalized = sanitize_filename(name, slide_type);
-        if normalized.is_empty() {
-            "Untitled".to_string()
-        } else {
-            normalized
-        }
-    }
-
     fn get_pro_output_path(&self, name: &str) -> std::path::PathBuf {
         use crate::propresenter::playlist::sanitize_filename;
 
@@ -1723,35 +1534,6 @@ impl App {
             &safe_name
         };
         base_path.join(format!("{safe_name}.pro"))
-    }
-
-    /// Clamp cursor to valid content positions
-    pub fn clamp_cursor(&mut self) {
-        if self.editor.content.is_empty() {
-            self.editor.content.push(String::new());
-        }
-        self.editor.cursor_y = self
-            .editor
-            .cursor_y
-            .min(self.editor.content.len().saturating_sub(1));
-        let line_len = self
-            .editor
-            .content
-            .get(self.editor.cursor_y)
-            .map_or(0, String::len);
-        self.editor.cursor_x = self.editor.cursor_x.min(line_len);
-    }
-
-    /// Update wrap column from viewport width if auto-wrap is enabled
-    pub fn update_wrap_column_from_viewport(&mut self) {
-        if !self.editor.wrap_auto {
-            return;
-        }
-        if let Some(width) = self.editor.last_viewport_width {
-            // leave 2 cols for margin; clamp to min to avoid extreme wrapping
-            let target = width.saturating_sub(2).max(MIN_WRAP_COLUMN);
-            self.editor.wrap_column = target;
-        }
     }
 
     fn load_items_for_plan(&mut self, plan_id: &str) {
@@ -1784,36 +1566,6 @@ impl App {
         }
     }
 
-    /// Extracts a numeric identifier like "#510" or a leading number from a title.
-    fn extract_item_number(title: &str) -> Option<String> {
-        // Look for patterns like "#123" or "No. 123"
-        if let Some(pos) = title.find('#') {
-            // Extract from # to the next space or end of string
-            let start = pos + 1;
-            let end = title[start..]
-                .find(|c: char| !c.is_ascii_digit())
-                .map_or(title.len(), |p| p + start);
-            if start < end {
-                return Some(title[start..end].to_string());
-            }
-        }
-        // Check if title starts with a number (without #)
-        else {
-            let trimmed = title.trim();
-            if let Some(first_char) = trimmed.chars().next() {
-                if first_char.is_ascii_digit() {
-                    // Get the continuous digits at start
-                    let end = trimmed
-                        .find(|c: char| !c.is_ascii_digit())
-                        .unwrap_or(trimmed.len());
-                    if end > 0 {
-                        return Some(trimmed[..end].to_string());
-                    }
-                }
-            }
-        }
-        None
-    }
 
     #[allow(clippy::too_many_lines)]
     fn update_matching_files(&mut self) {
@@ -1843,7 +1595,7 @@ impl App {
         }
 
         // Extract any number references (like "#510") and add as search terms
-        if let Some(number) = Self::extract_item_number(&title) {
+        if let Some(number) = extract_hymn_number(&title) {
             augmented_terms.push(number.clone());
             augmented_terms.push(format!("#{number}"));
             augmented_terms.push(format!("Hymn {number}"));
@@ -1954,11 +1706,12 @@ impl App {
             }
 
             // If we have a previous selection for this item, ensure it's always first
-            if let Some(selected_path) = index.get_selection_for_item(&item_id) {
+            let item_id_typed = ItemId::new(&item_id);
+            if let Some(selected_path) = self.item_states.get_matched_file(&item_id_typed) {
                 // Check if it's already in matches
                 if let Some(selected_idx) = all_matches
                     .iter()
-                    .position(|e| e.full_path.to_string_lossy() == *selected_path)
+                    .position(|e| e.full_path.to_string_lossy() == selected_path)
                 {
                     // Move to front
                     if selected_idx > 0 {
@@ -2004,174 +1757,40 @@ impl App {
         self.generate_playlist(false);
     }
 
-    #[allow(clippy::too_many_lines)]
     fn generate_playlist(&mut self, allow_incomplete: bool) {
-        use crate::propresenter::playlist::{build_playlist, write_playlist_file, PlaylistEntry};
-        use crate::propresenter::template::{
-            build_presentation_from_template_with_options, TemplateType,
-            DEFAULT_MAX_LINES_PER_SLIDE,
-        };
-        use prost::Message;
-        use std::path::Path;
+        use crate::propresenter::playlist::generate_playlist;
 
-        // Collect entries for non-ignored items with matched files
-        let mut entries: Vec<PlaylistEntry> = Vec::new();
-
-        for item in &self.items {
-            let item_id = ItemId::new(&item.id);
-            if self.item_states.is_ignored(&item_id) {
-                continue;
-            }
-
-            // Check for matched external .pro file
-            if let Some(matched_path) = self.item_states.get_matched_file(&item_id) {
-                // Use the matched file's stem as the entry name so the embedded
-                // filename matches the original .pro file on disk.
-                let file_stem = Path::new(matched_path)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&item.title);
-                let entry_name = file_stem.to_string();
-                let slide_type = self.get_slide_type_for_item(item);
-
-                // Read the .pro file and embed it
-                match std::fs::read(matched_path) {
-                    Ok(data) => {
-                        entries.push(PlaylistEntry {
-                            name: entry_name,
-                            slide_type,
-                            from_matched_file: true,
-                            presentation_path: matched_path.to_string(),
-                            arrangement_uuid: None,
-                            embedded_data: Some(data),
-                        });
-                    }
-                    Err(e) => {
-                        // Fallback: reference external path
-                        eprintln!("Warning: Could not read {matched_path}: {e}");
-                        entries.push(PlaylistEntry {
-                            name: entry_name,
-                            slide_type,
-                            from_matched_file: true,
-                            presentation_path: matched_path.to_string(),
-                            arrangement_uuid: None,
-                            embedded_data: None,
-                        });
-                    }
-                }
-                continue;
-            }
-
-            // If no matched file but we have editor content, create embedded presentation
-            if let Some(state) = self.item_states.get_editor(&item_id) {
-                let has_content = state.content.iter().any(|l| !l.trim().is_empty());
-                if !has_content {
-                    if allow_incomplete {
-                        continue;
-                    }
-                    self.error_message =
-                        Some(format!("Item '{}' has no content to export.", item.title));
-                    return;
-                }
-
-                // Determine template type based on slide type
-                let slide_type = self.get_slide_type_for_item(item);
-                let template_type = match slide_type {
-                    SlideType::Scripture => TemplateType::Scripture,
-                    SlideType::Lyrics => TemplateType::Song,
-                    SlideType::Title | SlideType::Text | SlideType::Graphic => TemplateType::Info,
-                };
-
-                // Require template - no fallback
-                let Some(template) = self
-                    .template_cache
-                    .as_mut()
-                    .and_then(|c| c.get(template_type).cloned())
-                else {
-                    self.error_message = Some(format!(
-                        "No template found! Create '{}' in your ProPresenter library with your desired styling.",
-                        template_type.filename()
-                    ));
-                    return;
-                };
-
-                // Use the item's wrap column for splitting, clamped to minimum
-                let wrap_col = state.wrap_column.max(MIN_SLIDE_WRAP);
-                let entry_name = if slide_type == SlideType::Lyrics {
-                    item.song
-                        .as_ref()
-                        .map_or_else(|| item.title.clone(), |s| s.title.clone())
-                } else {
-                    item.title.clone()
-                };
-                let entry_name = Self::canonical_presentation_name(&entry_name, slide_type);
-
-                let Some(presentation) = build_presentation_from_template_with_options(
-                    &entry_name,
-                    &template,
-                    &state.content,
-                    wrap_col,
-                    DEFAULT_MAX_LINES_PER_SLIDE,
-                ) else {
-                    self.error_message =
-                        Some(format!("Failed to build presentation for '{}'", item.title));
-                    return;
-                };
-
-                let mut data = Vec::new();
-                if presentation.encode(&mut data).is_err() {
-                    self.error_message = Some(format!(
-                        "Failed to encode presentation for '{}'",
-                        item.title
-                    ));
-                    return;
-                }
-
-                entries.push(PlaylistEntry {
-                    name: entry_name,
-                    slide_type,
-                    from_matched_file: false,
-                    presentation_path: String::new(),
-                    arrangement_uuid: None,
-                    embedded_data: Some(data),
-                });
-                continue;
-            }
-
-            // No match and no editor content
-            if allow_incomplete {
-                continue;
-            }
-            self.error_message = Some(format!("Item '{}' is not matched or created.", item.title));
-            return;
-        }
-
-        if entries.is_empty() {
-            self.error_message = Some("No matched files to add to playlist.".to_string());
-            return;
-        }
-
-        // Generate playlist name from plan date/title
         let playlist_name = self
             .get_current_plan_title()
             .unwrap_or_else(|| "Service Playlist".to_string());
 
-        // Determine output path
-        let output_path = self.get_playlist_output_path(&playlist_name);
+        let library_path = self.library_path.as_deref();
 
-        // Build and write the playlist
-        let playlist = build_playlist(&playlist_name, &entries);
+        // Pre-compute slide types to avoid borrowing self through the generation call.
+        let slide_types: std::collections::HashMap<String, SlideType> = self
+            .items
+            .iter()
+            .map(|item| (item.id.clone(), self.get_slide_type_for_item(item)))
+            .collect();
 
-        match write_playlist_file(&playlist, &entries, &output_path) {
-            Ok(()) => {
+        match generate_playlist(
+            &self.items,
+            &self.item_states,
+            &mut self.template_cache,
+            &slide_types,
+            &playlist_name,
+            library_path,
+            allow_incomplete,
+        ) {
+            Ok(result) => {
                 self.status_message = Some(format!(
                     "Playlist saved: {} ({} items)",
-                    output_path.display(),
-                    entries.len()
+                    result.output_path.display(),
+                    result.entry_count
                 ));
             }
             Err(e) => {
-                self.error_message = Some(format!("Failed to write playlist: {e}"));
+                self.error_message = Some(e);
             }
         }
     }
@@ -2198,533 +1817,6 @@ impl App {
         Some(format!("{date} - {svc}"))
     }
 
-    fn get_playlist_output_path(&self, name: &str) -> std::path::PathBuf {
-        let base_path = self
-            .library_path
-            .clone()
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-
-        let safe_name: String = name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || matches!(c, ' ' | '-' | ',' | '(' | ')') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-
-        let candidate = base_path.join(format!("{safe_name}.proplaylist"));
-        if !candidate.exists() {
-            return candidate;
-        }
-
-        // Collision avoidance: append (2), (3), … (99)
-        for n in 2..=99 {
-            let numbered = base_path.join(format!("{safe_name} ({n}).proplaylist"));
-            if !numbered.exists() {
-                return numbered;
-            }
-        }
-
-        candidate
-    }
-
-    /// Write text to system clipboard (silently ignores errors).
-    fn clipboard_write(text: &str) {
-        let _ = Clipboard::new().and_then(|mut cb| cb.set_text(text.to_owned()));
-    }
-
-    /// Read text from system clipboard.
-    fn clipboard_read() -> Option<String> {
-        Clipboard::new().ok()?.get_text().ok()
-    }
-
-    fn get_selected_text(&self) -> String {
-        if !self.editor.selection_active {
-            // No selection: return current line (VSCode behavior)
-            return self
-                .editor
-                .content
-                .get(self.editor.cursor_y)
-                .map(|line| format!("{line}\n"))
-                .unwrap_or_default();
-        }
-
-        let (start_y, start_x, end_y, end_x) = self.get_selection_bounds();
-
-        if start_y == end_y {
-            // Single line selection
-            return self
-                .editor
-                .content
-                .get(start_y)
-                .map(|line| {
-                    let end = end_x.min(line.len());
-                    if start_x <= end {
-                        line[start_x..end].to_string()
-                    } else {
-                        String::new()
-                    }
-                })
-                .unwrap_or_default();
-        }
-
-        // Selection spans multiple lines
-        let mut result = String::new();
-
-        // First line
-        if let Some(line) = self.editor.content.get(start_y) {
-            let start_idx = start_x.min(line.len());
-            if start_idx < line.len() {
-                result.push_str(&line[start_idx..]);
-            }
-            result.push('\n');
-        }
-
-        // Middle lines - use iterator approach
-        result.extend(
-            self.editor
-                .content
-                .iter()
-                .skip(start_y + 1)
-                .take(end_y - start_y - 1)
-                .flat_map(|line| [line.as_str(), "\n"].into_iter()),
-        );
-
-        // Last line
-        if let Some(line) = self.editor.content.get(end_y) {
-            let end_idx = end_x.min(line.len());
-            result.push_str(&line[..end_idx]);
-        }
-
-        result
-    }
-
-    // Ensure there's always an empty line at the end of content
-    fn ensure_empty_line_at_end(&mut self) {
-        if self.editor.content.is_empty() {
-            self.editor.content.push(String::new());
-            return;
-        }
-
-        let last_idx = self.editor.content.len() - 1;
-        if !self.editor.content[last_idx].is_empty() {
-            self.editor.content.push(String::new());
-        } else if self.editor.content.len() == 1 && self.editor.content[0].is_empty() {
-            // Already has exactly one empty line, nothing to do
-        } else if last_idx > 0
-            && self.editor.content[last_idx - 1].is_empty()
-            && self.editor.content[last_idx].is_empty()
-        {
-            // Already has multiple empty lines, reduce to just one
-            self.editor.content.truncate(last_idx + 1);
-        }
-    }
-
-    fn delete_selected_text(&mut self) {
-        if !self.editor.selection_active {
-            return;
-        }
-
-        // Determine the actual start and end points
-        let (start_y, start_x, end_y, end_x) = self.get_selection_bounds();
-
-        if start_y == end_y {
-            // Selection is on a single line
-            if let Some(line) = self.editor.content.get_mut(start_y) {
-                let end_idx = end_x.min(line.len());
-                if start_x < end_idx {
-                    let after = line[end_idx..].to_string();
-                    line.truncate(start_x);
-                    line.push_str(&after);
-                }
-            }
-        } else {
-            // Selection spans multiple lines
-            let mut new_content = Vec::new();
-
-            // Add lines before selection
-            new_content.extend(self.editor.content[0..start_y].iter().cloned());
-
-            // Add first line (up to selection start) + last line (from selection end)
-            let first_part = self
-                .editor
-                .content
-                .get(start_y)
-                .map_or_else(String::new, |line| {
-                    line[..start_x.min(line.len())].to_string()
-                });
-
-            let last_part = self
-                .editor
-                .content
-                .get(end_y)
-                .map_or_else(String::new, |line| {
-                    let end_idx = end_x.min(line.len());
-                    line[end_idx..].to_string()
-                });
-
-            // Combine the parts and add to new content
-            new_content.push(first_part + &last_part);
-
-            // Add lines after selection
-            new_content.extend(self.editor.content[end_y + 1..].iter().cloned());
-
-            self.editor.content = new_content;
-        }
-
-        // Reset cursor to start of selection
-        self.editor.cursor_y = start_y;
-        self.editor.cursor_x = start_x;
-        self.editor.selection_active = false;
-    }
-
-    const fn get_selection_bounds(&self) -> (usize, usize, usize, usize) {
-        if !self.editor.selection_active {
-            // If no selection, return cursor position for both start and end
-            return (
-                self.editor.cursor_y,
-                self.editor.cursor_x,
-                self.editor.cursor_y,
-                self.editor.cursor_x,
-            );
-        }
-
-        // Determine start and end points based on selection direction
-        let (start_y, start_x, end_y, end_x) = if (self.editor.selection_start_y
-            < self.editor.cursor_y)
-            || (self.editor.selection_start_y == self.editor.cursor_y
-                && self.editor.selection_start_x < self.editor.cursor_x)
-        {
-            // Normal selection (top to bottom)
-            (
-                self.editor.selection_start_y,
-                self.editor.selection_start_x,
-                self.editor.cursor_y,
-                self.editor.cursor_x,
-            )
-        } else {
-            // Reverse selection (bottom to top)
-            (
-                self.editor.cursor_y,
-                self.editor.cursor_x,
-                self.editor.selection_start_y,
-                self.editor.selection_start_x,
-            )
-        };
-
-        (start_y, start_x, end_y, end_x)
-    }
-
-    /// Returns the `(start_line, end_line)` bounds of the paragraph containing the cursor.
-    pub fn get_current_paragraph_bounds(&self) -> Option<(usize, usize)> {
-        let y = self.editor.cursor_y;
-
-        // Ensure cursor is within content bounds
-        if y >= self.editor.content.len() {
-            return None;
-        }
-
-        // Find the start of the paragraph (first non-empty line after an empty line or start of doc)
-        let start_y = (0..=y)
-            .rev()
-            .find(|&i| i == 0 || self.editor.content.get(i - 1).is_some_and(String::is_empty))
-            .unwrap_or(y); // Should always find at least y
-
-        // If the line at start_y is itself empty, it's not really a paragraph start
-        if self
-            .editor
-            .content
-            .get(start_y)
-            .is_none_or(String::is_empty)
-        {
-            return None;
-        }
-
-        // Find the end of the paragraph (last non-empty line before an empty line or end of doc)
-        let end_y = (y..self.editor.content.len())
-            .find(|&i| self.editor.content.get(i).is_none_or(String::is_empty))
-            .map_or(self.editor.content.len() - 1, |i| i.saturating_sub(1));
-
-        // Ensure start_y is actually before or at end_y (handles edge cases)
-        if start_y <= end_y {
-            Some((start_y, end_y))
-        } else {
-            None // This can happen if the cursor is on an isolated empty line
-        }
-    }
-
-    // Helper function to determine if cursor is in a stanza
-    fn is_cursor_in_stanza(&self) -> bool {
-        // Look for non-empty lines above and below the cursor
-        let cursor_y = self.editor.cursor_y;
-
-        // Check if line at cursor is non-empty
-        let current_line_empty = self
-            .editor
-            .content
-            .get(cursor_y)
-            .is_none_or(String::is_empty);
-
-        if !current_line_empty {
-            return true;
-        }
-
-        // If cursor is on an empty line, check adjacent lines
-
-        // Check if any non-empty line exists above
-        let has_text_above = self
-            .editor
-            .content
-            .iter()
-            .take(cursor_y)
-            .rev()
-            .take_while(|line| line.is_empty())
-            .count()
-            < cursor_y;
-
-        // Check if any non-empty line exists below
-        let has_text_below = self
-            .editor
-            .content
-            .iter()
-            .skip(cursor_y + 1)
-            .take_while(|line| line.is_empty())
-            .count()
-            < self.editor.content.len() - cursor_y - 1;
-
-        // Cursor is in a stanza if there are non-empty lines both above and below
-        has_text_above && has_text_below
-    }
-
-    // Find the start of the current stanza
-    fn find_stanza_start(&self, y: usize) -> usize {
-        // Find the first empty line above the current position
-        self.editor
-            .content
-            .iter()
-            .take(y)
-            .enumerate()
-            .rev()
-            .find_map(|(i, line)| {
-                if line.is_empty() {
-                    Some(i + 1) // Start of stanza is one line after the empty line
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0) // If no empty line found, start is at beginning of document
-    }
-
-    /// Insert a verse marker (e.g., "[Verse 1]") with appropriate blank line handling
-    fn insert_verse_marker(&mut self, marker_text: &str) {
-        let marker_line = format!("[{marker_text}]");
-        let cursor_y = self.editor.cursor_y;
-        let content_len = self.editor.content.len();
-
-        // Check if cursor is touching a stanza (inside or directly below)
-        let is_touching_stanza = self.is_cursor_in_stanza()
-            || (cursor_y > 0
-                && cursor_y < content_len
-                && self
-                    .editor
-                    .content
-                    .get(cursor_y - 1)
-                    .is_some_and(|line| !line.is_empty())
-                && self
-                    .editor
-                    .content
-                    .get(cursor_y)
-                    .is_some_and(String::is_empty));
-
-        if is_touching_stanza {
-            // Insert within or before a stanza
-            let original_cursor_y = cursor_y;
-            let original_cursor_x = self.editor.cursor_x;
-
-            let effective_y = if self.is_cursor_in_stanza() {
-                cursor_y
-            } else {
-                cursor_y - 1
-            };
-            let stanza_start = self.find_stanza_start(effective_y);
-            let mut insert_pos = stanza_start;
-            let mut lines_inserted_above = 0;
-
-            // Ensure blank line above if needed
-            if stanza_start > 0
-                && self
-                    .editor
-                    .content
-                    .get(stanza_start - 1)
-                    .is_some_and(|line| !line.is_empty())
-            {
-                self.editor.content.insert(insert_pos, String::new());
-                insert_pos += 1;
-                lines_inserted_above += 1;
-            }
-
-            // Insert marker
-            self.editor.content.insert(insert_pos, marker_line);
-            lines_inserted_above += 1;
-
-            // Restore cursor position, adjusted for inserted lines
-            self.editor.cursor_y = original_cursor_y + lines_inserted_above;
-            self.editor.cursor_x = original_cursor_x;
-        } else {
-            // Insert standalone marker
-            let mut marker_idx = cursor_y;
-
-            // Place the marker line
-            if cursor_y < content_len && self.editor.content[cursor_y].is_empty() {
-                self.editor.content[cursor_y] = marker_line;
-            } else {
-                self.editor.content.insert(cursor_y, marker_line);
-            }
-
-            // Ensure blank line BEFORE marker (unless at top)
-            if marker_idx > 0
-                && self
-                    .editor
-                    .content
-                    .get(marker_idx - 1)
-                    .is_some_and(|line| !line.is_empty())
-            {
-                self.editor.content.insert(marker_idx, String::new());
-                marker_idx += 1;
-            }
-
-            // Ensure blank line AFTER marker
-            let after_idx = marker_idx + 1;
-            if after_idx >= self.editor.content.len() {
-                self.editor.content.push(String::new());
-            } else if self
-                .editor
-                .content
-                .get(after_idx)
-                .is_some_and(|line| !line.is_empty())
-            {
-                self.editor.content.insert(after_idx, String::new());
-            }
-
-            // Position cursor 2 lines after marker
-            let target_y = marker_idx + 2;
-            while target_y >= self.editor.content.len() {
-                self.editor.content.push(String::new());
-            }
-            self.editor.cursor_y = target_y;
-            self.editor.cursor_x = 0;
-        }
-
-        // Final clamp and ensure empty line at end
-        self.editor.cursor_y = self
-            .editor
-            .cursor_y
-            .min(self.editor.content.len().saturating_sub(1));
-        self.ensure_empty_line_at_end();
-    }
-
-    fn copy_selection(&self) {
-        if !self.editor.selection_active {
-            if let Some(line) = self.editor.content.get(self.editor.cursor_y) {
-                Self::clipboard_write(&format!("{line}\n"));
-            }
-            return;
-        }
-
-        // Copy the selected text
-        let selected_text = self.get_selected_text();
-        Self::clipboard_write(&selected_text);
-    }
-
-    // Cut selection or current line to clipboard
-    fn cut_selection(&mut self) {
-        if self.editor.selection_active {
-            let selected_text = self.get_selected_text();
-            if !selected_text.is_empty() {
-                Self::clipboard_write(&selected_text);
-                self.delete_selected_text();
-            }
-        } else if !self.editor.content.is_empty()
-            && self.editor.cursor_y < self.editor.content.len()
-        {
-            // Fall back to cutting current line if no selection
-            let line = self.editor.content.remove(self.editor.cursor_y);
-            Self::clipboard_write(&(line + "\n"));
-
-            // If we removed the last line, add an empty one
-            if self.editor.content.is_empty() {
-                self.editor.content.push(String::new());
-            }
-
-            // Adjust cursor position
-            if self.editor.cursor_y >= self.editor.content.len() {
-                self.editor.cursor_y = self.editor.content.len() - 1;
-            }
-            self.editor.cursor_x = 0;
-        }
-        self.editor.selection_active = false;
-    }
-
-    // Paste from clipboard at current cursor position
-    fn paste_from_clipboard(&mut self) {
-        // Delete selected text before pasting if selection is active
-        if self.editor.selection_active {
-            self.delete_selected_text();
-            self.editor.selection_active = false;
-        }
-
-        // Paste from clipboard
-        if let Some(content) = Self::clipboard_read() {
-            let normalized_content = content.replace("\r\n", "\n");
-
-            let lines: Vec<&str> = normalized_content.split('\n').collect();
-            let line_count = lines.len();
-
-            if line_count == 1 || (line_count == 2 && lines[1].is_empty()) {
-                if let Some(line) = self.editor.content.get_mut(self.editor.cursor_y) {
-                    if self.editor.cursor_x > line.len() {
-                        line.push_str(&" ".repeat(self.editor.cursor_x - line.len()));
-                    }
-                    line.insert_str(self.editor.cursor_x, lines[0]);
-                    self.editor.cursor_x += lines[0].len();
-                }
-            } else {
-                let current_line = self.editor.content.get(self.editor.cursor_y).map_or_else(
-                    || (String::new(), String::new()),
-                    |line| {
-                        let x = self.editor.cursor_x.min(line.len());
-                        (line[..x].to_string(), line[x..].to_string())
-                    },
-                );
-
-                if self.editor.cursor_y < self.editor.content.len() {
-                    self.editor.content[self.editor.cursor_y] = current_line.0 + lines[0];
-                }
-
-                let mut insert_pos = self.editor.cursor_y + 1;
-
-                for &line in &lines[1..line_count - 1] {
-                    self.insert_or_append_at(insert_pos, line.to_string());
-                    insert_pos += 1;
-                }
-
-                if line_count > 1 {
-                    let last_line = lines[line_count - 1];
-                    let new_line = last_line.to_string() + &current_line.1;
-
-                    self.insert_or_append_at(insert_pos, new_line);
-
-                    self.editor.cursor_y = insert_pos;
-                    self.editor.cursor_x = last_line.len();
-                }
-            }
-        }
-    }
-
-    // Renamed function to better reflect loading types and plans
     fn initialize_data(&mut self) {
         // Set loading state immediately
         self.is_loading = true;
@@ -2790,31 +1882,6 @@ impl App {
                         match result {
                             Ok(items) => {
                                 self.items = items;
-
-                                // Initialize state for items, restoring from cache where available
-                                self.item_states.clear();
-
-                                for item in &self.items {
-                                    let item_id = ItemId::new(&item.id);
-                                    if let Some(index) = &self.file_index {
-                                        self.item_states.set_completed(
-                                            &item_id,
-                                            index.get_item_completion(&item.id).unwrap_or(false),
-                                        );
-                                        self.item_states.set_ignored(
-                                            &item_id,
-                                            index.get_item_ignored(&item.id).unwrap_or(false),
-                                        );
-                                        self.item_states.set_editor(
-                                            &item_id,
-                                            index.get_editor_state(&item.id).cloned(),
-                                        );
-                                        self.item_states.set_matched_file(
-                                            &item_id,
-                                            index.get_selection_for_item(&item.id).cloned(),
-                                        );
-                                    }
-                                }
 
                                 if !self.items.is_empty() {
                                     self.item_list_state.select(Some(0));
@@ -2888,28 +1955,22 @@ impl App {
             return;
         };
 
-        let item_id_str = selected_item.id.clone();
-        let item_id = ItemId::new(&item_id_str);
+        let item_id = ItemId::new(&selected_item.id);
         let file_path = selected_file.full_path.to_string_lossy().to_string();
 
-        // IMPORTANT: Clear editor state when selecting a file match
-        // (file match and custom creation are mutually exclusive)
+        // Clear editor state — file match and custom creation are mutually exclusive
         self.item_states.set_editor(&item_id, None);
-        if let Some(index) = &mut self.file_index {
-            index.editor_states.remove(&item_id_str);
-        }
 
         // Record the selection in our item state store
         self.item_states.set_matched_file(&item_id, Some(file_path));
 
         // Mark the item as completed
         self.item_states.set_completed(&item_id, true);
+        self.persist_item_states();
 
-        // Record the selection and completion in the file index for persistence
+        // Bump selection frequency in file index for future ranking
         if let Some(index) = &mut self.file_index {
-            index.record_selection(&item_id_str, &selected_file.full_path);
-            index.save_item_completion(&item_id_str, true);
-            index.persist();
+            index.record_selection(&selected_file.full_path);
         }
 
         // Move to the next item if possible, otherwise deselect file list
@@ -2919,6 +1980,13 @@ impl App {
         } else {
             // No more uncompleted items - return focus to items list
             self.file_list_state.select(None);
+        }
+    }
+
+    /// Persist item states to disk (no-op if cache directory is unavailable).
+    fn persist_item_states(&self) {
+        if let Some(dir) = ItemStateStore::cache_dir() {
+            self.item_states.persist(&dir);
         }
     }
 
@@ -2932,3 +2000,4 @@ impl App {
         })
     }
 }
+

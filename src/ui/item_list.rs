@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, SlideType};
-use crate::types::ItemId;
+use crate::planning_center::types::ItemId;
 use crate::ui::create_titled_block;
 
 /// Render the item list and matching files panes.

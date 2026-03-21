@@ -10,8 +10,11 @@ use unicode_width::UnicodeWidthStr;
 
 use super::generated::rv_data;
 use super::rtf::{extract_rtf_options, segments_to_rtf_bytes, StyledSegment};
-// Re-export constants for backwards compatibility
-pub use crate::constants::template::{DEFAULT_MAX_LINES_PER_SLIDE, MIN_SLIDE_WRAP};
+/// Default maximum visual lines per slide.
+pub const DEFAULT_MAX_LINES_PER_SLIDE: usize = 10;
+
+/// Minimum wrap column for slide splitting.
+pub const MIN_SLIDE_WRAP: usize = 20;
 
 /// Average character width as a fraction of font size for proportional fonts.
 /// 0.55 is a reasonable estimate for Helvetica and similar typefaces.

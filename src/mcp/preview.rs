@@ -1,6 +1,6 @@
 //! Service plan preview — analyzes a PCO plan and proposes playlist entries.
 //!
-//! Uses a declarative type system from `data/item_mappings.json` to classify
+//! Uses a declarative type system from `data/proflow.config.json` to classify
 //! each PCO item, resolve library files, and produce a structured preview.
 
 use std::collections::{HashMap, HashSet};
@@ -9,15 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use super::description_parser::{self, ParsedContent};
 use crate::planning_center::types::Item;
-use crate::utils::file_matcher::FileIndex;
+use crate::utils::file_index::FileIndex;
 
 // ---------------------------------------------------------------------------
-// Config loaded from data/item_mappings.json
+// Config loaded from data/proflow.config.json
 // ---------------------------------------------------------------------------
 
 /// Root config structure.
 #[derive(Debug, Default, Deserialize)]
-pub struct ItemMappings {
+pub struct ServiceConfig {
     /// `ProPresenter` theme name to load slide templates from.
     #[serde(default)]
     pub theme: Option<String>,
@@ -95,7 +95,7 @@ pub struct ScriptureRefInfo {
 }
 
 /// Status of a proposed playlist entry.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewStatus {
     /// Existing library file, no changes needed.
@@ -105,13 +105,14 @@ pub enum PreviewStatus {
     /// Library file whose content is refreshed from this week's description.
     Edited,
     /// Not included in the playlist.
+    #[default]
     Skipped,
     /// Needs user confirmation.
     Uncertain,
 }
 
 /// A single row in the preview table.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct PreviewEntry {
     pub position: usize,
     pub pco_title: String,
@@ -174,7 +175,7 @@ fn resolve_arrangement(
     ptype: &PresentationType,
     type_key: &str,
     service_name: Option<&str>,
-    mappings: &ItemMappings,
+    mappings: &ServiceConfig,
 ) -> Option<String> {
     // Service override takes precedence
     if let Some(svc) = service_name {
@@ -195,7 +196,7 @@ fn resolve_background(
     ptype: &PresentationType,
     type_key: &str,
     service_name: Option<&str>,
-    mappings: &ItemMappings,
+    mappings: &ServiceConfig,
 ) -> Option<String> {
     if let Some(svc) = service_name {
         let svc_lower = svc.to_lowercase();
@@ -214,7 +215,7 @@ fn resolve_background(
 #[allow(clippy::too_many_lines)]
 pub fn build_preview(
     items: &[Item],
-    mappings: &ItemMappings,
+    mappings: &ServiceConfig,
     file_index: Option<&FileIndex>,
     service_name: Option<&str>,
 ) -> Vec<PreviewEntry> {
@@ -230,19 +231,8 @@ pub fn build_preview(
             entries.push(PreviewEntry {
                 position: item.position,
                 pco_title: item.title.clone(),
-                playlist_name: String::new(),
-                file_path: None,
-                status: PreviewStatus::Skipped,
                 reason: skip_reason(&title_lower),
-                item_type: None,
-                parsed_content: None,
-                background: None,
-                arrangement: None,
-                scripture_reference: None,
-                bible_version: None,
-                template_name: None,
-                macro_name: None,
-                scripture_refs: None,
+                ..Default::default()
             });
             continue;
         }
@@ -296,14 +286,10 @@ pub fn build_preview(
                     "Not in library — skip".to_string()
                 },
                 item_type: Some("song".to_string()),
-                parsed_content: None,
-                background: None,
                 arrangement: song_arrangement,
-                scripture_reference: None,
-                bible_version: None,
                 template_name: mappings.presentation_types.get("song").and_then(|pt| pt.template.clone()),
                 macro_name: mappings.presentation_types.get("song").and_then(|pt| pt.macro_name.clone()),
-                scripture_refs: None,
+                ..Default::default()
             });
             continue;
         }
@@ -359,21 +345,18 @@ pub fn build_preview(
                     position: item.position,
                     pco_title: item.title.clone(),
                     playlist_name,
-                    file_path: None,
                     status: PreviewStatus::Created,
                     reason: format!(
                         "Generate combined scripture slides ({} refs, {version})",
                         ref_infos.len()
                     ),
                     item_type: Some("scripture".to_string()),
-                    parsed_content: None,
-                    background: scripture_bg,
-                    arrangement: None,
-                    scripture_reference: None,
+                    background: scripture_bg.clone(),
                     bible_version: Some(version.to_string()),
                     scripture_refs: Some(ref_infos),
                     template_name: mappings.presentation_types.get("scripture").and_then(|pt| pt.template.clone()),
                     macro_name: mappings.presentation_types.get("scripture").and_then(|pt| pt.macro_name.clone()),
+                    ..Default::default()
                 });
             } else {
                 // Single reference
@@ -390,18 +373,15 @@ pub fn build_preview(
                     position: item.position,
                     pco_title: item.title.clone(),
                     playlist_name: scripture_name(ref_part, version),
-                    file_path: None,
                     status: PreviewStatus::Created,
                     reason: format!("Generate scripture slides ({version})"),
                     item_type: Some("scripture".to_string()),
-                    parsed_content: None,
                     background: scripture_bg,
-                    arrangement: None,
                     scripture_reference: scripture_ref_str,
                     bible_version: Some(version.to_string()),
-                    scripture_refs: None,
                     template_name: mappings.presentation_types.get("scripture").and_then(|pt| pt.template.clone()),
                     macro_name: mappings.presentation_types.get("scripture").and_then(|pt| pt.macro_name.clone()),
+                    ..Default::default()
                 });
             }
             continue;
@@ -469,11 +449,9 @@ pub fn build_preview(
                 parsed_content: parsed,
                 background: bg,
                 arrangement: arr,
-                scripture_reference: None,
-                bible_version: None,
                 template_name: ptype.template.clone(),
                 macro_name: ptype.macro_name.clone(),
-                scripture_refs: None,
+                ..Default::default()
             });
             continue;
         }
@@ -506,33 +484,14 @@ pub fn build_preview(
                 file_path: Some(path),
                 status: PreviewStatus::Used,
                 reason: "Library match".to_string(),
-                item_type: None,
-                parsed_content: None,
-                background: None,
-                arrangement: None,
-                scripture_reference: None,
-                bible_version: None,
-                template_name: None,
-                macro_name: None,
-                scripture_refs: None,
+                ..Default::default()
             });
         } else {
             entries.push(PreviewEntry {
                 position: item.position,
                 pco_title: item.title.clone(),
-                playlist_name: String::new(),
-                file_path: None,
-                status: PreviewStatus::Skipped,
                 reason: "No library match".to_string(),
-                item_type: None,
-                parsed_content: None,
-                background: None,
-                arrangement: None,
-                scripture_reference: None,
-                bible_version: None,
-                template_name: None,
-                macro_name: None,
-                scripture_refs: None,
+                ..Default::default()
             });
         }
     }
@@ -549,7 +508,7 @@ pub fn build_preview(
 
 fn resolve_item_type<'a>(
     title_lower: &str,
-    mappings: &'a ItemMappings,
+    mappings: &'a ServiceConfig,
 ) -> Option<(String, &'a PresentationType)> {
     // Exact match first, then prefix match
     let type_key = mappings
@@ -568,7 +527,7 @@ fn resolve_item_type<'a>(
     Some((type_key, ptype))
 }
 
-fn find_library_file(title_lower: &str, mappings: &ItemMappings) -> Option<String> {
+fn find_library_file(title_lower: &str, mappings: &ServiceConfig) -> Option<String> {
     mappings
         .library_files
         .get(title_lower)
@@ -591,7 +550,7 @@ fn process_expansion(
     expansion: &[String],
     item: &Item,
     speaker: Option<&str>,
-    mappings: &ItemMappings,
+    mappings: &ServiceConfig,
     entries: &mut Vec<PreviewEntry>,
     nametag_seen: &mut HashSet<String>,
     file_index: Option<&FileIndex>,
@@ -626,14 +585,9 @@ fn process_expansion(
                         |_| format!("Nametag for {first}"),
                     ),
                     item_type: Some("person_nametag".to_string()),
-                    parsed_content: None,
-                    background: None,
-                    arrangement: None,
-                    scripture_reference: None,
-                    bible_version: None,
                     template_name: mappings.presentation_types.get("person_nametag").and_then(|pt| pt.template.clone()),
                     macro_name: mappings.presentation_types.get("person_nametag").and_then(|pt| pt.macro_name.clone()),
-                    scripture_refs: None,
+                    ..Default::default()
                 });
             }
         } else if template == "_generate" {
@@ -663,7 +617,6 @@ fn process_expansion(
                 position: item.position,
                 pco_title: item.title.clone(),
                 playlist_name: strip_speaker(&item.title),
-                file_path: None,
                 status: if is_edited {
                     PreviewStatus::Edited
                 } else {
@@ -674,11 +627,9 @@ fn process_expansion(
                 parsed_content: parsed,
                 background: bg,
                 arrangement: arr,
-                scripture_reference: None,
-                bible_version: None,
                 template_name: resolved_type.as_ref().and_then(|(_, pt)| pt.template.clone()),
                 macro_name: resolved_type.as_ref().and_then(|(_, pt)| pt.macro_name.clone()),
-                scripture_refs: None,
+                ..Default::default()
             });
         } else {
             let search_name = template.trim_end_matches(".pro");
@@ -697,15 +648,7 @@ fn process_expansion(
                     || format!("{search_name} — not found"),
                     |_| "Library match".to_string(),
                 ),
-                item_type: None,
-                parsed_content: None,
-                background: None,
-                arrangement: None,
-                scripture_reference: None,
-                bible_version: None,
-                template_name: None,
-                macro_name: None,
-                scripture_refs: None,
+                ..Default::default()
             });
         }
     }
@@ -715,7 +658,7 @@ fn process_expansion(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn should_skip(title_lower: &str, mappings: &ItemMappings) -> bool {
+fn should_skip(title_lower: &str, mappings: &ServiceConfig) -> bool {
     mappings
         .skip_items
         .iter()
@@ -732,7 +675,7 @@ fn skip_reason(title_lower: &str) -> String {
     }
 }
 
-fn find_expansion(title_lower: &str, mappings: &ItemMappings) -> Option<Vec<String>> {
+fn find_expansion(title_lower: &str, mappings: &ServiceConfig) -> Option<Vec<String>> {
     mappings
         .multi_expand
         .iter()
@@ -944,13 +887,6 @@ fn maybe_insert_nametag(
             |_| format!("Nametag for {first}"),
         ),
         item_type: Some("person_nametag".to_string()),
-        parsed_content: None,
-        background: None,
-        arrangement: None,
-        scripture_reference: None,
-        bible_version: None,
-        template_name: None,
-        macro_name: None,
-        scripture_refs: None,
+        ..Default::default()
     });
 }

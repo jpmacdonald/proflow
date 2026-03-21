@@ -58,17 +58,14 @@ pub enum Error {
 
     /// `ProPresenter` format error
     #[error("ProPresenter format error: {0}")]
-    #[allow(dead_code)]
     ProPresenter(String),
 
     /// Scripture lookup error
     #[error("Scripture lookup failed: {0}")]
-    #[allow(dead_code)]
     Scripture(String),
 
     /// Playlist generation error
     #[error("Playlist generation failed: {0}")]
-    #[allow(dead_code)]
     Playlist(String),
 
     /// Generic message error (escape hatch)
@@ -78,7 +75,6 @@ pub enum Error {
 
 impl Error {
     /// Create an IO error with path context
-    #[allow(dead_code)]
     pub fn io(source: std::io::Error, path: impl Into<Option<std::path::PathBuf>>) -> Self {
         Self::Io {
             source,
@@ -87,7 +83,6 @@ impl Error {
     }
 
     /// Create a `Planning Center` error with optional status and hint
-    #[allow(dead_code)]
     pub fn pco(message: impl Into<String>) -> Self {
         Self::PlanningCenter {
             message: message.into(),
@@ -127,6 +122,25 @@ impl Error {
             file: file.into(),
             message: message.into(),
         }
+    }
+}
+
+// Domain error conversions
+impl From<crate::propresenter::deserialize::ProPresenterError> for Error {
+    fn from(e: crate::propresenter::deserialize::ProPresenterError) -> Self {
+        Self::ProPresenter(e.to_string())
+    }
+}
+
+impl From<crate::propresenter::serialize::SerializeError> for Error {
+    fn from(e: crate::propresenter::serialize::SerializeError) -> Self {
+        Self::ProPresenter(e.to_string())
+    }
+}
+
+impl From<crate::propresenter::playlist::PlaylistError> for Error {
+    fn from(e: crate::propresenter::playlist::PlaylistError) -> Self {
+        Self::Playlist(e.to_string())
     }
 }
 

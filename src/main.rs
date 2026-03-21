@@ -7,26 +7,11 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use error::Result;
+use proflow::app::App;
+use proflow::error::Result;
+use proflow::ui;
 use ratatui::prelude::*;
 use std::{io, panic, time::Duration};
-
-mod app;
-mod bible;
-mod config;
-mod constants;
-mod error;
-mod hymnal;
-mod item_state;
-mod lyrics;
-mod planning_center;
-mod propresenter;
-mod services;
-mod types;
-mod ui;
-mod utils;
-
-use app::App;
 
 // Helper function to ensure the terminal is cleaned up on exit
 fn cleanup_terminal<B: Backend + std::io::Write>(terminal: &mut Terminal<B>) -> Result<()> {

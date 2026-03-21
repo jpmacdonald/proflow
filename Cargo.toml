@@ -20,6 +20,10 @@ path = "src/bin/test_template.rs"
 name = "proflow"
 path = "src/main.rs"
 
+[[bin]]
+name = "proflow_mcp"
+path = "src/bin/proflow_mcp.rs"
+
 [dependencies]
 # TUI dependencies
 ratatui = "0.26.1"
@@ -73,8 +77,13 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 dirs = "5.0"
 rayon = "1.10.0"
 
+# MCP server
+rmcp = { version = "1", features = ["server", "transport-io"] }
+schemars = "0.8"
+
 [dev-dependencies]
 tempfile = "3.10"
+httptest = "0.16.4"
 
 [features]
 default = []

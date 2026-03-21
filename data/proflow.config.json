@@ -1,0 +1,163 @@
+{
+  "_comment": "Presentation type system. Each item maps to a type, each type declares its behavior.",
+
+  "theme": "VPC Theme",
+
+  "presentation_types": {
+    "pre_post_service": {
+      "template": null,
+      "edited": false,
+      "background": null,
+      "macro": "Graphics",
+      "arrangement": null,
+      "description": "Static pre/post service slides"
+    },
+    "person_nametag": {
+      "template": "Name Tag",
+      "edited": false,
+      "background": null,
+      "macro": "Name Tag/Title",
+      "arrangement": null,
+      "description": "Static speaker nametag — name never changes"
+    },
+    "content_nametag": {
+      "template": "Information (Projectors)",
+      "edited": true,
+      "background": "default",
+      "macro": "Name Tag/Title",
+      "arrangement": null,
+      "description": "Nametag-style slide with weekly content (piece name, speaker info)"
+    },
+    "announcements": {
+      "template": null,
+      "edited": false,
+      "background": null,
+      "macro": "Graphics",
+      "arrangement": null,
+      "description": "Announcements slides — updated separately"
+    },
+    "song": {
+      "template": "Lyrics (Projectors)",
+      "edited": false,
+      "background": null,
+      "macro": "Song",
+      "arrangement": null,
+      "description": "Song/hymn from library. 9am contemporary uses Default arrangement."
+    },
+    "liturgical_static": {
+      "template": "Information (Projectors)",
+      "edited": false,
+      "background": null,
+      "macro": "Scripture/Prayer",
+      "arrangement": null,
+      "description": "Reusable liturgical text — same every week"
+    },
+    "liturgical_edited": {
+      "template": "Scripture (Projectors) (Responsive)",
+      "edited": true,
+      "background": "default",
+      "macro": "Scripture/Prayer",
+      "arrangement": null,
+      "description": "Liturgical text regenerated from description each week"
+    },
+    "scripture": {
+      "template": "Scripture (Projectors)",
+      "edited": true,
+      "background": "default",
+      "macro": "Scripture/Prayer",
+      "arrangement": null,
+      "description": "Scripture slides generated fresh from Bible data"
+    },
+    "final_slide": {
+      "template": null,
+      "edited": false,
+      "background": null,
+      "macro": "Graphics",
+      "arrangement": null,
+      "description": "End-of-service reflection slide"
+    }
+  },
+
+  "item_types": {
+    "_comment": "Maps lowercase PCO title patterns to presentation types. Prefix matching — 'call to worship' matches 'Call to Worship (Robert)'.",
+
+    "pre-service": "pre_post_service",
+    "pre-service slides": "pre_post_service",
+    "service": "pre_post_service",
+    "post-service": "final_slide",
+
+    "greeting one another": "liturgical_static",
+    "gloria patri": "liturgical_static",
+    "#579 gloria patri": "liturgical_static",
+    "apostles' creed": "liturgical_static",
+    "apostles creed": "liturgical_static",
+    "doxology and prayer of dedication": "liturgical_static",
+    "giving of tithes and offerings": "content_nametag",
+    "prayer and the lord's prayer": "liturgical_static",
+    "prayer and lord's prayer": "liturgical_static",
+
+    "call to worship": "liturgical_edited",
+    "prayer of confession": "liturgical_edited",
+    "affirmation of faith": "liturgical_edited",
+    "responsive reading": "liturgical_edited",
+    "litany": "liturgical_edited",
+    "unison prayer": "liturgical_edited",
+
+    "children's message": "content_nametag",
+    "moment for mission": "content_nametag",
+    "organ prelude": "content_nametag",
+    "organ postlude": "content_nametag",
+
+    "welcome": "announcements"
+  },
+
+  "library_files": {
+    "_comment": "Known library file for each item pattern. Null means search by title.",
+    "pre-service": "Pre-Service, Post-Service Slides.pro",
+    "pre-service slides": "Pre-Service, Post-Service Slides.pro",
+    "service": "Pre-Service, Post-Service Slides.pro",
+    "post-service": "Final Slide - sermon reflection, prayer.pro",
+    "greeting one another": "Greeting.pro",
+    "gloria patri": "Gloria Patri.pro",
+    "#579 gloria patri": "Gloria Patri.pro",
+    "apostles' creed": "Apostles' Creed.pro",
+    "apostles creed": "Apostles' Creed.pro",
+    "doxology and prayer of dedication": "Doxology and Prayer of Dedication.pro",
+    "giving of tithes and offerings": "Offertory Nametag.pro",
+    "children's message": "Children's Message Nametag.pro",
+    "organ prelude": "Prelude Nametag.pro",
+    "organ postlude": "Postlude Nametag.pro",
+    "welcome": "Announcements.pro"
+  },
+
+  "multi_expand": {
+    "_comment": "Items that produce multiple playlist entries. {speaker} is replaced with the speaker's first name.",
+    "welcome": ["{speaker} Nametag", "Announcements.pro"],
+    "call to worship": ["{speaker} Nametag", "_generate"]
+  },
+
+  "skip_items": [
+    "benediction",
+    "sermon"
+  ],
+
+  "nametag_pattern": "{first_name} Nametag",
+
+  "staff": {
+    "Hope": { "last": "Lee", "role": "pastor" },
+    "Robert": { "last": "Austell", "role": "pastor" },
+    "Connie": { "last": "Jordan-Haas", "role": "pastor" },
+    "Marilyn": { "last": "Shenenberger", "role": "organist" }
+  },
+
+  "service_types": {
+    "primary": ["9:00am contemporary", "10:30am traditional"],
+    "seasonal": ["Christmas Eve"]
+  },
+
+  "service_overrides": {
+    "9:00am contemporary": {
+      "song": { "arrangement": "Default" }
+    }
+  }
+}

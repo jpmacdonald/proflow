@@ -3,7 +3,43 @@
 //! These types represent the data structures from the Planning Center API.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// `Planning Center` item identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ItemId(pub String);
+
+impl ItemId {
+    /// Create a new `ItemId` from a string.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+impl fmt::Display for ItemId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for ItemId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ItemId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl AsRef<str> for ItemId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Represents a type of service (e.g., "Sunday Morning")
 #[derive(Debug, Clone, PartialEq, Eq)]

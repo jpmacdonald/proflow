@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "proflow": {
+      "command": "/Users/jimmy/Documents/Projects/proflow/target/release/proflow_mcp",
+      "cwd": "/Users/jimmy/Documents/Projects/proflow",
+      "env": {"PROFLOW_DATA": "/Users/jimmy/Documents/Projects/proflow/data"}
+    }
+  }
+}

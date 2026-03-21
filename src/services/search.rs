@@ -3,7 +3,7 @@
 //! This module provides abstractions for different search strategies
 //! used to match `Planning Center` items to `ProPresenter` library files.
 
-use crate::utils::file_matcher::FileEntry;
+use crate::utils::file_index::FileEntry;
 
 /// Trait for file search strategies.
 ///
@@ -200,7 +200,7 @@ mod tests {
             file_name_lower: format!("{}.pro", name.to_lowercase()),
             normalized_lower: name.to_lowercase(),
             display_name: name.to_string(),
-            _relative_path: String::new(),
+            relative_path: String::new(),
             full_path: PathBuf::from(format!("/lib/{name}.pro")),
         }
     }
