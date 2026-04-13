@@ -10,10 +10,7 @@ use super::generated::rv_data;
 /// Searches through `presentation.arrangements` for one whose `name` matches
 /// (case-insensitive), then sets `selected_arrangement` to that UUID.
 /// Returns `true` if found and set, `false` if no matching arrangement exists.
-pub fn select_arrangement_by_name(
-    presentation: &mut rv_data::Presentation,
-    name: &str,
-) -> bool {
+pub fn select_arrangement_by_name(presentation: &mut rv_data::Presentation, name: &str) -> bool {
     let target = name.to_lowercase();
     let uuid = presentation
         .arrangements

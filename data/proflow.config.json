@@ -1,163 +1,424 @@
 {
-  "_comment": "Presentation type system. Each item maps to a type, each type declares its behavior.",
-
-  "theme": "VPC Theme",
-
+  "version": 2,
+  "metadata": {
+    "name": "VPC",
+    "timezone": "America/New_York",
+    "notes": "MCP-first service build config"
+  },
+  "defaults": {
+    "theme": "VPC Theme",
+    "review_policy": "ask"
+  },
+  "service_groups": {
+    "primary": {
+      "service_types": [
+        "9:00am contemporary",
+        "10:30am traditional"
+      ]
+    },
+    "seasonal": {
+      "service_types": [
+        "Christmas Eve"
+      ]
+    }
+  },
+  "profiles": {
+    "weekly": {
+      "description": "Primary weekly services",
+      "service_groups": [
+        "primary"
+      ],
+      "review_policy": "ask"
+    },
+    "seasonal": {
+      "description": "Seasonal services",
+      "service_groups": [
+        "seasonal"
+      ],
+      "days_ahead": 60,
+      "review_policy": "ask"
+    }
+  },
   "presentation_types": {
     "pre_post_service": {
-      "template": null,
-      "edited": false,
-      "background": null,
+      "kind": "graphic",
+      "content_source": "static",
+      "output_strategy": "use_existing",
       "macro": "Graphics",
-      "arrangement": null,
       "description": "Static pre/post service slides"
     },
     "person_nametag": {
+      "kind": "nametag",
+      "content_source": "static",
+      "output_strategy": "use_existing",
       "template": "Name Tag",
-      "edited": false,
-      "background": null,
       "macro": "Name Tag/Title",
-      "arrangement": null,
-      "description": "Static speaker nametag — name never changes"
+      "description": "Static speaker nametag"
     },
     "content_nametag": {
+      "kind": "nametag",
+      "content_source": "description",
+      "output_strategy": "edit_in_place",
       "template": "Information (Projectors)",
-      "edited": true,
       "background": "default",
       "macro": "Name Tag/Title",
-      "arrangement": null,
-      "description": "Nametag-style slide with weekly content (piece name, speaker info)"
+      "description": "Nametag-style slide with weekly content"
     },
     "announcements": {
-      "template": null,
-      "edited": false,
-      "background": null,
+      "kind": "announcement",
+      "content_source": "static",
+      "output_strategy": "use_existing",
       "macro": "Graphics",
-      "arrangement": null,
-      "description": "Announcements slides — updated separately"
+      "description": "Announcements slides updated separately"
     },
     "song": {
+      "kind": "song",
+      "content_source": "song",
+      "output_strategy": "use_existing",
       "template": "Lyrics (Projectors)",
-      "edited": false,
-      "background": null,
       "macro": "Song",
-      "arrangement": null,
-      "description": "Song/hymn from library. 9am contemporary uses Default arrangement."
+      "arrangement": "Default",
+      "description": "Song or hymn from library"
     },
     "liturgical_static": {
+      "kind": "liturgy",
+      "content_source": "static",
+      "output_strategy": "use_existing",
       "template": "Information (Projectors)",
-      "edited": false,
-      "background": null,
       "macro": "Scripture/Prayer",
-      "arrangement": null,
-      "description": "Reusable liturgical text — same every week"
+      "description": "Reusable liturgical text"
     },
     "liturgical_edited": {
+      "kind": "liturgy",
+      "content_source": "description",
+      "output_strategy": "edit_in_place",
       "template": "Scripture (Projectors) (Responsive)",
-      "edited": true,
       "background": "default",
       "macro": "Scripture/Prayer",
-      "arrangement": null,
-      "description": "Liturgical text regenerated from description each week"
+      "description": "Liturgical text regenerated from description"
     },
     "scripture": {
+      "kind": "scripture",
+      "content_source": "scripture",
+      "output_strategy": "generate_new",
       "template": "Scripture (Projectors)",
-      "edited": true,
+      "title_template": "Information (Projectors)",
       "background": "default",
-      "macro": "Scripture/Prayer",
-      "arrangement": null,
-      "description": "Scripture slides generated fresh from Bible data"
+      "macro": "Name Tag/Title",
+      "content_macro": "Scripture/Prayer",
+      "description": "Scripture slides generated from Bible data"
     },
     "final_slide": {
-      "template": null,
-      "edited": false,
-      "background": null,
+      "kind": "graphic",
+      "content_source": "static",
+      "output_strategy": "use_existing",
       "macro": "Graphics",
-      "arrangement": null,
       "description": "End-of-service reflection slide"
     }
   },
-
-  "item_types": {
-    "_comment": "Maps lowercase PCO title patterns to presentation types. Prefix matching — 'call to worship' matches 'Call to Worship (Robert)'.",
-
-    "pre-service": "pre_post_service",
-    "pre-service slides": "pre_post_service",
-    "service": "pre_post_service",
-    "post-service": "final_slide",
-
-    "greeting one another": "liturgical_static",
-    "gloria patri": "liturgical_static",
-    "#579 gloria patri": "liturgical_static",
-    "apostles' creed": "liturgical_static",
-    "apostles creed": "liturgical_static",
-    "doxology and prayer of dedication": "liturgical_static",
-    "giving of tithes and offerings": "content_nametag",
-    "prayer and the lord's prayer": "liturgical_static",
-    "prayer and lord's prayer": "liturgical_static",
-
-    "call to worship": "liturgical_edited",
-    "prayer of confession": "liturgical_edited",
-    "affirmation of faith": "liturgical_edited",
-    "responsive reading": "liturgical_edited",
-    "litany": "liturgical_edited",
-    "unison prayer": "liturgical_edited",
-
-    "children's message": "content_nametag",
-    "moment for mission": "content_nametag",
-    "organ prelude": "content_nametag",
-    "organ postlude": "content_nametag",
-
-    "welcome": "announcements"
-  },
-
-  "library_files": {
-    "_comment": "Known library file for each item pattern. Null means search by title.",
-    "pre-service": "Pre-Service, Post-Service Slides.pro",
-    "pre-service slides": "Pre-Service, Post-Service Slides.pro",
-    "service": "Pre-Service, Post-Service Slides.pro",
-    "post-service": "Final Slide - sermon reflection, prayer.pro",
-    "greeting one another": "Greeting.pro",
-    "gloria patri": "Gloria Patri.pro",
-    "#579 gloria patri": "Gloria Patri.pro",
-    "apostles' creed": "Apostles' Creed.pro",
-    "apostles creed": "Apostles' Creed.pro",
-    "doxology and prayer of dedication": "Doxology and Prayer of Dedication.pro",
-    "giving of tithes and offerings": "Offertory Nametag.pro",
-    "children's message": "Children's Message Nametag.pro",
-    "organ prelude": "Prelude Nametag.pro",
-    "organ postlude": "Postlude Nametag.pro",
-    "welcome": "Announcements.pro"
-  },
-
-  "multi_expand": {
-    "_comment": "Items that produce multiple playlist entries. {speaker} is replaced with the speaker's first name.",
-    "welcome": ["{speaker} Nametag", "Announcements.pro"],
-    "call to worship": ["{speaker} Nametag", "_generate"]
-  },
-
-  "skip_items": [
-    "benediction",
-    "sermon"
-  ],
-
-  "nametag_pattern": "{first_name} Nametag",
-
-  "staff": {
-    "Hope": { "last": "Lee", "role": "pastor" },
-    "Robert": { "last": "Austell", "role": "pastor" },
-    "Connie": { "last": "Jordan-Haas", "role": "pastor" },
-    "Marilyn": { "last": "Shenenberger", "role": "organist" }
-  },
-
-  "service_types": {
-    "primary": ["9:00am contemporary", "10:30am traditional"],
-    "seasonal": ["Christmas Eve"]
-  },
-
-  "service_overrides": {
-    "9:00am contemporary": {
-      "song": { "arrangement": "Default" }
+  "people": {
+    "Hope": {
+      "last": "Lee",
+      "role": "pastor",
+      "nametag": "Hope Nametag"
+    },
+    "Robert": {
+      "last": "Austell",
+      "role": "pastor",
+      "nametag": "Robert Nametag"
+    },
+    "Connie": {
+      "last": "Jordan-Haas",
+      "role": "pastor",
+      "nametag": "Connie Nametag"
+    },
+    "Marilyn": {
+      "last": "Shenenberger",
+      "role": "organist",
+      "nametag": "Marilyn Nametag"
     }
-  }
+  },
+  "item_rules": [
+    {
+      "id": "skip_benediction",
+      "match": {
+        "title_prefix": [
+          "benediction"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Benediction - skip"
+      }
+    },
+    {
+      "id": "skip_sermon",
+      "match": {
+        "title_prefix": [
+          "sermon"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Sermon - skip (added day-of)"
+      }
+    },
+    {
+      "id": "all_songs",
+      "match": {
+        "category": "song"
+      },
+      "use_type": "song"
+    },
+    {
+      "id": "scripture",
+      "match": {
+        "title_prefix": [
+          "scripture"
+        ],
+        "has_scripture_ref": true
+      },
+      "use_type": "scripture"
+    },
+    {
+      "id": "pre_post_service",
+      "match": {
+        "title_prefix": [
+          "pre-service",
+          "pre-service slides",
+          "service"
+        ]
+      },
+      "use_type": "pre_post_service",
+      "target": {
+        "library_file": "Pre-Service, Post-Service Slides.pro"
+      }
+    },
+    {
+      "id": "post_service",
+      "match": {
+        "title_prefix": [
+          "post-service"
+        ]
+      },
+      "use_type": "final_slide",
+      "target": {
+        "library_file": "Final Slide - sermon reflection, prayer.pro"
+      }
+    },
+    {
+      "id": "greeting_one_another",
+      "match": {
+        "title_prefix": [
+          "greeting one another"
+        ]
+      },
+      "use_type": "liturgical_static",
+      "target": {
+        "library_file": "Greeting.pro"
+      }
+    },
+    {
+      "id": "gloria_patri",
+      "match": {
+        "title_prefix": [
+          "gloria patri",
+          "#579 gloria patri"
+        ]
+      },
+      "use_type": "liturgical_static",
+      "target": {
+        "library_file": "Gloria Patri.pro"
+      }
+    },
+    {
+      "id": "apostles_creed",
+      "match": {
+        "title_prefix": [
+          "apostles' creed",
+          "apostles creed"
+        ]
+      },
+      "use_type": "liturgical_static",
+      "target": {
+        "library_file": "Apostles' Creed.pro"
+      }
+    },
+    {
+      "id": "doxology",
+      "match": {
+        "title_prefix": [
+          "doxology and prayer of dedication"
+        ]
+      },
+      "use_type": "liturgical_static",
+      "target": {
+        "library_file": "Doxology and Prayer of Dedication.pro"
+      }
+    },
+    {
+      "id": "offertory_nametag",
+      "match": {
+        "title_prefix": [
+          "giving of tithes and offerings"
+        ]
+      },
+      "use_type": "content_nametag",
+      "target": {
+        "library_file": "Offertory Nametag.pro"
+      }
+    },
+    {
+      "id": "lords_prayer",
+      "match": {
+        "title_prefix": [
+          "prayer and the lord's prayer",
+          "prayer and lord's prayer"
+        ]
+      },
+      "use_type": "liturgical_static",
+      "target": {
+        "library_file": "Prayer and The Lord's Prayer.pro"
+      }
+    },
+    {
+      "id": "call_to_worship",
+      "match": {
+        "title_prefix": [
+          "call to worship"
+        ]
+      },
+      "use_type": "liturgical_edited",
+      "target": {
+        "library_file": "Call to Worship.pro"
+      },
+      "expand": [
+        {
+          "use_type": "person_nametag",
+          "speaker": "resolved"
+        },
+        {
+          "use_type": "liturgical_edited"
+        }
+      ]
+    },
+    {
+      "id": "prayer_of_confession",
+      "match": {
+        "title_prefix": [
+          "prayer of confession"
+        ]
+      },
+      "use_type": "liturgical_edited",
+      "target": {
+        "library_file": "Prayer of Confession.pro"
+      }
+    },
+    {
+      "id": "affirmation_of_faith",
+      "match": {
+        "title_prefix": [
+          "affirmation of faith"
+        ]
+      },
+      "use_type": "liturgical_edited"
+    },
+    {
+      "id": "responsive_reading",
+      "match": {
+        "title_prefix": [
+          "responsive reading"
+        ]
+      },
+      "use_type": "liturgical_edited"
+    },
+    {
+      "id": "litany",
+      "match": {
+        "title_prefix": [
+          "litany"
+        ]
+      },
+      "use_type": "liturgical_edited"
+    },
+    {
+      "id": "unison_prayer",
+      "match": {
+        "title_prefix": [
+          "unison prayer"
+        ]
+      },
+      "use_type": "liturgical_edited"
+    },
+    {
+      "id": "childrens_message",
+      "match": {
+        "title_prefix": [
+          "children's message"
+        ]
+      },
+      "use_type": "content_nametag",
+      "target": {
+        "library_file": "Children's Message Nametag.pro"
+      }
+    },
+    {
+      "id": "moment_for_mission",
+      "match": {
+        "title_prefix": [
+          "moment for mission"
+        ]
+      },
+      "use_type": "content_nametag"
+    },
+    {
+      "id": "organ_prelude",
+      "match": {
+        "title_prefix": [
+          "organ prelude"
+        ]
+      },
+      "use_type": "content_nametag",
+      "target": {
+        "library_file": "Prelude Nametag.pro"
+      }
+    },
+    {
+      "id": "organ_postlude",
+      "match": {
+        "title_prefix": [
+          "organ postlude"
+        ]
+      },
+      "use_type": "content_nametag",
+      "target": {
+        "library_file": "Postlude Nametag.pro"
+      }
+    },
+    {
+      "id": "welcome_bundle",
+      "match": {
+        "title_prefix": [
+          "welcome"
+        ]
+      },
+      "use_type": "announcements",
+      "target": {
+        "library_file": "Announcements.pro"
+      },
+      "expand": [
+        {
+          "use_type": "person_nametag",
+          "speaker": "resolved"
+        },
+        {
+          "use_type": "announcements",
+          "target": {
+            "library_file": "Announcements.pro"
+          }
+        }
+      ]
+    }
+  ],
+  "overrides": []
 }

@@ -58,7 +58,8 @@ fn dump_json(path: &Path) {
     let presentation = load_presentation(path);
     println!(
         "{}",
-        serde_json::to_string_pretty(&presentation).expect("failed to serialize presentation as JSON")
+        serde_json::to_string_pretty(&presentation)
+            .expect("failed to serialize presentation as JSON")
     );
 }
 
@@ -69,7 +70,9 @@ fn dump_presentation(path: &Path) {
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!(
         "║ ProPresenter File Analysis: {}",
-        path.file_name().expect("path has no filename").to_string_lossy()
+        path.file_name()
+            .expect("path has no filename")
+            .to_string_lossy()
     );
     println!("╚══════════════════════════════════════════════════════════════════╝");
     println!();
@@ -524,13 +527,27 @@ fn diff_presentations(path1: &Path, path2: &Path) {
     let pres1 = load_presentation(path1);
     let pres2 = load_presentation(path2);
 
-    let json1 = serde_json::to_string_pretty(&pres1).expect("failed to serialize presentation 1 as JSON");
-    let json2 = serde_json::to_string_pretty(&pres2).expect("failed to serialize presentation 2 as JSON");
+    let json1 =
+        serde_json::to_string_pretty(&pres1).expect("failed to serialize presentation 1 as JSON");
+    let json2 =
+        serde_json::to_string_pretty(&pres2).expect("failed to serialize presentation 2 as JSON");
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║ Comparing:");
-    println!("║ 1: {}", path1.file_name().expect("path1 has no filename").to_string_lossy());
-    println!("║ 2: {}", path2.file_name().expect("path2 has no filename").to_string_lossy());
+    println!(
+        "║ 1: {}",
+        path1
+            .file_name()
+            .expect("path1 has no filename")
+            .to_string_lossy()
+    );
+    println!(
+        "║ 2: {}",
+        path2
+            .file_name()
+            .expect("path2 has no filename")
+            .to_string_lossy()
+    );
     println!("╚══════════════════════════════════════════════════════════════════╝");
     println!();
 

@@ -119,7 +119,9 @@ pub fn extract_slide_metrics(slide: &rv_data::PresentationSlide) -> Option<Slide
         // raw geometry suggests (descenders, internal padding), so we err
         // conservatively to avoid clipped text on the last line.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let max_lines = ((text_height_pt / line_height_pt).floor() as usize).saturating_sub(1).max(1);
+        let max_lines = ((text_height_pt / line_height_pt).floor() as usize)
+            .saturating_sub(1)
+            .max(1);
 
         if chars_per_line == 0 || max_lines == 0 {
             continue;
@@ -221,7 +223,10 @@ impl ThemeCache {
                 let path = get_theme_path(name)?;
                 let slides = load_theme(&path);
                 if slides.is_empty() {
-                    eprintln!("Warning: theme '{name}' loaded 0 slides from {}", path.display());
+                    eprintln!(
+                        "Warning: theme '{name}' loaded 0 slides from {}",
+                        path.display()
+                    );
                     None
                 } else {
                     Some((slides, Some(name.to_string())))
@@ -251,7 +256,10 @@ impl ThemeCache {
     }
 
     /// Look up a slide by legacy `TemplateType` directly.
-    pub fn get_legacy(&mut self, template_type: TemplateType) -> Option<&rv_data::PresentationSlide> {
+    pub fn get_legacy(
+        &mut self,
+        template_type: TemplateType,
+    ) -> Option<&rv_data::PresentationSlide> {
         if !self.legacy_slides.contains_key(&template_type) {
             let slide = self.load_legacy_slide(template_type)?;
             self.legacy_slides.insert(template_type, slide);
@@ -325,9 +333,7 @@ fn load_theme(path: &Path) -> HashMap<String, rv_data::PresentationSlide> {
 ///
 /// Both share the same `base_slide: Slide` — we just wrap it in the
 /// `PresentationSlide` envelope that the rest of the pipeline expects.
-fn theme_slide_to_presentation_slide(
-    ts: &rv_data::template::Slide,
-) -> rv_data::PresentationSlide {
+fn theme_slide_to_presentation_slide(ts: &rv_data::template::Slide) -> rv_data::PresentationSlide {
     rv_data::PresentationSlide {
         base_slide: ts.base_slide.clone(),
         notes: None,
@@ -497,6 +503,91 @@ pub fn split_content_for_slides(
     slides
 }
 
+/// Pack styled segments onto slides greedily by line capacity.
+///
+/// Each segment is word-wrapped to estimate its visual line count, then
+/// segments are packed onto slides until adding the next would exceed
+/// `max_lines`. This matches how scripture verses are packed — content
+/// flows across slides based on how much text fits.
+pub fn pack_segments_for_slides(
+    segments: &[StyledSegment],
+    wrap_column: usize,
+    max_lines: usize,
+) -> Vec<Vec<StyledSegment>> {
+    let wrap_col = wrap_column.max(MIN_SLIDE_WRAP);
+    let max = max_lines.max(1);
+
+    // Estimate visual line count for each segment
+    let blocks: Vec<(&StyledSegment, usize)> = segments
+        .iter()
+        .map(|seg| {
+            let line_count = word_wrap(&seg.text, wrap_col).len();
+            (seg, line_count)
+        })
+        .collect();
+
+    let mut slides: Vec<Vec<StyledSegment>> = Vec::new();
+    let mut current: Vec<StyledSegment> = Vec::new();
+    let mut current_count: usize = 0;
+
+    for (seg, line_count) in &blocks {
+        if current_count > 0 && current_count + line_count > max {
+            slides.push(std::mem::take(&mut current));
+            current_count = 0;
+        }
+        current.push((*seg).clone());
+        current_count += line_count;
+    }
+
+    if !current.is_empty() {
+        slides.push(current);
+    }
+
+    slides
+}
+
+/// Edit an existing presentation: replace its slides with new content while
+/// preserving the file's template styling.
+///
+/// Extracts the first slide as a styling template, rebuilds title + content
+/// slides using that template, and returns the updated presentation. The
+/// caller writes it back to the same file path.
+pub fn edit_existing_presentation(
+    existing: &rv_data::Presentation,
+    content: &[StyledSegment],
+    title_text: Option<&str>,
+) -> Option<rv_data::Presentation> {
+    let template_slide = extract_template_slide(existing)?;
+
+    let (wrap_col, max_lines) = extract_slide_metrics(&template_slide)
+        .map_or((45, DEFAULT_MAX_LINES_PER_SLIDE), |m| {
+            (m.chars_per_line, m.max_lines)
+        });
+
+    let slide_groups = pack_segments_for_slides(content, wrap_col, max_lines);
+
+    let mut all_segments: Vec<Vec<StyledSegment>> = Vec::new();
+
+    if let Some(title) = title_text {
+        if !title.is_empty() {
+            all_segments.push(vec![StyledSegment::unstyled(title)]);
+        }
+    }
+
+    all_segments.extend(slide_groups);
+
+    if all_segments.is_empty() {
+        return None;
+    }
+
+    let mut presentation = assemble_presentation(&existing.name, &template_slide, &all_segments);
+
+    // Preserve the existing UUID so ProPresenter recognizes the file
+    presentation.uuid.clone_from(&existing.uuid);
+
+    Some(presentation)
+}
+
 /// A scripture passage with its title and verse data, used by the combined
 /// scripture presentation builder.
 pub struct ScripturePassage {
@@ -509,7 +600,7 @@ pub struct ScripturePassage {
 /// Assemble a `Presentation` from a sequence of slides.
 ///
 /// Builds the cue/group/UUID scaffolding that `ProPresenter` expects.
-fn assemble_presentation(
+pub fn assemble_presentation(
     name: &str,
     template_slide: &rv_data::PresentationSlide,
     slide_segments: &[Vec<StyledSegment>],
@@ -631,6 +722,132 @@ pub fn build_scripture_presentation(
     Some(assemble_presentation(name, template_slide, &all_segments))
 }
 
+/// Build a scripture presentation with a separate title slide template.
+///
+/// The title slide uses `title_template` (e.g., Information/Projectors) while
+/// content slides use `content_template` (e.g., Scripture/Projectors). This
+/// supports having a different visual style for the title vs verses.
+pub fn build_scripture_presentation_dual_template(
+    name: &str,
+    title_template: &rv_data::PresentationSlide,
+    content_template: &rv_data::PresentationSlide,
+    verses: &[crate::bible::Verse],
+    title_text: Option<&str>,
+) -> Option<rv_data::Presentation> {
+    let (wrap_col, max_lines) = extract_slide_metrics(content_template)
+        .map_or((45, DEFAULT_MAX_LINES_PER_SLIDE), |m| {
+            (m.chars_per_line, m.max_lines)
+        });
+
+    let slide_texts = split_verses_for_slides(verses, wrap_col, max_lines);
+
+    // Build presentation shell
+    let mut presentation = rv_data::Presentation {
+        name: name.to_string(),
+        uuid: Some(rv_data::Uuid {
+            string: uuid::Uuid::new_v4().to_string(),
+        }),
+        ..rv_data::Presentation::default()
+    };
+
+    let mut cue_uuids = Vec::new();
+
+    let mut push_cue = |presentation: &mut rv_data::Presentation,
+                        template: &rv_data::PresentationSlide,
+                        segments: &[StyledSegment]| {
+        let slide = clone_slide_with_text(template, segments);
+        let cue_uuid = uuid::Uuid::new_v4();
+        let cue = rv_data::Cue {
+            uuid: Some(rv_data::Uuid {
+                string: cue_uuid.to_string(),
+            }),
+            name: String::new(),
+            actions: vec![rv_data::Action {
+                uuid: Some(rv_data::Uuid {
+                    string: uuid::Uuid::new_v4().to_string(),
+                }),
+                name: String::new(),
+                label: None,
+                delay_time: 0.0,
+                old_type: None,
+                is_enabled: true,
+                layer_identification: None,
+                duration: 0.0,
+                r#type: rv_data::action::ActionType::PresentationSlide as i32,
+                action_type_data: Some(rv_data::action::ActionTypeData::Slide(
+                    rv_data::action::SlideType {
+                        slide: Some(rv_data::action::slide_type::Slide::Presentation(slide)),
+                    },
+                )),
+            }],
+            completion_target_type: rv_data::cue::CompletionTargetType::None as i32,
+            completion_target_uuid: None,
+            completion_action_type: rv_data::cue::CompletionActionType::Last as i32,
+            completion_action_uuid: None,
+            trigger_time: None,
+            hot_key: Some(rv_data::HotKey {
+                code: 0,
+                control_identifier: String::new(),
+            }),
+            pending_imports: Vec::new(),
+            is_enabled: true,
+            completion_time: 0.0,
+        };
+        cue_uuids.push(cue_uuid);
+        presentation.cues.push(cue);
+    };
+
+    // Title slide uses title_template
+    if let Some(title) = title_text {
+        if !title.is_empty() {
+            push_cue(
+                &mut presentation,
+                title_template,
+                &[StyledSegment::unstyled(title)],
+            );
+        }
+    }
+
+    // Content slides use content_template
+    for text in &slide_texts {
+        if !text.trim().is_empty() {
+            push_cue(
+                &mut presentation,
+                content_template,
+                &[StyledSegment::unstyled(text.as_str())],
+            );
+        }
+    }
+
+    if presentation.cues.is_empty() {
+        return None;
+    }
+
+    // Create group
+    let group_uuid = uuid::Uuid::new_v4();
+    let group = rv_data::presentation::CueGroup {
+        group: Some(rv_data::Group {
+            uuid: Some(rv_data::Uuid {
+                string: group_uuid.to_string(),
+            }),
+            name: String::new(),
+            color: None,
+            hot_key: None,
+            application_group_identifier: None,
+            application_group_name: String::new(),
+        }),
+        cue_identifiers: cue_uuids
+            .iter()
+            .map(|u| rv_data::Uuid {
+                string: u.to_string(),
+            })
+            .collect(),
+    };
+    presentation.cue_groups.push(group);
+
+    Some(presentation)
+}
+
 /// Build a combined presentation for multiple scripture passages.
 ///
 /// Layout: [title → content slides → blank divider] repeated for each passage,
@@ -684,6 +901,10 @@ pub fn build_combined_scripture_presentation(
 /// greedily packed onto slides. When a single verse exceeds `max_lines`,
 /// it is split at natural punctuation (`. `, `; `, `: `, `, `) to avoid
 /// breaking mid-sentence.
+///
+/// `ProPresenter` handles text wrapping within the text box, so slide text is
+/// emitted as continuous runs without embedded line breaks. `word_wrap` is
+/// used only to *estimate* visual line counts for deciding slide splits.
 pub fn split_verses_for_slides(
     verses: &[crate::bible::Verse],
     wrap_column: usize,
@@ -692,46 +913,45 @@ pub fn split_verses_for_slides(
     let wrap_col = wrap_column.max(MIN_SLIDE_WRAP);
     let max = max_lines.max(1);
 
-    // Pre-process: wrap each verse into visual lines
-    let mut verse_blocks: Vec<Vec<String>> = Vec::new();
+    // Each block: (raw text for output, estimated visual line count)
+    let mut verse_blocks: Vec<(String, usize)> = Vec::new();
     for verse in verses {
         let prefixed = format!(
             "{} {}",
             crate::bible::to_superscript(verse.number),
             verse.text
         );
-        let wrapped = word_wrap(&prefixed, wrap_col);
+        let line_count = word_wrap(&prefixed, wrap_col).len();
 
-        if wrapped.len() <= max {
-            verse_blocks.push(wrapped);
+        if line_count <= max {
+            verse_blocks.push((prefixed, line_count));
         } else {
-            // Verse too long — split at punctuation, then re-wrap each fragment.
-            // Prepend superscript to the full text so the first fragment's size
-            // accounts for it during splitting.
+            // Verse too long — split at punctuation into fragments that fit.
             let fragments = split_at_punctuation(&prefixed, wrap_col, max);
             for fragment in &fragments {
-                verse_blocks.push(word_wrap(fragment, wrap_col));
+                let frag_lines = word_wrap(fragment, wrap_col).len();
+                verse_blocks.push((fragment.clone(), frag_lines));
             }
         }
     }
 
     // Greedily pack blocks onto slides
     let mut slides: Vec<String> = Vec::new();
-    let mut current_lines: Vec<String> = Vec::new();
+    let mut current_texts: Vec<String> = Vec::new();
     let mut current_count: usize = 0;
 
-    for block in &verse_blocks {
-        if current_count > 0 && current_count + block.len() > max {
-            slides.push(current_lines.join("\n"));
-            current_lines.clear();
+    for (text, line_count) in &verse_blocks {
+        if current_count > 0 && current_count + line_count > max {
+            slides.push(current_texts.join(" "));
+            current_texts.clear();
             current_count = 0;
         }
-        current_lines.extend_from_slice(block);
-        current_count += block.len();
+        current_texts.push(text.clone());
+        current_count += line_count;
     }
 
-    if !current_lines.is_empty() {
-        slides.push(current_lines.join("\n"));
+    if !current_texts.is_empty() {
+        slides.push(current_texts.join(" "));
     }
 
     if slides.is_empty() {
@@ -862,49 +1082,49 @@ pub fn build_presentation_from_template_with_options(
 
     let mut cue_uuids = Vec::new();
 
-    let mut push_slide_cue =
-        |presentation: &mut rv_data::Presentation, segments: &[StyledSegment]| {
-            let slide = clone_slide_with_text(template_slide, segments);
-            let cue_uuid = uuid::Uuid::new_v4();
-            let cue = rv_data::Cue {
+    let mut push_slide_cue = |presentation: &mut rv_data::Presentation,
+                              segments: &[StyledSegment]| {
+        let slide = clone_slide_with_text(template_slide, segments);
+        let cue_uuid = uuid::Uuid::new_v4();
+        let cue = rv_data::Cue {
+            uuid: Some(rv_data::Uuid {
+                string: cue_uuid.to_string(),
+            }),
+            name: String::new(),
+            actions: vec![rv_data::Action {
                 uuid: Some(rv_data::Uuid {
-                    string: cue_uuid.to_string(),
+                    string: uuid::Uuid::new_v4().to_string(),
                 }),
                 name: String::new(),
-                actions: vec![rv_data::Action {
-                    uuid: Some(rv_data::Uuid {
-                        string: uuid::Uuid::new_v4().to_string(),
-                    }),
-                    name: String::new(),
-                    label: None,
-                    delay_time: 0.0,
-                    old_type: None,
-                    is_enabled: true,
-                    layer_identification: None,
-                    duration: 0.0,
-                    r#type: rv_data::action::ActionType::PresentationSlide as i32,
-                    action_type_data: Some(rv_data::action::ActionTypeData::Slide(
-                        rv_data::action::SlideType {
-                            slide: Some(rv_data::action::slide_type::Slide::Presentation(slide)),
-                        },
-                    )),
-                }],
-                completion_target_type: rv_data::cue::CompletionTargetType::None as i32,
-                completion_target_uuid: None,
-                completion_action_type: rv_data::cue::CompletionActionType::Last as i32,
-                completion_action_uuid: None,
-                trigger_time: None,
-                hot_key: Some(rv_data::HotKey {
-                    code: 0,
-                    control_identifier: String::new(),
-                }),
-                pending_imports: Vec::new(),
+                label: None,
+                delay_time: 0.0,
+                old_type: None,
                 is_enabled: true,
-                completion_time: 0.0,
-            };
-            cue_uuids.push(cue_uuid);
-            presentation.cues.push(cue);
+                layer_identification: None,
+                duration: 0.0,
+                r#type: rv_data::action::ActionType::PresentationSlide as i32,
+                action_type_data: Some(rv_data::action::ActionTypeData::Slide(
+                    rv_data::action::SlideType {
+                        slide: Some(rv_data::action::slide_type::Slide::Presentation(slide)),
+                    },
+                )),
+            }],
+            completion_target_type: rv_data::cue::CompletionTargetType::None as i32,
+            completion_target_uuid: None,
+            completion_action_type: rv_data::cue::CompletionActionType::Last as i32,
+            completion_action_uuid: None,
+            trigger_time: None,
+            hot_key: Some(rv_data::HotKey {
+                code: 0,
+                control_identifier: String::new(),
+            }),
+            pending_imports: Vec::new(),
+            is_enabled: true,
+            completion_time: 0.0,
         };
+        cue_uuids.push(cue_uuid);
+        presentation.cues.push(cue);
+    };
 
     // Title slide (plain text, default color)
     if let Some(title) = title_text {
@@ -1005,7 +1225,10 @@ mod tests {
     fn test_extract_slide_metrics() {
         let slide = get_scripture_slide();
         let metrics = extract_slide_metrics(&slide);
-        assert!(metrics.is_some(), "should extract metrics from scripture template");
+        assert!(
+            metrics.is_some(),
+            "should extract metrics from scripture template"
+        );
 
         let m = metrics.unwrap();
         assert!(m.font_size_pt > 0.0, "font size should be positive");
@@ -1039,10 +1262,19 @@ mod tests {
         let content = vec![long_line];
         let slides = split_content_for_slides(&content, 40, 3);
 
-        assert!(slides.len() > 1, "long line should produce multiple slides, got {}", slides.len());
+        assert!(
+            slides.len() > 1,
+            "long line should produce multiple slides, got {}",
+            slides.len()
+        );
         for (i, slide) in slides.iter().enumerate() {
             let line_count = slide.lines().count();
-            assert!(line_count <= 3, "slide {} has {} lines, expected <= 3", i, line_count);
+            assert!(
+                line_count <= 3,
+                "slide {} has {} lines, expected <= 3",
+                i,
+                line_count
+            );
         }
     }
 
@@ -1139,12 +1371,14 @@ mod tests {
             let line_count = slide.lines().count();
             // A single verse may exceed max_lines on its own, but we never split mid-verse
             assert!(
-                line_count <= 3 || slide.matches('⁰').count()
-                    + slide.matches('¹').count()
-                    + slide.matches('²').count()
-                    + slide.matches('³').count()
-                    + slide.matches('⁴').count()
-                    + slide.matches('⁵').count() == 1,
+                line_count <= 3
+                    || slide.matches('⁰').count()
+                        + slide.matches('¹').count()
+                        + slide.matches('²').count()
+                        + slide.matches('³').count()
+                        + slide.matches('⁴').count()
+                        + slide.matches('⁵').count()
+                        == 1,
                 "slide {i} has {line_count} lines but should be ≤3 unless it's a single long verse"
             );
         }
@@ -1152,10 +1386,16 @@ mod tests {
         // All 5 verses should appear across slides (word-wrapped, so check key phrases)
         let all_text = slides.join("\n");
         assert!(all_text.contains("wilderness"), "verse 1 content missing");
-        assert!(all_text.contains("blossom abundantly"), "verse 2 content missing");
+        assert!(
+            all_text.contains("blossom abundantly"),
+            "verse 2 content missing"
+        );
         assert!(all_text.contains("Strengthen"), "verse 3 content missing");
         assert!(all_text.contains("Be strong"), "verse 4 content missing");
-        assert!(all_text.contains("blind shall be"), "verse 5 content missing");
+        assert!(
+            all_text.contains("blind shall be"),
+            "verse 5 content missing"
+        );
 
         // Verify verse numbers are present as superscripts
         assert!(all_text.contains('¹'), "superscript 1 missing");
@@ -1189,12 +1429,18 @@ mod tests {
         }
 
         // The superscript verse number should only appear on the first slide
-        assert!(slides[0].contains('²'), "first slide should have verse number");
+        assert!(
+            slides[0].contains('²'),
+            "first slide should have verse number"
+        );
 
         // Content should be preserved across all slides
         let all_text = slides.join(" ");
         assert!(all_text.contains("foreknew"), "content should be preserved");
-        assert!(all_text.contains("firstborn"), "content should be preserved");
+        assert!(
+            all_text.contains("firstborn"),
+            "content should be preserved"
+        );
     }
 
     #[test]
@@ -1207,7 +1453,8 @@ mod tests {
             },
             crate::bible::Verse {
                 number: 2,
-                text: "The earth was formless and empty, and darkness covered the deep waters.".to_string(),
+                text: "The earth was formless and empty, and darkness covered the deep waters."
+                    .to_string(),
             },
         ];
 
@@ -1221,7 +1468,11 @@ mod tests {
 
         let p = pres.unwrap();
         // Title slide + at least 1 content slide
-        assert!(p.cues.len() >= 2, "expected title + content, got {}", p.cues.len());
+        assert!(
+            p.cues.len() >= 2,
+            "expected title + content, got {}",
+            p.cues.len()
+        );
     }
 
     #[test]

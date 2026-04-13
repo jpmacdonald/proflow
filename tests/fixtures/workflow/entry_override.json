@@ -1,0 +1,19 @@
+{
+  "entry": {
+    "output_key": "3:main",
+    "position": 3,
+    "pco_title": "Call to Worship",
+    "playlist_name": "Call to Worship",
+    "status": "edited",
+    "reason": "Content updated from description",
+    "file_path": "/tmp/fixture/Call to Worship.pro",
+    "background": "default",
+    "arrangement": "Standard"
+  },
+  "override": {
+    "output_key": "3:main",
+    "playlist_name": "Weekly Call to Worship",
+    "background": "sermon",
+    "arrangement": "Override"
+  }
+}

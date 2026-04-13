@@ -1,0 +1,143 @@
+{
+  "version": 2,
+  "metadata": {
+    "name": "Example Church",
+    "timezone": "America/New_York",
+    "notes": "Conservative MCP-first starter config"
+  },
+  "defaults": {
+    "theme": "Example Theme",
+    "days_ahead": 14,
+    "review_policy": "ask"
+  },
+  "service_groups": {
+    "weekly_primary": {
+      "service_types": [
+        "Sunday Morning"
+      ]
+    },
+    "seasonal": {
+      "service_types": [
+        "Christmas Eve",
+        "Ash Wednesday"
+      ]
+    }
+  },
+  "profiles": {
+    "weekly": {
+      "description": "Normal weekly service prep",
+      "service_groups": [
+        "weekly_primary"
+      ],
+      "days_ahead": 14,
+      "review_policy": "ask"
+    },
+    "seasonal": {
+      "description": "Seasonal and holiday service prep",
+      "service_groups": [
+        "seasonal"
+      ],
+      "days_ahead": 60,
+      "review_policy": "ask"
+    }
+  },
+  "presentation_types": {
+    "song": {
+      "kind": "song",
+      "content_source": "song",
+      "output_strategy": "use_existing",
+      "template": "Lyrics (Projectors)",
+      "macro": "Song",
+      "arrangement": "Default",
+      "description": "Song or hymn from the library"
+    },
+    "scripture": {
+      "kind": "scripture",
+      "content_source": "scripture",
+      "output_strategy": "generate_new",
+      "template": "Scripture (Projectors)",
+      "title_template": "Information (Projectors)",
+      "background": "default",
+      "macro": "Name Tag/Title",
+      "content_macro": "Scripture/Prayer",
+      "description": "Scripture slides generated from Bible data"
+    },
+    "liturgy": {
+      "kind": "liturgy",
+      "content_source": "description",
+      "output_strategy": "edit_in_place",
+      "template": "Information (Projectors)",
+      "background": "default",
+      "macro": "Scripture/Prayer",
+      "description": "Weekly liturgical text regenerated from description"
+    },
+    "person_nametag": {
+      "kind": "nametag",
+      "content_source": "static",
+      "output_strategy": "use_existing",
+      "template": "Name Tag",
+      "macro": "Name Tag/Title",
+      "description": "Speaker nametag slide"
+    }
+  },
+  "item_rules": [
+    {
+      "id": "skip_benediction",
+      "match": {
+        "title_prefix": [
+          "benediction"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Handled live"
+      }
+    },
+    {
+      "id": "all_songs",
+      "match": {
+        "category": "song"
+      },
+      "use_type": "song"
+    },
+    {
+      "id": "scripture",
+      "match": {
+        "title_prefix": [
+          "scripture"
+        ],
+        "has_scripture_ref": true
+      },
+      "use_type": "scripture"
+    },
+    {
+      "id": "call_to_worship",
+      "match": {
+        "title_prefix": [
+          "call to worship"
+        ]
+      },
+      "expand": [
+        {
+          "use_type": "person_nametag",
+          "speaker": "resolved"
+        },
+        {
+          "use_type": "liturgy",
+          "target": {
+            "library_file": "Call to Worship.pro"
+          }
+        }
+      ],
+      "notes": "Example multi-output rule: speaker nametag plus weekly liturgy"
+    }
+  ],
+  "people": {
+    "Pastor": {
+      "last": "Example",
+      "role": "pastor",
+      "nametag": "Pastor Nametag"
+    }
+  },
+  "overrides": []
+}

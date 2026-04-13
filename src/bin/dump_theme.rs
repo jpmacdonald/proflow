@@ -1,8 +1,8 @@
 //! Dump a `ProPresenter` theme file for inspection.
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
-use prost::Message;
 use proflow::propresenter::generated::rv_data;
+use prost::Message;
 use std::env;
 
 fn main() {
@@ -14,7 +14,10 @@ fn main() {
             println!("Theme: {} slides", doc.slides.len());
             if let Some(ref app) = doc.application_info {
                 if let Some(ref ver) = app.application_version {
-                    println!("ProPresenter version: {}.{}.{}", ver.major_version, ver.minor_version, ver.patch_version);
+                    println!(
+                        "ProPresenter version: {}.{}.{}",
+                        ver.major_version, ver.minor_version, ver.patch_version
+                    );
                 }
             }
             for (i, slide) in doc.slides.iter().enumerate() {
@@ -30,7 +33,8 @@ fn main() {
                         if let Some(ref ge) = elem.element {
                             println!("  Element {j}:");
                             if let Some(ref bounds) = ge.bounds {
-                                println!("    Bounds: origin=({}, {}), size=({}, {})",
+                                println!(
+                                    "    Bounds: origin=({}, {}), size=({}, {})",
                                     bounds.origin.as_ref().map_or(0.0, |o| o.x),
                                     bounds.origin.as_ref().map_or(0.0, |o| o.y),
                                     bounds.size.as_ref().map_or(0.0, |s| s.width),
@@ -44,7 +48,10 @@ fn main() {
                                 println!("    RTF: {preview}...");
                                 if let Some(ref attrs) = text.attributes {
                                     if let Some(ref font) = attrs.font {
-                                        println!("    Font: {} size={} bold={} italic={}", font.name, font.size, font.bold, font.italic);
+                                        println!(
+                                            "    Font: {} size={} bold={} italic={}",
+                                            font.name, font.size, font.bold, font.italic
+                                        );
                                     }
                                 }
                             }

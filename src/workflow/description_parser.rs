@@ -6,10 +6,11 @@
 
 use serde::Serialize;
 
+use super::classify::strip_speaker;
 use crate::propresenter::rtf::StyledSegment;
 
-/// Yellow color used for congregational responses.
-const YELLOW: &str = "#FFFF00";
+/// Banana yellow used for congregational responses (ALL/PEOPLE lines).
+const YELLOW: &str = "#FEFC8B";
 
 /// A parsed segment of description text with formatting hints.
 #[derive(Debug, Clone, Serialize)]
@@ -57,14 +58,16 @@ pub fn parse_description(
 fn parse_liturgical(description: &str, item_title: &str) -> Option<ParsedContent> {
     let title_text = strip_speaker(item_title);
 
-    // Strategy 1: marker-based parsing ([SLIDE], [SLIDE/ALL], [no slide])
-    if has_slide_markers(description) {
-        return parse_markers(description, &title_text);
-    }
-
-    // Strategy 2: responsive reading (Leader:/People: prefixes)
+    // Strategy 1: responsive reading (Leader:/People: prefixes) — takes priority
+    // because descriptions sometimes have [SLIDE] metadata on instruction lines
+    // alongside LEADER:/ALL: content lines.
     if has_responsive_pattern(description) {
         return parse_responsive(description, &title_text);
+    }
+
+    // Strategy 2: marker-based parsing ([SLIDE], [SLIDE/ALL], [no slide])
+    if has_slide_markers(description) {
+        return parse_markers(description, &title_text);
     }
 
     // Strategy 3: plain text — all lines become default-colored segments
@@ -105,7 +108,8 @@ fn has_slide_markers(description: &str) -> bool {
 /// Responsive reading leader prefixes (case-insensitive, with or without colon).
 const LEADER_PREFIXES: &[&str] = &["leader:", "leader "];
 /// Responsive reading congregation prefixes.
-const CONGREGATION_PREFIXES: &[&str] = &["people:", "people ", "all:", "all ", "unison:", "unison "];
+const CONGREGATION_PREFIXES: &[&str] =
+    &["people:", "people ", "all:", "all ", "unison:", "unison "];
 
 /// Check for responsive reading patterns.
 ///
@@ -399,13 +403,6 @@ fn extract_after_marker(line: &str, marker: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
-/// Strip speaker parenthetical from a title.
-fn strip_speaker(title: &str) -> String {
-    title
-        .rfind('(')
-        .map_or_else(|| title.to_string(), |i| title[..i].trim().to_string())
-}
-
 /// Convert `ParsedContent` segments into `StyledSegment` for RTF generation.
 pub fn to_styled_segments(parsed: &ParsedContent) -> Vec<StyledSegment> {
     parsed
@@ -420,7 +417,7 @@ pub fn to_styled_segments(parsed: &ParsedContent) -> Vec<StyledSegment> {
         .collect()
 }
 
-/// Parse a hex color string like "#FFFF00" into RGB tuple.
+/// Parse a hex color string like "#FEFC8B" into RGB tuple.
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
     let hex = s.strip_prefix('#').unwrap_or(s);
     if hex.len() != 6 {
@@ -449,8 +446,8 @@ mod tests {
         // Leader lines have no color (white/default)
         assert!(content.segments[0].color.is_none());
         // People/All lines are yellow
-        assert_eq!(content.segments[1].color.as_deref(), Some("#FFFF00"));
-        assert_eq!(content.segments[3].color.as_deref(), Some("#FFFF00"));
+        assert_eq!(content.segments[1].color.as_deref(), Some("#FEFC8B"));
+        assert_eq!(content.segments[3].color.as_deref(), Some("#FEFC8B"));
     }
 
     #[test]
@@ -461,7 +458,7 @@ mod tests {
         let content = result.unwrap();
         assert_eq!(content.segments.len(), 1);
         assert!(content.segments[0].text.contains("Precious Lord"));
-        assert_eq!(content.segments[0].color.as_deref(), Some("#FFFF00"));
+        assert_eq!(content.segments[0].color.as_deref(), Some("#FEFC8B"));
     }
 
     #[test]
@@ -490,7 +487,7 @@ mod tests {
                 },
                 ParsedSegment {
                     text: "World".to_string(),
-                    color: Some("#FFFF00".to_string()),
+                    color: Some("#FEFC8B".to_string()),
                     bold: Some(true),
                     italic: None,
                 },
@@ -500,7 +497,7 @@ mod tests {
         let styled = to_styled_segments(&parsed);
         assert_eq!(styled.len(), 2);
         assert!(styled[0].color.is_none());
-        assert_eq!(styled[1].color, Some((255, 255, 0)));
+        assert_eq!(styled[1].color, Some((254, 252, 139)));
         assert_eq!(styled[1].bold, Some(true));
     }
 
@@ -537,17 +534,13 @@ mod tests {
         let content = result.unwrap();
         assert_eq!(content.segments.len(), 1);
         assert!(content.segments[0].text.contains("Hear our prayer"));
-        assert_eq!(content.segments[0].color.as_deref(), Some("#FFFF00"));
+        assert_eq!(content.segments[0].color.as_deref(), Some("#FEFC8B"));
     }
 
     #[test]
     fn test_content_nametag_no_colon() {
         let desc = "Special offering for missions";
-        let result = parse_description(
-            desc,
-            "Giving of Tithes and Offerings",
-            "content_nametag",
-        );
+        let result = parse_description(desc, "Giving of Tithes and Offerings", "content_nametag");
         assert!(result.is_some());
         let content = result.unwrap();
         // Should use description content, not the full title
@@ -563,6 +556,6 @@ mod tests {
         let content = result.unwrap();
         assert_eq!(content.segments.len(), 2);
         assert!(content.segments[0].color.is_none());
-        assert_eq!(content.segments[1].color.as_deref(), Some("#FFFF00"));
+        assert_eq!(content.segments[1].color.as_deref(), Some("#FEFC8B"));
     }
 }

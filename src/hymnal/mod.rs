@@ -211,8 +211,14 @@ mod tests {
 
     #[test]
     fn test_extract_hymn_number_hash() {
-        assert_eq!(extract_hymn_number("#510 Jesus Shall Reign"), Some("510".to_string()));
-        assert_eq!(extract_hymn_number("Hymn #42 Amazing Grace"), Some("42".to_string()));
+        assert_eq!(
+            extract_hymn_number("#510 Jesus Shall Reign"),
+            Some("510".to_string())
+        );
+        assert_eq!(
+            extract_hymn_number("Hymn #42 Amazing Grace"),
+            Some("42".to_string())
+        );
     }
 
     #[test]

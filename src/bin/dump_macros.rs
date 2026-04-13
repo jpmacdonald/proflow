@@ -1,8 +1,8 @@
 //! Dump `ProPresenter` macros for inspection.
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
-use prost::Message;
 use proflow::propresenter::generated::rv_data;
+use prost::Message;
 
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| {
