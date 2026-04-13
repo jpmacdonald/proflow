@@ -5,15 +5,15 @@
 use prost::Message;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use zip::write::FileOptions;
 use zip::ZipWriter;
 
+use super::SlideType;
 use crate::propresenter::generated::rv_data::{
     self, playlist, playlist_document, playlist_item, url,
 };
-use super::SlideType;
 
 /// Errors that can occur when writing playlist files
 #[derive(Debug, thiserror::Error)]
@@ -424,203 +424,6 @@ pub fn write_playlist_file(
     zip.finish()?;
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Playlist generation — builds entries from service items and writes output
-// ---------------------------------------------------------------------------
-
-use std::collections::HashMap;
-use std::path::PathBuf;
-
-use super::rtf::StyledSegment;
-use super::template::{
-    build_presentation_from_template_with_options, ThemeCache, DEFAULT_MAX_LINES_PER_SLIDE,
-    MIN_SLIDE_WRAP,
-};
-use crate::item_state::ItemStateStore;
-use crate::planning_center::types::{Item, ItemId};
-
-/// Result of a successful playlist generation.
-pub struct PlaylistResult {
-    /// Path where the playlist file was written.
-    pub output_path: PathBuf,
-    /// Number of items included in the playlist.
-    pub entry_count: usize,
-}
-
-/// Build a playlist entry for a single item.
-///
-/// Returns `Ok(Some(entry))` if the item produces an entry, `Ok(None)` if
-/// the item is ignored, or `Err(message)` if the item cannot be processed.
-fn build_entry_for_item(
-    item: &Item,
-    item_states: &ItemStateStore,
-    template_cache: &mut Option<ThemeCache>,
-    slide_type: SlideType,
-    allow_incomplete: bool,
-) -> Result<Option<PlaylistEntry>, String> {
-    let item_id = ItemId::new(&item.id);
-
-    if item_states.is_ignored(&item_id) {
-        return Ok(None);
-    }
-
-    // Matched external .pro file
-    if let Some(matched_path) = item_states.get_matched_file(&item_id) {
-        let file_stem = Path::new(matched_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&item.title);
-        let entry_name = file_stem.to_string();
-
-        let embedded_data = match std::fs::read(matched_path) {
-            Ok(data) => Some(data),
-            Err(e) => {
-                eprintln!("Warning: Could not read {matched_path}: {e}");
-                None
-            }
-        };
-
-        return Ok(Some(PlaylistEntry {
-            name: entry_name,
-            slide_type,
-            from_matched_file: true,
-            presentation_path: matched_path.to_string(),
-            arrangement_uuid: None,
-            embedded_data,
-        }));
-    }
-
-    // Editor content — generate embedded presentation from template
-    if let Some(state) = item_states.get_editor(&item_id) {
-        let has_content = state.content.iter().any(|l| !l.trim().is_empty());
-        if !has_content {
-            if allow_incomplete {
-                return Ok(None);
-            }
-            return Err(format!("Item '{}' has no content to export.", item.title));
-        }
-
-        let slide_name = match slide_type {
-            SlideType::Scripture => "scripture",
-            SlideType::Lyrics => "song",
-            SlideType::Title | SlideType::Text | SlideType::Graphic => "info",
-        };
-
-        let template_slide = template_cache
-            .as_mut()
-            .and_then(|c| c.get(slide_name).cloned())
-            .ok_or_else(|| {
-                format!(
-                    "No template slide '{slide_name}' found! Configure a theme or add template files."
-                )
-            })?;
-
-        let wrap_col = state.wrap_column.max(MIN_SLIDE_WRAP);
-        let entry_name = if slide_type == SlideType::Lyrics {
-            item.song
-                .as_ref()
-                .map_or_else(|| item.title.clone(), |s| s.title.clone())
-        } else {
-            item.title.clone()
-        };
-        let entry_name = canonical_presentation_name(&entry_name, slide_type);
-
-        let segments = StyledSegment::from_plain(&state.content);
-        let presentation = build_presentation_from_template_with_options(
-            &entry_name,
-            &template_slide,
-            &segments,
-            wrap_col,
-            DEFAULT_MAX_LINES_PER_SLIDE,
-            None,
-        )
-        .ok_or_else(|| format!("Failed to build presentation for '{}'", item.title))?;
-
-        let mut data = Vec::new();
-        presentation
-            .encode(&mut data)
-            .map_err(|_| format!("Failed to encode presentation for '{}'", item.title))?;
-
-        return Ok(Some(PlaylistEntry {
-            name: entry_name,
-            slide_type,
-            from_matched_file: false,
-            presentation_path: String::new(),
-            arrangement_uuid: None,
-            embedded_data: Some(data),
-        }));
-    }
-
-    // No match and no editor content
-    if allow_incomplete {
-        return Ok(None);
-    }
-    Err(format!("Item '{}' is not matched or created.", item.title))
-}
-
-/// Collect playlist entries for all items, stopping on the first error
-/// unless `allow_incomplete` is set.
-fn collect_entries<S: std::hash::BuildHasher>(
-    items: &[Item],
-    item_states: &ItemStateStore,
-    template_cache: &mut Option<ThemeCache>,
-    slide_types: &HashMap<String, SlideType, S>,
-    allow_incomplete: bool,
-) -> Result<Vec<PlaylistEntry>, String> {
-    let mut entries = Vec::new();
-
-    for item in items {
-        let slide_type = slide_types
-            .get(&item.id)
-            .copied()
-            .unwrap_or_default();
-        if let Some(entry) =
-            build_entry_for_item(item, item_states, template_cache, slide_type, allow_incomplete)?
-        {
-            entries.push(entry);
-        }
-    }
-
-    if entries.is_empty() {
-        return Err("No matched files to add to playlist.".to_string());
-    }
-
-    Ok(entries)
-}
-
-/// Generate a `.proplaylist` file from service items.
-///
-/// Resolves matched files, generates embedded presentations from editor content,
-/// writes the final playlist to disk, and returns metadata about the result.
-pub fn generate_playlist<S: std::hash::BuildHasher>(
-    items: &[Item],
-    item_states: &ItemStateStore,
-    template_cache: &mut Option<ThemeCache>,
-    slide_types: &HashMap<String, SlideType, S>,
-    playlist_name: &str,
-    library_path: Option<&Path>,
-    allow_incomplete: bool,
-) -> Result<PlaylistResult, String> {
-    let entries = collect_entries(
-        items,
-        item_states,
-        template_cache,
-        slide_types,
-        allow_incomplete,
-    )?;
-
-    let output_path = playlist_output_path(library_path, playlist_name);
-    let playlist = build_playlist(playlist_name, &entries);
-
-    write_playlist_file(&playlist, &entries, &output_path)
-        .map_err(|e| format!("Failed to write playlist: {e}"))?;
-
-    Ok(PlaylistResult {
-        entry_count: entries.len(),
-        output_path,
-    })
 }
 
 /// Sanitize a name into a canonical `ProPresenter` presentation filename.

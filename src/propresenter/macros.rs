@@ -142,3 +142,20 @@ pub fn add_macro_to_first_cue(
     };
     first_cue.actions.push(make_macro_action(name, uuid));
 }
+
+/// Add a macro action to every cue after the first.
+///
+/// Used for content slides that need a different macro than the title slide.
+/// No-op if the macro isn't found or there are fewer than 2 cues.
+pub fn add_macro_to_content_cues(
+    presentation: &mut rv_data::Presentation,
+    macro_name: &str,
+    cache: &MacroCache,
+) {
+    let Some((name, uuid)) = cache.find(macro_name) else {
+        return;
+    };
+    for cue in presentation.cues.iter_mut().skip(1) {
+        cue.actions.push(make_macro_action(name, uuid));
+    }
+}

@@ -227,10 +227,7 @@ pub fn segments_to_rtf_bytes(segments: &[StyledSegment], options: &RtfOptions) -
 /// Thin wrapper around `segments_to_rtf` — splits text on newlines into
 /// default-colored segments.
 pub fn text_to_rtf_styled(text: &str, options: &RtfOptions) -> String {
-    let segments: Vec<StyledSegment> = text
-        .split('\n')
-        .map(StyledSegment::unstyled)
-        .collect();
+    let segments: Vec<StyledSegment> = text.split('\n').map(StyledSegment::unstyled).collect();
     segments_to_rtf(&segments, options)
 }
 

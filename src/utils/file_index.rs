@@ -506,7 +506,6 @@ pub fn get_default_library_path() -> Option<PathBuf> {
     path.is_dir().then_some(path)
 }
 
-
 /// Parse composite query parts (split by / or "and")
 fn parse_composite_query(query: &str) -> Vec<&str> {
     if query.contains('/') {

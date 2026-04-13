@@ -21,10 +21,7 @@ pub enum BackgroundCategory {
 ///
 /// Looks in `data/backgrounds/` for `default.(jpg|png)` or `sermon.(jpg|png)`.
 /// Returns `None` if no matching file exists.
-pub fn resolve_background_image(
-    data_dir: &Path,
-    category: BackgroundCategory,
-) -> Option<PathBuf> {
+pub fn resolve_background_image(data_dir: &Path, category: BackgroundCategory) -> Option<PathBuf> {
     let base_name = match category {
         BackgroundCategory::Default => "default",
         BackgroundCategory::Sermon => "sermon",
@@ -59,12 +56,10 @@ pub fn make_background_media_action(image_path: &Path) -> rv_data::Action {
             relative_file_path: None,
         }),
         metadata: None,
-        type_properties: Some(media::TypeProperties::Image(
-            media::ImageTypeProperties {
-                drawing: None,
-                file: None,
-            },
-        )),
+        type_properties: Some(media::TypeProperties::Image(media::ImageTypeProperties {
+            drawing: None,
+            file: None,
+        })),
     };
 
     rv_data::Action {
@@ -98,10 +93,7 @@ pub fn make_background_media_action(image_path: &Path) -> rv_data::Action {
 /// Add a background image action to the first cue in a presentation.
 ///
 /// Skips presentations that have no cues or are pre-service/final slide type.
-pub fn add_background_to_first_cue(
-    presentation: &mut rv_data::Presentation,
-    image_path: &Path,
-) {
+pub fn add_background_to_first_cue(presentation: &mut rv_data::Presentation, image_path: &Path) {
     let Some(first_cue) = presentation.cues.first_mut() else {
         return;
     };

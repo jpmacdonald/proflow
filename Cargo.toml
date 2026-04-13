@@ -17,19 +17,10 @@ name = "test_template"
 path = "src/bin/test_template.rs"
 
 [[bin]]
-name = "proflow"
-path = "src/main.rs"
-
-[[bin]]
 name = "proflow_mcp"
 path = "src/bin/proflow_mcp.rs"
 
 [dependencies]
-# TUI dependencies
-ratatui = "0.26.1"
-crossterm = "0.27.0"
-arboard = "3.4.1"
-
 # Regex and static initialization
 lazy_static = "1.4.0"
 

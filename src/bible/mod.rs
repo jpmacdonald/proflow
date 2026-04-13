@@ -29,7 +29,15 @@ pub enum BibleVersion {
 impl BibleVersion {
     /// Returns all available Bible versions.
     pub const fn all() -> &'static [Self] {
-        &[Self::NRSVue, Self::NRSV, Self::NIV, Self::KJV, Self::NKJV, Self::NLT, Self::NASB]
+        &[
+            Self::NRSVue,
+            Self::NRSV,
+            Self::NIV,
+            Self::KJV,
+            Self::NKJV,
+            Self::NLT,
+            Self::NASB,
+        ]
     }
 
     /// Returns the human-readable name of this version.
@@ -324,6 +332,8 @@ pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
 
 /// Parse a single scripture reference like "Isaiah 32:15-17"
 fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
+    // Normalize en-dash/em-dash to ASCII hyphen (PCO often uses typographic dashes)
+    let text = text.replace(['\u{2013}', '\u{2014}'], "-");
     // Handle "v" notation (e.g., "Luke 2v1-20")
     let text = text.replace('v', ":");
 
