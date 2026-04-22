@@ -192,30 +192,50 @@ fn parse_markers(description: &str, title_text: &str) -> Option<ParsedContent> {
 }
 
 /// Parse responsive reading descriptions (`Leader:`/`People:` format).
+///
+/// Keeps LEADER:/ALL:/PEOPLE: cue prefixes in the output text.
+/// Groups content by blank-line-separated sections — each section becomes
+/// one slide (one `ParsedSegment` per cued line within the section).
+/// Metadata lines (containing `[SLIDE]`, `Liturgist:`, etc.) are filtered out.
 fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent> {
     let mut segments: Vec<ParsedSegment> = Vec::new();
     let mut current_color: Option<String> = None;
 
     for line in description.lines() {
         let trimmed = line.trim();
+
+        // Blank lines become slide breaks (empty segment as separator)
         if trimmed.is_empty() {
+            if !segments.is_empty() {
+                segments.push(ParsedSegment {
+                    text: String::new(),
+                    color: None,
+                    bold: None,
+                    italic: None,
+                });
+            }
+            continue;
+        }
+
+        // Skip metadata/instruction lines
+        if is_metadata_line(trimmed) {
             continue;
         }
 
         let lower = trimmed.to_lowercase();
 
-        if let Some(text) = strip_any_prefix(&lower, trimmed, LEADER_PREFIXES) {
-            current_color = None; // white = default
+        if starts_with_any(&lower, LEADER_PREFIXES) {
+            current_color = None;
             segments.push(ParsedSegment {
-                text,
+                text: trimmed.to_string(),
                 color: None,
                 bold: None,
                 italic: None,
             });
-        } else if let Some(text) = strip_any_prefix(&lower, trimmed, CONGREGATION_PREFIXES) {
+        } else if starts_with_any(&lower, CONGREGATION_PREFIXES) {
             current_color = Some(YELLOW.to_string());
             segments.push(ParsedSegment {
-                text,
+                text: trimmed.to_string(),
                 color: Some(YELLOW.to_string()),
                 bold: None,
                 italic: None,
@@ -231,6 +251,11 @@ fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent
         }
     }
 
+    // Trim trailing empty separators
+    while segments.last().is_some_and(|s| s.text.is_empty()) {
+        segments.pop();
+    }
+
     if segments.is_empty() {
         return None;
     }
@@ -241,17 +266,24 @@ fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent
     })
 }
 
-/// Strip any matching prefix from a list, returning the remaining text.
-fn strip_any_prefix(lower: &str, original: &str, prefixes: &[&str]) -> Option<String> {
-    for prefix in prefixes {
-        if lower.starts_with(prefix) {
-            let rest = original[prefix.len()..].trim();
-            if !rest.is_empty() {
-                return Some(rest.to_string());
-            }
-        }
+/// Check if a line starts with any of the given prefixes.
+fn starts_with_any(lower: &str, prefixes: &[&str]) -> bool {
+    prefixes.iter().any(|p| lower.starts_with(p))
+}
+
+/// Detect metadata/instruction lines that should not become slide content.
+fn is_metadata_line(line: &str) -> bool {
+    let upper = line.to_uppercase();
+    // Lines with [SLIDE], [NO SLIDE], etc. are PCO cues
+    if upper.contains("[SLIDE]") || upper.contains("[NO SLIDE]") || upper.contains("[SILENT") {
+        return true;
     }
-    None
+    // "Liturgist:" instruction lines (not the same as "Leader:")
+    let lower = line.to_lowercase();
+    if lower.starts_with("liturgist:") {
+        return true;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -443,10 +475,13 @@ mod tests {
         let content = result.unwrap();
         assert_eq!(content.title_text.as_deref(), Some("Call to Worship"));
         assert_eq!(content.segments.len(), 4);
-        // Leader lines have no color (white/default)
+        // Leader lines keep prefix and have no color (white/default)
+        assert!(content.segments[0].text.starts_with("Leader:"));
         assert!(content.segments[0].color.is_none());
-        // People/All lines are yellow
+        // People/All lines keep prefix and are yellow
+        assert!(content.segments[1].text.starts_with("People:"));
         assert_eq!(content.segments[1].color.as_deref(), Some("#FEFC8B"));
+        assert!(content.segments[3].text.starts_with("All:"));
         assert_eq!(content.segments[3].color.as_deref(), Some("#FEFC8B"));
     }
 
@@ -555,7 +590,33 @@ mod tests {
         assert!(result.is_some());
         let content = result.unwrap();
         assert_eq!(content.segments.len(), 2);
+        // Prefixes kept in text
+        assert!(content.segments[0].text.starts_with("Leader"));
         assert!(content.segments[0].color.is_none());
+        assert!(content.segments[1].text.starts_with("People"));
         assert_eq!(content.segments[1].color.as_deref(), Some("#FEFC8B"));
+    }
+
+    #[test]
+    fn test_responsive_filters_metadata() {
+        let desc = "Liturgist: Bill Ichord; Scripture/Liturgy [SLIDE]\nLEADER: The Lord reigns.\nALL: Let the earth rejoice.";
+        let result = parse_description(desc, "Call to Worship", "liturgical_edited");
+        assert!(result.is_some());
+        let content = result.unwrap();
+        // Metadata line filtered out, only LEADER and ALL remain
+        assert_eq!(content.segments.len(), 2);
+        assert!(content.segments[0].text.starts_with("LEADER:"));
+        assert!(content.segments[1].text.starts_with("ALL:"));
+    }
+
+    #[test]
+    fn test_responsive_blank_line_separators() {
+        let desc = "LEADER: First section.\nALL: Response one.\n\nLEADER: Second section.\nALL: Response two.";
+        let result = parse_description(desc, "Call to Worship", "liturgical_edited");
+        assert!(result.is_some());
+        let content = result.unwrap();
+        // 4 content segments + 1 empty separator = 5
+        assert_eq!(content.segments.len(), 5);
+        assert!(content.segments[2].text.is_empty());
     }
 }

@@ -44,6 +44,7 @@
       "kind": "graphic",
       "content_source": "static",
       "output_strategy": "use_existing",
+      "background": "default",
       "macro": "Graphics",
       "description": "Static pre/post service slides"
     },
@@ -52,6 +53,7 @@
       "content_source": "static",
       "output_strategy": "use_existing",
       "template": "Name Tag",
+      "background": "default",
       "macro": "Name Tag/Title",
       "description": "Static speaker nametag"
     },
@@ -68,6 +70,7 @@
       "kind": "announcement",
       "content_source": "static",
       "output_strategy": "use_existing",
+      "background": "default",
       "macro": "Graphics",
       "description": "Announcements slides updated separately"
     },
@@ -76,6 +79,7 @@
       "content_source": "song",
       "output_strategy": "use_existing",
       "template": "Lyrics (Projectors)",
+      "background": "default",
       "macro": "Song",
       "arrangement": "Default",
       "description": "Song or hymn from library"
@@ -85,6 +89,7 @@
       "content_source": "static",
       "output_strategy": "use_existing",
       "template": "Information (Projectors)",
+      "background": "default",
       "macro": "Scripture/Prayer",
       "description": "Reusable liturgical text"
     },
@@ -94,7 +99,8 @@
       "output_strategy": "edit_in_place",
       "template": "Scripture (Projectors) (Responsive)",
       "background": "default",
-      "macro": "Scripture/Prayer",
+      "macro": "Name Tag/Title",
+      "content_macro": "Scripture/Prayer",
       "description": "Liturgical text regenerated from description"
     },
     "scripture": {
@@ -112,6 +118,7 @@
       "kind": "graphic",
       "content_source": "static",
       "output_strategy": "use_existing",
+      "background": "default",
       "macro": "Graphics",
       "description": "End-of-service reflection slide"
     }
@@ -375,6 +382,7 @@
       "id": "organ_prelude",
       "match": {
         "title_prefix": [
+          "prelude",
           "organ prelude"
         ]
       },
@@ -387,6 +395,7 @@
       "id": "organ_postlude",
       "match": {
         "title_prefix": [
+          "postlude",
           "organ postlude"
         ]
       },

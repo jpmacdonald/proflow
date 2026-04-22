@@ -517,33 +517,67 @@ pub fn pack_segments_for_slides(
     let wrap_col = wrap_column.max(MIN_SLIDE_WRAP);
     let max = max_lines.max(1);
 
-    // Estimate visual line count for each segment
-    let blocks: Vec<(&StyledSegment, usize)> = segments
-        .iter()
-        .map(|seg| {
-            let line_count = word_wrap(&seg.text, wrap_col).len();
-            (seg, line_count)
-        })
-        .collect();
+    // Split into sections at empty-text separators (blank line breaks from parser),
+    // then pack each section's segments by line count within max_lines.
+    let sections = split_at_separators(segments);
 
     let mut slides: Vec<Vec<StyledSegment>> = Vec::new();
-    let mut current: Vec<StyledSegment> = Vec::new();
-    let mut current_count: usize = 0;
 
-    for (seg, line_count) in &blocks {
-        if current_count > 0 && current_count + line_count > max {
-            slides.push(std::mem::take(&mut current));
-            current_count = 0;
+    for section in &sections {
+        let blocks: Vec<(&StyledSegment, usize)> = section
+            .iter()
+            .map(|seg| {
+                let line_count = word_wrap(&seg.text, wrap_col).len();
+                (seg, line_count)
+            })
+            .collect();
+
+        let mut current: Vec<StyledSegment> = Vec::new();
+        let mut current_count: usize = 0;
+
+        for (seg, line_count) in &blocks {
+            if current_count > 0 && current_count + line_count > max {
+                slides.push(std::mem::take(&mut current));
+                current_count = 0;
+            }
+            current.push((*seg).clone());
+            current_count += line_count;
         }
-        current.push((*seg).clone());
-        current_count += line_count;
-    }
 
-    if !current.is_empty() {
-        slides.push(current);
+        if !current.is_empty() {
+            slides.push(current);
+        }
     }
 
     slides
+}
+
+/// Split segments into groups at empty-text separators.
+/// Empty segments act as slide-break hints from the description parser.
+fn split_at_separators(segments: &[StyledSegment]) -> Vec<Vec<StyledSegment>> {
+    let mut sections: Vec<Vec<StyledSegment>> = Vec::new();
+    let mut current: Vec<StyledSegment> = Vec::new();
+
+    for seg in segments {
+        if seg.text.is_empty() {
+            if !current.is_empty() {
+                sections.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(seg.clone());
+        }
+    }
+
+    if !current.is_empty() {
+        sections.push(current);
+    }
+
+    // If no separators found, return all segments as one section
+    if sections.is_empty() && !segments.is_empty() {
+        sections.push(segments.iter().filter(|s| !s.text.is_empty()).cloned().collect());
+    }
+
+    sections
 }
 
 /// Edit an existing presentation: replace its slides with new content while
