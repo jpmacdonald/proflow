@@ -463,7 +463,8 @@ impl<'a> ServiceBuildExecutor<'a> {
                 Self::apply_background(&mut presentation, background);
             }
 
-            self.apply_macros(&mut presentation, &entry.style);
+            let style = maybe_upgrade_highlighted_macro(&entry.style, &segments);
+            self.apply_macros(&mut presentation, &style);
 
             let output_path = PathBuf::from(file_path);
             write_presentation_file(&presentation, &output_path)?;
@@ -535,7 +536,8 @@ impl<'a> ServiceBuildExecutor<'a> {
             Self::apply_background(&mut presentation, background);
         }
 
-        self.apply_macros(&mut presentation, &entry.style);
+        let style = maybe_upgrade_highlighted_macro(&entry.style, &segments);
+        self.apply_macros(&mut presentation, &style);
 
         if let Some(ref arrangement) = entry.style.arrangement {
             crate::propresenter::arrangement::select_arrangement_by_name(
@@ -827,6 +829,34 @@ fn apply_override(
         }
     }
     effective
+}
+
+/// When all content segments are uniformly colored (e.g. all-yellow Prayer of
+/// Confession text), upgrade `Scripture/Prayer` content_macro to
+/// `Scripture/Prayer (Highlighted)`. ProPresenter doesn't apply styling correctly
+/// when the entire slide is highlighted with the regular macro.
+fn maybe_upgrade_highlighted_macro(
+    style: &super::plan::PresentationStyle,
+    segments: &[StyledSegment],
+) -> super::plan::PresentationStyle {
+    const BASE_MACRO: &str = "Scripture/Prayer";
+    const HIGHLIGHTED_MACRO: &str = "Scripture/Prayer (Highlighted)";
+
+    let content_segments: Vec<_> = segments.iter().filter(|s| !s.text.is_empty()).collect();
+    let needs_upgrade = style
+        .content_macro
+        .as_deref()
+        .is_some_and(|m| m == BASE_MACRO)
+        && !content_segments.is_empty()
+        && content_segments.iter().all(|s| s.color.is_some());
+
+    if needs_upgrade {
+        let mut upgraded = style.clone();
+        upgraded.content_macro = Some(HIGHLIGHTED_MACRO.to_string());
+        upgraded
+    } else {
+        style.clone()
+    }
 }
 
 fn parse_bible_version(version_text: Option<&str>) -> BibleVersion {

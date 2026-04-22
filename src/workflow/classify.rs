@@ -201,7 +201,7 @@ fn build_resolved_plans(
     let mut nametag_seen: HashSet<String> = HashSet::new();
 
     for item in items {
-        let title_lower = item.title.to_lowercase();
+        let title_lower = normalize_apostrophes(&item.title.to_lowercase());
         let speaker = resolve_speaker(&item.title, item.description.as_deref(), mappings);
         let Some(rule) = find_matching_rule(item, &title_lower, mappings, service_name) else {
             entries.push(ResolvedItemPlan {
@@ -309,6 +309,12 @@ fn rule_matches_item(
     }
 
     true
+}
+
+/// Replace curly apostrophes (U+2018, U+2019) with ASCII straight apostrophe.
+/// PCO occasionally uses smart quotes while config rules use straight ones.
+fn normalize_apostrophes(s: &str) -> String {
+    s.replace(['\u{2018}', '\u{2019}'], "'")
 }
 
 fn category_name(item: &Item) -> &'static str {
