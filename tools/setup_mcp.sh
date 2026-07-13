@@ -57,46 +57,63 @@ check_credentials() {
 }
 
 write_mcp_config() {
-    BINARY_PATH="$PROJECT_DIR/target/release/$BINARY_NAME"
+    local binary_path="$PROJECT_DIR/target/release/$BINARY_NAME"
+    local library_dir="${LIBRARY_DIR:-}"
 
-    # Build env block — only include vars that aren't in .env
-    local env_json="{"
-    local needs_comma=false
+    # Credentials intentionally stay in the process environment or the ignored
+    # .env file. Never persist them in a repository-local MCP configuration.
+    python3 - "$MCP_CONFIG" "$binary_path" "$PROJECT_DIR" "$library_dir" <<'PY'
+import json
+import os
+import pathlib
+import sys
+import tempfile
 
-    # Always set PROFLOW_DATA so the binary finds bible/template data
-    env_json+="\"PROFLOW_DATA\": \"$PROJECT_DIR/data\""
-    needs_comma=true
+target = pathlib.Path(sys.argv[1])
+binary_path = sys.argv[2]
+project_dir = pathlib.Path(sys.argv[3])
+library_dir = sys.argv[4]
 
-    # Include credentials if they're in environment (not .env)
-    if [ -n "${PCO_APP_ID:-}" ]; then
-        $needs_comma && env_json+=","
-        env_json+="\"PCO_APP_ID\": \"$PCO_APP_ID\""
-        needs_comma=true
-    fi
-    if [ -n "${PCO_SECRET:-}" ]; then
-        $needs_comma && env_json+=","
-        env_json+="\"PCO_SECRET\": \"$PCO_SECRET\""
-        needs_comma=true
-    fi
-    if [ -n "${LIBRARY_DIR:-}" ]; then
-        $needs_comma && env_json+=","
-        env_json+="\"LIBRARY_DIR\": \"$LIBRARY_DIR\""
-    fi
+environment = {"PROFLOW_DATA": str(project_dir / "data")}
+if library_dir:
+    environment["LIBRARY_DIR"] = library_dir
 
-    env_json+="}"
-
-    cat > "$MCP_CONFIG" <<EOF
-{
-  "mcpServers": {
-    "proflow": {
-      "command": "$BINARY_PATH",
-      "cwd": "$PROJECT_DIR",
-      "env": $env_json
+config = {
+    "mcpServers": {
+        "proflow": {
+            "command": binary_path,
+            "cwd": str(project_dir),
+            "env": environment,
+        }
     }
-  }
 }
-EOF
+
+target.parent.mkdir(parents=True, exist_ok=True)
+temporary_path = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as temporary:
+        temporary_path = pathlib.Path(temporary.name)
+        os.fchmod(temporary.fileno(), 0o600)
+        json.dump(config, temporary, indent=2)
+        temporary.write("\n")
+        temporary.flush()
+        os.fsync(temporary.fileno())
+    os.replace(temporary_path, target)
+finally:
+    if temporary_path is not None:
+        temporary_path.unlink(missing_ok=True)
+PY
     info "Wrote $MCP_CONFIG"
+    if [ -n "${PCO_APP_ID:-}" ] || [ -n "${PCO_SECRET:-}" ]; then
+        info "Credentials were not written; keep them in .env or the MCP host environment"
+    fi
 }
 
 check_config() {
@@ -105,7 +122,15 @@ check_config() {
         exit 1
     fi
 
-    BINARY_PATH=$(python3 -c "import json; print(json.load(open('$MCP_CONFIG'))['mcpServers']['proflow']['command'])" 2>/dev/null || echo "")
+    BINARY_PATH=$(python3 - "$MCP_CONFIG" 2>/dev/null <<'PY' || true
+import json
+import pathlib
+import sys
+
+with pathlib.Path(sys.argv[1]).open(encoding="utf-8") as config_file:
+    print(json.load(config_file)["mcpServers"]["proflow"]["command"])
+PY
+    )
     if [ -z "$BINARY_PATH" ] || [ ! -f "$BINARY_PATH" ]; then
         error "Binary not found at: $BINARY_PATH"
         error "Run: ./tools/setup_mcp.sh"
@@ -119,17 +144,14 @@ check_config() {
         info "Credentials: configured"
     fi
 
-    # Quick smoke test — send initialize and check for response
+    # Quick smoke test — initialize and exercise the public tool-list boundary.
     local INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}'
+    local INITIALIZED_MSG='{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+    local LIST_TOOLS_MSG='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
     local RESULT
-    RESULT=$(printf '%s\n' "$INIT_MSG" | "$BINARY_PATH" 2>/dev/null &
-        local PID=$!
-        sleep 2
-        kill "$PID" 2>/dev/null
-        wait "$PID" 2>/dev/null
-    )
-    if echo "$RESULT" | grep -q "tools"; then
-        info "Smoke test: server responds"
+    RESULT=$({ printf '%s\n' "$INIT_MSG"; printf '%s\n' "$INITIALIZED_MSG"; printf '%s\n' "$LIST_TOOLS_MSG"; } | "$BINARY_PATH" 2>/dev/null || true)
+    if echo "$RESULT" | grep -q '"id":2' && echo "$RESULT" | grep -q '"tools"'; then
+        info "Smoke test: server lists tools"
     else
         warn "Smoke test: could not verify (may need credentials)"
     fi

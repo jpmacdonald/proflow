@@ -89,7 +89,8 @@ pub struct Item {
 }
 
 /// Classifies the type of an Item for application purposes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Category {
     /// Plain text content
     Text,

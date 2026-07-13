@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "proflow": {
+      "command": "/absolute/path/to/proflow/target/release/proflow_mcp",
+      "cwd": "/absolute/path/to/proflow",
+      "env": {
+        "PROFLOW_DATA": "/absolute/path/to/proflow/data"
+      }
+    }
+  }
+}

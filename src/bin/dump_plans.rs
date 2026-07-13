@@ -1,6 +1,6 @@
 //! Dump upcoming plan items from Planning Center for analysis.
 //!
-//! Usage: `cargo run --bin dump_plans [-- --days 60]`
+//! Usage: `cargo run --bin dump_plans [-- --days 60] [--past]`
 
 #![allow(clippy::expect_used, clippy::uninlined_format_args)]
 
@@ -9,32 +9,44 @@ use proflow::planning_center::api::PlanningCenterClient;
 
 #[tokio::main]
 async fn main() {
-    let days: i64 = std::env::args()
+    let args: Vec<String> = std::env::args().collect();
+    let days: i64 = args
+        .iter()
         .position(|a| a == "--days")
-        .and_then(|i| std::env::args().nth(i + 1))
+        .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
+    let past = args.iter().any(|arg| arg == "--past");
 
     let config = Config::load().expect("Failed to load config");
     let client = PlanningCenterClient::new(&config);
 
-    let (services, plans) = client
-        .get_upcoming_services(days)
-        .await
-        .expect("Failed to fetch services");
+    let (services, plans) = if past {
+        client
+            .get_recent_services(days)
+            .await
+            .expect("Failed to fetch recent services")
+    } else {
+        client
+            .get_upcoming_services(days)
+            .await
+            .expect("Failed to fetch upcoming services")
+    };
 
     println!("=== Services ({}) ===", services.len());
     for s in &services {
         println!("  {} (id: {})", s.name, s.id);
     }
 
-    println!("\n=== Plans ({}) ===\n", plans.len());
+    let scope = if past { "Recent Plans" } else { "Plans" };
+    println!("\n=== {scope} ({}) ===\n", plans.len());
     for plan in &plans {
         println!(
-            "--- {} | {} | {} ---",
+            "--- {} | {} | {} | plan id: {} ---",
             plan.service_name,
             plan.title,
-            plan.date.format("%Y-%m-%d")
+            plan.date.format("%Y-%m-%d"),
+            plan.id
         );
 
         let items = client

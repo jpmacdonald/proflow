@@ -1,77 +1,283 @@
 //! Scripture reference parsing and formatting utilities.
 
-/// Split a title with multiple scripture references (separated by `;`) into
-/// individual reference strings. Preserves version and speaker info on each.
-pub(super) fn split_scripture_refs(title: &str) -> Vec<String> {
-    let stripped = title
-        .trim_start_matches("Scripture Reading:")
-        .trim_start_matches("Scripture Reading -")
-        .trim_start_matches("Scripture:")
-        .trim_start_matches("Scripture -")
-        .trim();
+use std::collections::HashSet;
 
-    // Remove speaker parenthetical for splitting, re-detect version
-    let no_speaker = stripped
-        .rfind('(')
-        .map_or(stripped, |i| stripped[..i].trim());
+use crate::bible::BibleVersion;
 
-    let version_suffix = detect_version(title);
+/// One fully parsed scripture reference and its resolved Bible version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedScriptureRef {
+    pub reference: String,
+    pub version: String,
+}
 
-    let parts: Vec<&str> = no_speaker.split(';').collect();
-    if parts.len() <= 1 {
-        return vec![no_speaker.to_string()];
+/// A malformed multi-reference title must never be partially generated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ScriptureRefsError {
+    Missing,
+    MissingVersion,
+    Invalid(String),
+    PartialVerse(String),
+    MixedVersionsWithImplicit,
+}
+
+impl std::fmt::Display for ScriptureRefsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("No scripture reference"),
+            Self::MissingVersion => formatter
+                .write_str("No Bible version was supplied and no project default is configured"),
+            Self::Invalid(reference) => {
+                write!(formatter, "Invalid scripture reference '{reference}'")
+            }
+            Self::PartialVerse(reference) => write!(
+                formatter,
+                "Partial-verse reference '{reference}' cannot be generated from whole-verse Bible data"
+            ),
+            Self::MixedVersionsWithImplicit => formatter
+                .write_str("Mixed Bible versions require an explicit version on every reference"),
+        }
     }
+}
+
+/// Parse every semicolon-separated scripture reference in a title.
+///
+/// A single explicit version acts as the default for all references. Multiple
+/// explicit versions are preserved, but then every reference must name its
+/// version. Any invalid segment rejects the whole title instead of silently
+/// generating a partial presentation.
+pub(super) fn parse_scripture_refs(
+    title: &str,
+    configured_default: Option<BibleVersion>,
+) -> Result<Vec<ParsedScriptureRef>, ScriptureRefsError> {
+    let stripped = strip_trailing_speaker(strip_scripture_heading(title));
+    let parts: Vec<&str> = stripped
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return Err(ScriptureRefsError::Missing);
+    }
+
+    let explicit_versions: Vec<Option<&'static str>> =
+        parts.iter().map(|part| explicit_version(part)).collect();
+    let distinct_versions: HashSet<&str> = explicit_versions.iter().flatten().copied().collect();
+    let default_version = match distinct_versions.len() {
+        0 => configured_default.map(BibleVersion::name),
+        1 => distinct_versions.iter().copied().next(),
+        _ => None,
+    };
 
     parts
         .iter()
-        .map(|part| {
-            let trimmed = part.trim();
-            let clean = trimmed
-                .trim_end_matches("NRSVue")
-                .trim_end_matches("NRSV")
-                .trim_end_matches("NKJV")
-                .trim_end_matches("NIV")
-                .trim_end_matches("NLT")
-                .trim_end_matches("NASB")
-                .trim_end_matches("KJV")
-                .trim();
-            format!("{clean} {version_suffix}")
+        .zip(explicit_versions)
+        .map(|(part, explicit)| {
+            let version = explicit.or(default_version).ok_or({
+                if distinct_versions.is_empty() {
+                    ScriptureRefsError::MissingVersion
+                } else {
+                    ScriptureRefsError::MixedVersionsWithImplicit
+                }
+            })?;
+            let reference_text = strip_explicit_version(part, explicit);
+            if has_partial_verse_marker(reference_text) {
+                return Err(ScriptureRefsError::PartialVerse(reference_text.to_string()));
+            }
+            let parsed = crate::bible::parse_scripture_ref(reference_text)
+                .ok_or_else(|| ScriptureRefsError::Invalid((*part).to_string()))?;
+            let reference = parsed.end_verse.map_or_else(
+                || format!("{} {}:{}", parsed.book, parsed.chapter, parsed.start_verse),
+                |end| {
+                    format!(
+                        "{} {}:{}-{end}",
+                        parsed.book, parsed.chapter, parsed.start_verse
+                    )
+                },
+            );
+            Ok(ParsedScriptureRef {
+                reference,
+                version: version.to_string(),
+            })
         })
-        .filter(|s| crate::bible::parse_scripture_ref(s).is_some())
         .collect()
+}
+
+fn has_partial_verse_marker(reference: &str) -> bool {
+    let bytes = reference.as_bytes();
+    bytes.iter().enumerate().any(|(index, byte)| {
+        if !byte.is_ascii_digit() {
+            return false;
+        }
+        let Some(suffix) = bytes.get(index + 1) else {
+            return false;
+        };
+        if !matches!(suffix.to_ascii_lowercase(), b'a' | b'b' | b'c' | b'd') {
+            return false;
+        }
+        bytes.get(index + 2).is_none_or(|following| {
+            following.is_ascii_whitespace() || matches!(following, b'-' | b',' | b';' | b')')
+        })
+    })
 }
 
 pub(super) fn has_scripture_ref(title: &str) -> bool {
     crate::bible::parse_scripture_ref(title).is_some()
 }
 
-pub(super) fn detect_version(title: &str) -> &str {
-    let upper = title.to_uppercase();
+fn explicit_version(text: &str) -> Option<&'static str> {
+    let upper = text.trim().to_uppercase();
     for (needle, version) in [
-        ("NLT", "NLT"),
         ("NRSVUE", "NRSVue"),
         ("NRSV", "NRSV"),
         ("NKJV", "NKJV"),
-        ("NIV", "NIV"),
         ("NASB", "NASB"),
+        ("NLT", "NLT"),
+        ("NIV", "NIV"),
         ("KJV", "KJV"),
     ] {
-        if upper.contains(needle) {
-            return version;
+        let bare_suffix = upper
+            .strip_suffix(needle)
+            .is_some_and(|before| before.chars().next_back().is_some_and(char::is_whitespace));
+        let parenthesized_suffix = upper.ends_with(&format!("({needle})"));
+        if bare_suffix || parenthesized_suffix {
+            return Some(version);
         }
     }
-    "NRSVue"
+    None
 }
 
-pub(super) fn scripture_name(title: &str, version: &str) -> String {
-    crate::bible::parse_scripture_ref(title).map_or_else(
-        || super::classify::strip_speaker(title),
-        |r| {
-            let ref_str = r.end_verse.map_or_else(
-                || format!("{} {}:{}", r.book, r.chapter, r.start_verse),
-                |end| format!("{} {}:{}-{end}", r.book, r.chapter, r.start_verse),
-            );
-            format!("{ref_str} {version}")
-        },
-    )
+fn strip_explicit_version<'a>(text: &'a str, version: Option<&str>) -> &'a str {
+    let Some(version) = version else {
+        return text;
+    };
+    let uppercase = text.to_uppercase();
+    let version = version.to_uppercase();
+    let Some(version_start) = uppercase.rfind(&version) else {
+        return text;
+    };
+    text[..version_start]
+        .trim_end()
+        .trim_end_matches('(')
+        .trim_end()
+}
+
+fn strip_scripture_heading(title: &str) -> &str {
+    let trimmed = title.trim();
+    for prefix in ["Scripture Reading", "Scripture", "Reading"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return strip_heading_suffix(rest);
+        }
+    }
+    trimmed
+}
+
+fn strip_heading_suffix(rest: &str) -> &str {
+    let mut value = rest.trim_start();
+    if let Some(stripped) = value.strip_prefix('(') {
+        if let Some(end) = stripped.find(')') {
+            value = stripped[end + 1..].trim_start();
+        }
+    }
+    value
+        .strip_prefix(':')
+        .or_else(|| value.strip_prefix('-'))
+        .map_or(value, str::trim_start)
+        .trim()
+}
+
+fn strip_trailing_speaker(title: &str) -> &str {
+    let trimmed = title.trim();
+    let Some(open) = trimmed.rfind('(') else {
+        return trimmed;
+    };
+    if !trimmed.ends_with(')') || explicit_version(&trimmed[open..]).is_some() {
+        return trimmed;
+    }
+    trimmed[..open].trim_end()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scripture_refs_handle_speaker_prefix() {
+        assert_eq!(
+            parse_scripture_refs("Scripture (Adrian) - Luke 8:26-39 NRSVue", None),
+            Ok(vec![ParsedScriptureRef {
+                reference: "Luke 8:26-39".to_string(),
+                version: "NRSVue".to_string(),
+            }])
+        );
+    }
+
+    #[test]
+    fn rejects_partial_multi_reference_title() {
+        assert_eq!(
+            parse_scripture_refs("Scripture - Luke 8:26-39; not a reference NRSVue", None),
+            Err(ScriptureRefsError::Invalid(
+                "not a reference NRSVue".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn partial_verse_requires_review_instead_of_expanding_to_the_whole_verse() {
+        assert_eq!(
+            parse_scripture_refs(
+                "Scripture (Robert) - Exodus 16:1-4a",
+                Some(crate::bible::BibleVersion::NRSVue),
+            ),
+            Err(ScriptureRefsError::PartialVerse(
+                "Exodus 16:1-4a".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn preserves_explicit_mixed_versions() {
+        assert_eq!(
+            parse_scripture_refs("Scripture - Psalm 23:1-6 NIV; John 3:16 NRSVue", None),
+            Ok(vec![
+                ParsedScriptureRef {
+                    reference: "Psalms 23:1-6".to_string(),
+                    version: "NIV".to_string(),
+                },
+                ParsedScriptureRef {
+                    reference: "John 3:16".to_string(),
+                    version: "NRSVue".to_string(),
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn rejects_implicit_reference_among_mixed_versions() {
+        assert_eq!(
+            parse_scripture_refs(
+                "Scripture - Psalm 23:1 NIV; John 3:16; Luke 2:1 NRSVue",
+                None
+            ),
+            Err(ScriptureRefsError::MixedVersionsWithImplicit)
+        );
+    }
+
+    #[test]
+    fn implicit_version_requires_an_explicit_project_default() {
+        assert_eq!(
+            parse_scripture_refs("Scripture - John 3:16", None),
+            Err(ScriptureRefsError::MissingVersion)
+        );
+        assert_eq!(
+            parse_scripture_refs(
+                "Scripture - John 3:16",
+                Some(crate::bible::BibleVersion::NIV)
+            ),
+            Ok(vec![ParsedScriptureRef {
+                reference: "John 3:16".to_string(),
+                version: "NIV".to_string(),
+            }])
+        );
+    }
 }

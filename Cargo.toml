@@ -21,19 +21,13 @@ name = "proflow_mcp"
 path = "src/bin/proflow_mcp.rs"
 
 [dependencies]
-# Regex and static initialization
-lazy_static = "1.4.0"
-
 # ProPresenter integration
 prost = "0.12"
-quick-xml = { version = "0.31.0", features = ["serialize"] }
 uuid = { version = "1.7", features = ["v4"] }
 regex = "1.9.0"
 
 # Planning Center integration
-reqwest = { version = "0.11.20", features = ["json"] }
-oauth2 = "4.4.2"
-async-trait = "0.1.73"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 futures = "0.3"
 
 # Async
@@ -42,39 +36,39 @@ tokio = { version = "1.36.0", features = ["full"] }
 # Serialization
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
-base64 = "0.13.0"  # For encoding binary data in JSON
 
 # Date & time
 chrono = { version = "0.4", features = ["serde"] }
 
 # Error handling
-thiserror = "1.0"
+thiserror = "2"
 anyhow = "1.0.80"
 
 # Logging
 tracing = "0.1.37"
-dotenv = "0.15.0"
+dotenv = { package = "dotenvy", version = "0.15.7" }
 
 # Common utilities
-fs-err = "2.9.0"
 fuzzy-matcher = "0.3"
 walkdir = "2.4"
 shellexpand = "3.1.0"
 unicode-width = "0.1.11"
-flate2 = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
+crc32fast = "1.5"
 
 # Additional dependencies
-dirs = "5.0"
+dirs = "6"
 rayon = "1.10.0"
+sha2 = "0.10"
 
 # MCP server
-rmcp = { version = "1", features = ["server", "transport-io"] }
-schemars = "0.8"
+rmcp = { version = "=1.4.0", features = ["server", "transport-io"] }
+schemars = "1"
 
 [dev-dependencies]
 tempfile = "3.10"
 httptest = "0.16.4"
+proptest = "1.7"
 
 [features]
 default = []

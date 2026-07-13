@@ -1,0 +1,107 @@
+{
+  "version": 4,
+  "metadata": {
+    "name": "Fixture Church",
+    "timezone": "America/New_York"
+  },
+  "defaults": {
+    "theme": "Moss",
+    "background": "default",
+    "days_ahead": 14
+  },
+  "backgrounds": {
+    "default": "backgrounds/default.png",
+    "scripture": "backgrounds/default.png"
+  },
+  "cue_roles": {
+    "call_to_worship": {
+      "slide": "Call to Worship"
+    },
+    "scripture": {
+      "slide": "Scripture",
+      "enter_macro": "Scripture/Prayer"
+    }
+  },
+  "service_groups": {
+    "weekly": {
+      "service_types": [
+        "Sunday Morning"
+      ]
+    }
+  },
+  "presentation_types": {
+    "liturgical_edited": {
+      "kind": "liturgy",
+      "content_source": "description",
+      "description_parser": "liturgical",
+      "output_strategy": "edit_in_place",
+      "display": {
+        "kind": "single",
+        "role": "call_to_worship"
+      },
+      "background": "default"
+    },
+    "song": {
+      "kind": "song",
+      "content_source": "song",
+      "output_strategy": "use_existing"
+    },
+    "scripture": {
+      "kind": "scripture",
+      "content_source": "scripture",
+      "output_strategy": "generate_new",
+      "display": {
+        "kind": "single",
+        "role": "scripture"
+      },
+      "background": "scripture"
+    }
+  },
+  "item_rules": [
+    {
+      "id": "call_to_worship",
+      "match": {
+        "title_prefix": [
+          "Call to Worship"
+        ]
+      },
+      "use_type": "liturgical_edited",
+      "target": {
+        "library_file": "Call to Worship.pro"
+      }
+    },
+    {
+      "id": "song_amazing_grace",
+      "match": {
+        "title_prefix": [
+          "Amazing Grace"
+        ]
+      },
+      "use_type": "song",
+      "target": {
+        "library_file": "Amazing Grace.pro"
+      }
+    },
+    {
+      "id": "scripture",
+      "match": {
+        "title_prefix": [
+          "Scripture"
+        ]
+      },
+      "use_type": "scripture"
+    },
+    {
+      "id": "skip_sermon",
+      "match": {
+        "title_prefix": [
+          "Sermon"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Sermon is added day-of"
+      }
+    }
+  ]
+}
