@@ -8,68 +8,50 @@ use std::path::PathBuf;
 /// Project config filename stored under the data directory.
 pub const PROJECT_CONFIG_FILE: &str = "proflow.config.json";
 
-/// Locate a subdirectory under the app's bundled data folder.
+/// Resolve the one data-bundle root used by this process.
 ///
-/// Search order:
-/// 1. `$PROFLOW_DATA/<subdir>` (explicit override)
-/// 2. `<data_dir>/proflow/<subdir>` (installed location via `dirs::data_dir`)
-/// 3. `<exe_dir>/data/<subdir>` (next to the binary)
-/// 4. `data/<subdir>` (cwd fallback, works during `cargo run`)
+/// An explicit `PROFLOW_DATA` value is authoritative even when it is missing;
+/// callers then report the missing asset instead of silently mixing in files
+/// from another installation. Without an override, the first existing bundle
+/// root wins as a whole.
 #[must_use]
-pub fn find_data_subdir(subdir: &str) -> PathBuf {
-    // Explicit override
-    if let Ok(base) = std::env::var("PROFLOW_DATA") {
-        let p = PathBuf::from(base).join(subdir);
-        if p.is_dir() {
-            return p;
-        }
+pub fn data_root() -> PathBuf {
+    if let Some(base) = std::env::var_os("PROFLOW_DATA") {
+        return PathBuf::from(base);
     }
 
-    // Platform data dir (~/Library/Application Support/proflow/ on macOS)
+    // During repository-local development, keep the checked-in bundle
+    // coherent even if an unrelated installed-state directory also exists.
+    let workspace_data = PathBuf::from("data");
+    if PathBuf::from("Cargo.toml").is_file() && workspace_data.is_dir() {
+        return workspace_data;
+    }
+
+    let mut candidates = Vec::new();
     if let Some(data) = dirs::data_dir() {
-        let p = data.join("proflow").join(subdir);
-        if p.is_dir() {
-            return p;
-        }
+        candidates.push(data.join("proflow"));
     }
-
-    // Next to the executable
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join("data").join(subdir);
-            if p.is_dir() {
-                return p;
-            }
+            candidates.push(dir.join("data"));
         }
     }
+    candidates.push(workspace_data);
 
-    // Fallback: cwd (works during cargo run)
-    PathBuf::from("data").join(subdir)
+    candidates
+        .into_iter()
+        .find(|path| path.is_dir())
+        .unwrap_or_else(|| PathBuf::from("data"))
+}
+
+/// Locate a subdirectory inside the process's resolved data bundle.
+#[must_use]
+pub fn find_data_subdir(subdir: &str) -> PathBuf {
+    data_root().join(subdir)
 }
 
 /// Locate the project config file path under the resolved data directory.
 #[must_use]
-pub(crate) fn project_config_path() -> PathBuf {
-    let mut candidates = Vec::new();
-
-    if let Ok(base) = std::env::var("PROFLOW_DATA") {
-        candidates.push(PathBuf::from(base).join(PROJECT_CONFIG_FILE));
-    }
-
-    if let Some(data) = dirs::data_dir() {
-        candidates.push(data.join("proflow").join(PROJECT_CONFIG_FILE));
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("data").join(PROJECT_CONFIG_FILE));
-        }
-    }
-
-    candidates.push(PathBuf::from("data").join(PROJECT_CONFIG_FILE));
-
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from("data").join(PROJECT_CONFIG_FILE))
+pub fn project_config_path() -> PathBuf {
+    data_root().join(PROJECT_CONFIG_FILE)
 }

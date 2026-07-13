@@ -35,7 +35,11 @@ fn main() {
                             if let Some(ref bounds) = ge.bounds {
                                 println!(
                                     "    Bounds: origin=({}, {}), size=({}, {})",
-                                    bounds.origin.as_ref().map_or(0.0, |o| o.x),
+                                    bounds
+                                        .origin
+                                        .as_ref()
+                                        .and_then(|origin| origin.x)
+                                        .unwrap_or_default(),
                                     bounds.origin.as_ref().map_or(0.0, |o| o.y),
                                     bounds.size.as_ref().map_or(0.0, |s| s.width),
                                     bounds.size.as_ref().map_or(0.0, |s| s.height),

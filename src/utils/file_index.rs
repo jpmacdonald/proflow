@@ -1,60 +1,37 @@
 //! File matching and indexing for `ProPresenter` library files.
 //!
-//! Provides fuzzy search with persistent caching of:
-//! - File index (avoids cold-start rescans)
-//! - Selection history (previously matched files rank higher)
+//! The index is rebuilt once at runtime startup so an invalid cache cannot turn
+//! a library read failure into a misleading "not found" result.
 
 // Allow unwrap for compile-time constant regex patterns in lazy_static blocks
 #![allow(clippy::unwrap_used)]
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use rayon::prelude::*;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
-use crate::hymnal::extract_hymn_number;
+use crate::propresenter::deserialize::{detect_presentation_file_format, PresentationFileFormat};
+use crate::propresenter::generated::rv_data;
+use crate::propresenter::resolution::inspect_presentation_size;
+use crate::propresenter::PresentationSizeStatus;
+use prost::Message;
 
-/// Cache file name
-const CACHE_FILE: &str = "library_cache.json";
-
-/// Get the application cache directory, creating it if needed.
-/// Uses `~/Library/Application Support/proflow/` on macOS (via `dirs::data_dir`).
-fn cache_dir() -> Option<PathBuf> {
-    let dir = dirs::data_dir()?.join("proflow");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
-}
-
-/// Get the cache file path. Falls back to a dotfile next to the library
-/// if the platform data directory is unavailable.
-fn cache_path(library_path: &Path) -> PathBuf {
-    cache_dir().map_or_else(
-        || library_path.join(".proflow_cache.json"),
-        |d| d.join(CACHE_FILE),
-    )
-}
-
-fn latest_library_mtime(library_path: &Path) -> Option<SystemTime> {
-    WalkDir::new(library_path)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| {
-            entry.file_type().is_dir() || entry.path().extension().is_some_and(|ext| ext == "pro")
-        })
-        .filter_map(|entry| entry.metadata().ok()?.modified().ok())
-        .max()
+fn is_pro_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pro"))
 }
 
 /// A file entry representing a `ProPresenter` file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileEntry {
     /// Original file name without extension
     pub file_name: String,
@@ -72,65 +49,65 @@ pub struct FileEntry {
     pub relative_path: String,
     /// Absolute path on disk
     pub full_path: PathBuf,
+    /// Named native arrangements available for playlist selection.
+    pub arrangements: Vec<IndexedArrangement>,
+    /// Uniformity and dimensions of native presentation slides.
+    pub presentation_size: PresentationSizeStatus,
 }
 
-impl FileEntry {
-    /// Compute lowercase variants (call after deserializing)
-    fn compute_lowercase(&mut self) {
-        self.file_name_lower = self.file_name.to_lowercase();
-        self.normalized_lower = self.normalized_name.to_lowercase();
-    }
+/// Native arrangement metadata needed before a playlist build is approved.
+///
+/// A complete arrangement has a nonempty native name and a parseable UUID.
+/// Incomplete entries remain visible so classification can require review
+/// instead of treating corrupt metadata as though the arrangement did not
+/// exist.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum IndexedArrangement {
+    /// Arrangement can be selected by its exact native name.
+    Complete {
+        /// Exact native arrangement name.
+        name: String,
+    },
+    /// Arrangement has an empty name or a missing/malformed UUID.
+    Incomplete {
+        /// Exact native arrangement name, which may be empty when the entry is malformed.
+        name: String,
+    },
 }
 
-/// Persistent cache data
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct CacheData {
-    /// Library path this cache was built from
-    library_path: PathBuf,
-    /// When the cache was last built
-    #[serde(with = "humantime_serde")]
-    built_at: Option<SystemTime>,
-    /// Cached file entries
-    entries: Vec<FileEntry>,
-    /// File path → selection count
-    frequency: HashMap<String, u32>,
-}
-
-mod humantime_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-    // serde requires `&Option<T>` for field-level `serialize_with`; we cannot
-    // change the signature to `Option<&SystemTime>`.
-    #[allow(clippy::ref_option)]
-    pub fn serialize<S: Serializer>(time: &Option<SystemTime>, s: S) -> Result<S::Ok, S::Error> {
-        match time {
-            Some(t) => t
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or(Duration::ZERO)
-                .as_secs()
-                .serialize(s),
-            None => s.serialize_none(),
+impl IndexedArrangement {
+    /// Exact arrangement name stored in the native presentation.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Complete { name } | Self::Incomplete { name } => name,
         }
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<SystemTime>, D::Error> {
-        let secs: Option<u64> = Option::deserialize(d)?;
-        Ok(secs.map(|s| UNIX_EPOCH + Duration::from_secs(s)))
+    /// Whether the native arrangement carries the identity required by a
+    /// playlist selection.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete { .. })
     }
 }
 
-/// Index of `ProPresenter` files with persistent caching
+/// In-memory index of `ProPresenter` files.
 pub struct FileIndex {
     /// All indexed files
     pub entries: Vec<FileEntry>,
-    /// File path → selection count (persisted)
-    pub selection_frequency: HashMap<String, u32>,
-    /// Library path for cache persistence
+    /// Library root used for relative paths of newly generated files.
     library_path: PathBuf,
 }
 
 impl FileIndex {
+    /// Return the indexed metadata for one exact library path.
+    #[must_use]
+    pub fn entry_at(&self, path: &Path) -> Option<&FileEntry> {
+        self.entries.iter().find(|entry| entry.full_path == path)
+    }
+
     /// Build or load a file index for the given library path
     pub fn build(library_path: &Path) -> Result<Self> {
         if !library_path.is_dir() {
@@ -140,112 +117,73 @@ impl FileIndex {
             )));
         }
 
-        let cp = cache_path(library_path);
-
-        // Try to load from cache
-        if let Some(mut index) = Self::load_cache(&cp, library_path) {
-            // Recompute lowercase fields
-            for entry in &mut index.entries {
-                entry.compute_lowercase();
-            }
-            return Ok(index);
-        }
-
-        // Build fresh index
         let start = Instant::now();
-        let entries: Vec<FileEntry> = WalkDir::new(library_path)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "pro"))
-            .filter_map(|entry| {
-                let stem = entry.path().file_stem()?.to_str()?;
-                let normalized = normalize_name(stem);
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(library_path)
-                    .unwrap_or_else(|_| entry.path())
-                    .to_string_lossy()
-                    .to_string();
+        let mut entries = Vec::new();
+        for entry in WalkDir::new(library_path).follow_links(false) {
+            let entry = entry.map_err(|error| {
+                Error::Library(format!(
+                    "Failed to traverse ProPresenter library {}: {error}",
+                    library_path.display()
+                ))
+            })?;
+            if !entry.file_type().is_file() || !is_pro_path(entry.path()) {
+                continue;
+            }
 
-                Some(FileEntry {
-                    file_name: stem.to_string(),
-                    normalized_name: normalized.clone(),
-                    file_name_lower: stem.to_lowercase(),
-                    normalized_lower: normalized.to_lowercase(),
-                    display_name: stem.to_string(),
-                    relative_path,
-                    full_path: entry.path().to_path_buf(),
-                })
-            })
-            .collect();
+            let path = entry.path();
+            let data = std::fs::read(path).map_err(|error| {
+                Error::Library(format!(
+                    "Failed to read ProPresenter file {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let format = detect_presentation_file_format(&data);
+            if format != PresentationFileFormat::NativePresentation {
+                tracing::warn!(
+                    path = %path.display(),
+                    %format,
+                    "excluding unsupported .pro file from library index"
+                );
+                continue;
+            }
+            let metadata = decode_presentation_metadata(&data, path)?;
+
+            let stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| {
+                    Error::Library(format!(
+                        "ProPresenter filename is not valid UTF-8: {}",
+                        path.display()
+                    ))
+                })?;
+            let normalized = normalize_name(stem);
+            let relative_path = path
+                .strip_prefix(library_path)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
+            entries.push(FileEntry {
+                file_name: stem.to_string(),
+                normalized_name: normalized.clone(),
+                file_name_lower: stem.to_lowercase(),
+                normalized_lower: normalized.to_lowercase(),
+                display_name: stem.to_string(),
+                relative_path,
+                full_path: path.to_path_buf(),
+                arrangements: metadata.arrangements,
+                presentation_size: metadata.presentation_size,
+            });
+        }
 
         let count = entries.len();
         let elapsed = start.elapsed();
         tracing::info!("Indexed {count} files in {elapsed:?}");
 
-        let index = Self {
+        Ok(Self {
             entries,
-            selection_frequency: HashMap::new(),
-            library_path: library_path.to_path_buf(),
-        };
-
-        // Save cache (ignore errors)
-        let _ = index.save_cache(&cp);
-
-        Ok(index)
-    }
-
-    /// Try to load index from cache file
-    fn load_cache(cache_path: &Path, library_path: &Path) -> Option<Self> {
-        let data = std::fs::read_to_string(cache_path).ok()?;
-        let cache: CacheData = serde_json::from_str(&data).ok()?;
-
-        // Validate cache is for the same library
-        if cache.library_path != library_path {
-            return None;
-        }
-
-        // Check if cache is stale (any indexed directory or .pro file changed after cache build)
-        if let Some(built_at) = cache.built_at {
-            if latest_library_mtime(library_path).is_some_and(|modified| modified > built_at) {
-                return None;
-            }
-        }
-
-        Some(Self {
-            entries: cache.entries,
-            selection_frequency: cache.frequency,
             library_path: library_path.to_path_buf(),
         })
-    }
-
-    /// Save index to cache file
-    fn save_cache(&self, cache_path: &Path) -> Result<()> {
-        let cache = CacheData {
-            library_path: self.library_path.clone(),
-            built_at: Some(SystemTime::now()),
-            entries: self.entries.clone(),
-            frequency: self.selection_frequency.clone(),
-        };
-
-        let json = serde_json::to_string_pretty(&cache)
-            .map_err(|e| Error::Msg(format!("Failed to serialize cache: {e}")))?;
-        std::fs::write(cache_path, json)?;
-        Ok(())
-    }
-
-    /// Persist current selections to cache
-    pub fn persist(&self) {
-        let cp = cache_path(&self.library_path);
-        let _ = self.save_cache(&cp);
-    }
-
-    /// Record a file selection, bumping its frequency score for future ranking.
-    pub fn record_selection(&mut self, file_path: &Path) {
-        let path_str = file_path.to_string_lossy().to_string();
-        *self.selection_frequency.entry(path_str).or_insert(0) += 1;
-        self.persist();
     }
 
     /// Add a newly exported file to the index, skipping duplicates.
@@ -254,6 +192,38 @@ impl FileIndex {
         if self.entries.iter().any(|e| e.full_path == full_path) {
             return;
         }
+
+        let data = match std::fs::read(full_path) {
+            Ok(data) => data,
+            Err(error) => {
+                tracing::warn!(
+                    path = %full_path.display(),
+                    %error,
+                    "not adding unreadable .pro file to library index"
+                );
+                return;
+            }
+        };
+        let format = detect_presentation_file_format(&data);
+        if format != PresentationFileFormat::NativePresentation {
+            tracing::warn!(
+                path = %full_path.display(),
+                %format,
+                "not adding unsupported .pro file to library index"
+            );
+            return;
+        }
+        let presentation_metadata = match decode_presentation_metadata(&data, full_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                tracing::warn!(
+                    path = %full_path.display(),
+                    %error,
+                    "not adding undecodable .pro file to library index"
+                );
+                return;
+            }
+        };
 
         let Some(stem) = full_path.file_stem().and_then(|s| s.to_str()) else {
             return;
@@ -274,9 +244,9 @@ impl FileIndex {
             display_name: stem.to_string(),
             relative_path: relative,
             full_path: full_path.to_path_buf(),
+            arrangements: presentation_metadata.arrangements,
+            presentation_size: presentation_metadata.presentation_size,
         });
-
-        self.persist();
     }
 
     /// Find matching files for a search query
@@ -305,7 +275,7 @@ impl FileIndex {
             .entries
             .par_iter()
             .filter_map(|entry| {
-                let score = self.score_entry(
+                let score = Self::score_entry(
                     &matcher,
                     entry,
                     effective,
@@ -335,7 +305,6 @@ impl FileIndex {
     /// Score a single entry against the query
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn score_entry(
-        &self,
         matcher: &SkimMatcherV2,
         entry: &FileEntry,
         term: &str,
@@ -452,17 +421,6 @@ impl FileIndex {
             }
         }
 
-        // Frequency bonus (previously selected files rank higher)
-        let path_str = entry.full_path.to_string_lossy();
-        #[allow(clippy::cast_possible_wrap)]
-        let freq_bonus = i64::from(
-            self.selection_frequency
-                .get(path_str.as_ref())
-                .copied()
-                .unwrap_or(0),
-        ) * 500;
-        score += freq_bonus;
-
         // Filter out completely irrelevant matches
         if quality > 0 || score > 300 {
             Some(score.max(10))
@@ -470,6 +428,46 @@ impl FileIndex {
             None
         }
     }
+}
+
+struct IndexedPresentationMetadata {
+    arrangements: Vec<IndexedArrangement>,
+    presentation_size: PresentationSizeStatus,
+}
+
+fn decode_presentation_metadata(data: &[u8], path: &Path) -> Result<IndexedPresentationMetadata> {
+    let presentation = rv_data::Presentation::decode(data).map_err(|error| {
+        Error::Library(format!(
+            "Failed to decode ProPresenter file {} after native format detection: {error}",
+            path.display()
+        ))
+    })?;
+
+    let arrangements = presentation
+        .arrangements
+        .iter()
+        .map(|arrangement| {
+            let complete = !arrangement.name.trim().is_empty()
+                && arrangement
+                    .uuid
+                    .as_ref()
+                    .is_some_and(|uuid| Uuid::parse_str(&uuid.string).is_ok());
+            if complete {
+                IndexedArrangement::Complete {
+                    name: arrangement.name.clone(),
+                }
+            } else {
+                IndexedArrangement::Incomplete {
+                    name: arrangement.name.clone(),
+                }
+            }
+        })
+        .collect();
+
+    Ok(IndexedPresentationMetadata {
+        arrangements,
+        presentation_size: inspect_presentation_size(&presentation),
+    })
 }
 
 /// Normalize a filename by removing common prefixes and patterns
@@ -606,39 +604,187 @@ fn apply_threshold_filter(
     results
 }
 
+/// Extract an optional catalog number used to boost hymn-library matches.
+fn extract_hymn_number(text: &str) -> Option<String> {
+    for (index, _) in text.match_indices('#') {
+        if let Some(number) = leading_digits(&text[index + 1..]) {
+            return Some(number);
+        }
+    }
+
+    let lower = text.to_ascii_lowercase();
+    if let Some(index) = lower.find("hymn") {
+        let rest = &text[index + "hymn".len()..];
+        if rest.chars().next().is_some_and(char::is_whitespace) {
+            let rest = rest.trim_start();
+            if let Some(number) = leading_digits(rest.strip_prefix('#').unwrap_or(rest)) {
+                return Some(number);
+            }
+        }
+    }
+
+    leading_digits(text.trim_start())
+}
+
+fn leading_digits(value: &str) -> Option<String> {
+    let number = value
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    (!number.is_empty()).then_some(number)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
     use std::fs;
-    use std::thread::sleep;
-    use std::time::{Duration, Instant};
 
     use tempfile::tempdir;
 
+    use crate::propresenter::generated::rv_data;
+    use prost::Message;
+
+    fn native_presentation(name: &str) -> Vec<u8> {
+        rv_data::Presentation {
+            uuid: Some(rv_data::Uuid {
+                string: format!("{name}-id"),
+            }),
+            name: name.to_string(),
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    fn native_presentation_with_arrangements(name: &str) -> Vec<u8> {
+        rv_data::Presentation {
+            uuid: Some(rv_data::Uuid {
+                string: format!("{name}-id"),
+            }),
+            name: name.to_string(),
+            arrangements: vec![
+                rv_data::presentation::Arrangement {
+                    uuid: Some(rv_data::Uuid {
+                        string: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                    }),
+                    name: "Christmas Eve".to_string(),
+                    ..Default::default()
+                },
+                rv_data::presentation::Arrangement {
+                    uuid: Some(rv_data::Uuid {
+                        string: "not-a-uuid".to_string(),
+                    }),
+                    name: "Broken".to_string(),
+                    ..Default::default()
+                },
+            ],
+            cues: vec![rv_data::Cue {
+                actions: vec![rv_data::Action {
+                    action_type_data: Some(rv_data::action::ActionTypeData::Slide(
+                        rv_data::action::SlideType {
+                            slide: Some(rv_data::action::slide_type::Slide::Presentation(
+                                rv_data::PresentationSlide {
+                                    base_slide: Some(rv_data::Slide {
+                                        size: Some(rv_data::graphics::Size {
+                                            width: 1920.0,
+                                            height: 1080.0,
+                                        }),
+                                        ..rv_data::Slide::default()
+                                    }),
+                                    ..rv_data::PresentationSlide::default()
+                                },
+                            )),
+                        },
+                    )),
+                    ..rv_data::Action::default()
+                }],
+                ..rv_data::Cue::default()
+            }],
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
     #[test]
-    fn latest_library_mtime_reflects_nested_updates() {
-        let dir = tempdir().expect("create library dir");
-        let nested = dir.path().join("subdir");
-        fs::create_dir_all(&nested).expect("create nested folder");
-        let file = nested.join("slide.pro");
-        fs::write(&file, "first").expect("write initial file");
+    fn extracts_hymn_number_for_search_scoring() {
+        assert_eq!(
+            extract_hymn_number("#510 Jesus Shall Reign").as_deref(),
+            Some("510")
+        );
+        assert_eq!(
+            extract_hymn_number("Hymn #42 Amazing Grace").as_deref(),
+            Some("42")
+        );
+        assert_eq!(extract_hymn_number("hymn 7").as_deref(), Some("7"));
+        assert_eq!(extract_hymn_number("510 Title").as_deref(), Some("510"));
+        assert_eq!(extract_hymn_number("Call to Worship"), None);
+    }
 
-        let first = latest_library_mtime(dir.path()).expect("got mtime");
-        fs::write(&file, "second").expect("update nested file");
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let second = loop {
-            let candidate = latest_library_mtime(dir.path()).expect("got new mtime");
-            if candidate > first || Instant::now() >= deadline {
-                break candidate;
+    #[test]
+    fn index_excludes_non_presentation_files_with_pro_extension() {
+        let directory = tempdir().expect("create library dir");
+        fs::write(
+            directory.path().join("Native.pro"),
+            native_presentation("Native"),
+        )
+        .expect("write native presentation");
+        fs::write(directory.path().join("Archive.pro"), b"PK\x03\x04archive")
+            .expect("write ZIP fixture");
+        fs::write(directory.path().join("Fixture.pro"), b"{\"slides\":[]}")
+            .expect("write JSON fixture");
+        fs::write(
+            directory.path().join("Playlist.pro"),
+            rv_data::Playlist {
+                uuid: Some(rv_data::Uuid {
+                    string: "playlist-id".to_string(),
+                }),
+                name: "Playlist".to_string(),
+                r#type: rv_data::playlist::Type::Playlist as i32,
+                ..Default::default()
             }
-            sleep(Duration::from_millis(25));
-        };
-        assert!(
-            second > first,
-            "nested modification should update library mtime"
+            .encode_to_vec(),
+        )
+        .expect("write playlist fixture");
+        fs::write(directory.path().join("Marker.pro"), b"MOCKPRESENTATION")
+            .expect("write marker fixture");
+        fs::write(directory.path().join("Unknown.pro"), [0xff, 0x00])
+            .expect("write binary fixture");
+
+        let index = FileIndex::build(directory.path()).expect("build library index");
+
+        assert_eq!(index.entries.len(), 1);
+        assert_eq!(index.entries[0].file_name, "Native");
+    }
+
+    #[test]
+    fn index_records_complete_and_incomplete_native_arrangements() {
+        let directory = tempdir().expect("create library dir");
+        fs::write(
+            directory.path().join("Song.pro"),
+            native_presentation_with_arrangements("Song"),
+        )
+        .expect("write native presentation");
+
+        let index = FileIndex::build(directory.path()).expect("build library index");
+
+        assert_eq!(
+            index.entries[0].arrangements,
+            vec![
+                IndexedArrangement::Complete {
+                    name: "Christmas Eve".to_string(),
+                },
+                IndexedArrangement::Incomplete {
+                    name: "Broken".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            index.entries[0].presentation_size,
+            PresentationSizeStatus::Uniform {
+                size: crate::propresenter::PresentationSize::new(1920, 1080)
+                    .expect("valid full HD size"),
+            }
         );
     }
 }

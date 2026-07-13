@@ -7,9 +7,7 @@
 // Allow unwrap for compile-time constant regex patterns in LazyLock blocks
 #![allow(dead_code, clippy::unwrap_used)]
 
-use regex::Regex;
 use std::fmt::Write;
-use std::sync::LazyLock;
 
 /// Superscript digit characters for detection
 const SUPERSCRIPT_CHARS: &[char] = &['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
@@ -42,6 +40,8 @@ const fn superscript_to_digit(c: char) -> char {
 /// `StyledSegment` layer on top of these defaults.
 #[derive(Debug, Clone)]
 pub struct RtfOptions {
+    /// Cocoa RTF producer version copied from the template.
+    pub cocoa_rtf_version: u32,
     /// Font name (default: Helvetica)
     pub font_name: String,
     /// Font size in points (default: 80)
@@ -54,17 +54,22 @@ pub struct RtfOptions {
     pub bold: bool,
     /// Whether the template baseline is italic
     pub italic: bool,
+    /// Native paragraph controls copied from the template's first paragraph.
+    pub paragraph_controls: String,
 }
 
 impl Default for RtfOptions {
     fn default() -> Self {
         Self {
+            cocoa_rtf_version: 2821,
             font_name: "Helvetica".to_string(),
             font_size: 80,
             color: (255, 255, 255), // White
             kerning: 5,
             bold: false,
             italic: false,
+            paragraph_controls:
+                r"\pard\pardeftab1680\sl20\slleading480\pardirnatural\partightenfactor0".to_string(),
         }
     }
 }
@@ -134,7 +139,11 @@ pub fn segments_to_rtf(segments: &[StyledSegment], options: &RtfOptions) -> Stri
     let mut rtf = String::new();
 
     // RTF header
-    rtf.push_str(r"{\rtf1\ansi\ansicpg1252\cocoartf2821");
+    let _ = write!(
+        rtf,
+        r"{{\rtf1\ansi\ansicpg1252\cocoartf{}",
+        options.cocoa_rtf_version
+    );
     rtf.push('\n');
     rtf.push_str(r"\cocoatextscaling0\cocoaplatform0");
 
@@ -166,7 +175,7 @@ pub fn segments_to_rtf(segments: &[StyledSegment], options: &RtfOptions) -> Stri
     rtf.push('\n');
 
     // Paragraph formatting
-    rtf.push_str(r"\pard\pardeftab1680\sl20\slleading480\pardirnatural\partightenfactor0");
+    rtf.push_str(&options.paragraph_controls);
     rtf.push('\n');
     rtf.push('\n');
 
@@ -309,6 +318,25 @@ pub fn extract_rtf_options(rtf_data: &[u8]) -> Option<RtfOptions> {
 
     let mut options = RtfOptions::default();
 
+    if let Some(version) = regex::Regex::new(r"\\cocoartf(\d+)")
+        .ok()
+        .and_then(|re| re.captures(&rtf))
+        .and_then(|captures| captures.get(1))
+        .and_then(|value| value.as_str().parse::<u32>().ok())
+    {
+        options.cocoa_rtf_version = version;
+    }
+
+    if let Some(paragraph_controls) = regex::Regex::new(r"(?m)(\\pard[^\r\n{}]*)")
+        .ok()
+        .and_then(|re| re.captures(&rtf))
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().trim_end().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        options.paragraph_controls = paragraph_controls;
+    }
+
     // Extract font name from fonttbl
     if let Some(font_match) = regex::Regex::new(r"\\f0\\fswiss\\fcharset0 ([^;]+);")
         .ok()
@@ -373,38 +401,284 @@ pub fn extract_rtf_options(rtf_data: &[u8]) -> Option<RtfOptions> {
 ///
 /// Simplified parser for common RTF patterns.
 pub fn rtf_to_text(rtf_data: &str) -> Option<String> {
-    static RE_HEADER_GROUPS: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-        r"\{\\\*?\\(?:fonttbl|colortbl|expandedcolortbl|stylesheet|info|generator)[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"
-    ).unwrap()
-    });
-    static RE_NEWLINE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\\(?:par|line)\s?").unwrap());
-    static RE_CONTROL: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\\[a-zA-Z]+[-]?\d*\s?").unwrap());
-    static RE_BRACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[{}]").unwrap());
-
     if !rtf_data.starts_with("{\\rtf") {
         return None;
     }
 
-    let mut text = rtf_data.to_string();
-    text = RE_HEADER_GROUPS.replace_all(&text, "").to_string();
-    text = RE_NEWLINE.replace_all(&text, "\n").to_string();
-    text = RE_CONTROL.replace_all(&text, "").to_string();
-    text = RE_BRACES.replace_all(&text, "").to_string();
+    let chars: Vec<char> = rtf_data.chars().collect();
+    let mut text = String::new();
+    let mut index = 0usize;
+    let mut state = RtfParserState::default();
+    let mut group_stack = Vec::new();
+    let mut group_start = false;
 
-    let text = text
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
+    while index < chars.len() {
+        match chars[index] {
+            '{' => {
+                group_stack.push(state);
+                group_start = true;
+                index += 1;
+            }
+            '}' => {
+                state = group_stack.pop().unwrap_or_default();
+                group_start = false;
+                index += 1;
+            }
+            '\\' => {
+                index += 1;
+                parse_rtf_control(&chars, &mut index, &mut text, &mut state, &mut group_start);
+            }
+            value => {
+                // Raw CR/LF bytes format the RTF source; visible line breaks
+                // are represented by control words such as `\par` or `\line`.
+                if !state.skip_group && !matches!(value, '\r' | '\n') {
+                    text.push(value);
+                }
+                group_start = false;
+                index += 1;
+            }
+        }
+    }
+
+    let text = normalize_extracted_rtf_text(&text);
 
     if text.is_empty() {
         None
     } else {
         Some(text)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RtfParserState {
+    skip_group: bool,
+    unicode_fallback_len: usize,
+}
+
+impl Default for RtfParserState {
+    fn default() -> Self {
+        Self {
+            skip_group: false,
+            unicode_fallback_len: 1,
+        }
+    }
+}
+
+fn parse_rtf_control(
+    chars: &[char],
+    index: &mut usize,
+    text: &mut String,
+    state: &mut RtfParserState,
+    group_start: &mut bool,
+) {
+    if *index >= chars.len() {
+        return;
+    }
+
+    if chars[*index] == '*' {
+        if *group_start {
+            state.skip_group = true;
+        }
+        *group_start = false;
+        *index += 1;
+        return;
+    }
+
+    if chars[*index] == '\'' {
+        *index += 1;
+        let value = parse_hex_byte(chars, index);
+        if !state.skip_group {
+            text.push(cp1252_byte_to_char(value));
+        }
+        *group_start = false;
+        return;
+    }
+
+    if !chars[*index].is_ascii_alphabetic() {
+        let escaped = chars[*index];
+        if !state.skip_group {
+            match escaped {
+                '\\' | '{' | '}' => text.push(escaped),
+                '\n' => text.push('\n'),
+                '\r' => {
+                    text.push('\n');
+                    if chars.get(*index + 1) == Some(&'\n') {
+                        *index += 1;
+                    }
+                }
+                '~' => text.push(' '),
+                '-' => text.push('\u{00ad}'),
+                '_' => text.push('\u{2011}'),
+                _ => {}
+            }
+        }
+        *group_start = false;
+        *index += 1;
+        return;
+    }
+
+    let word_start = *index;
+    while *index < chars.len() && chars[*index].is_ascii_alphabetic() {
+        *index += 1;
+    }
+    let word = chars[word_start..*index].iter().collect::<String>();
+    let signed = *index < chars.len() && chars[*index] == '-';
+    if signed {
+        *index += 1;
+    }
+    let number_start = *index;
+    while *index < chars.len() && chars[*index].is_ascii_digit() {
+        *index += 1;
+    }
+    let number = (number_start != *index).then(|| {
+        chars[number_start..*index]
+            .iter()
+            .collect::<String>()
+            .parse::<i32>()
+            .unwrap_or(0)
+            * if signed { -1 } else { 1 }
+    });
+    if *index < chars.len() && chars[*index] == ' ' {
+        *index += 1;
+    }
+
+    if *group_start && is_ignored_destination(&word) {
+        state.skip_group = true;
+    }
+    if !state.skip_group {
+        match word.as_str() {
+            "par" | "line" => text.push('\n'),
+            "tab" => text.push('\t'),
+            "emdash" => text.push('\u{2014}'),
+            "endash" => text.push('\u{2013}'),
+            "bullet" => text.push('\u{2022}'),
+            "uc" => {
+                if let Some(value) = number.and_then(|value| usize::try_from(value).ok()) {
+                    state.unicode_fallback_len = value;
+                }
+            }
+            "u" => {
+                if let Some(value) = number {
+                    let unsigned = if value < 0 {
+                        (value + 65_536).cast_unsigned()
+                    } else {
+                        value.cast_unsigned()
+                    };
+                    if let Some(ch) = char::from_u32(unsigned) {
+                        text.push(ch);
+                    }
+                }
+                skip_rtf_fallback(chars, index, state.unicode_fallback_len);
+            }
+            _ => {}
+        }
+    }
+    *group_start = false;
+}
+
+fn skip_rtf_fallback(chars: &[char], index: &mut usize, count: usize) {
+    for _ in 0..count {
+        let Some(&next) = chars.get(*index) else {
+            return;
+        };
+        if matches!(next, '{' | '}') {
+            return;
+        }
+        if next != '\\' {
+            *index += 1;
+            continue;
+        }
+
+        *index += 1;
+        let Some(&escaped) = chars.get(*index) else {
+            return;
+        };
+        if escaped == '\'' {
+            *index = (*index + 3).min(chars.len());
+        } else {
+            *index += 1;
+        }
+    }
+}
+
+fn is_ignored_destination(word: &str) -> bool {
+    matches!(
+        word,
+        "fonttbl"
+            | "colortbl"
+            | "expandedcolortbl"
+            | "stylesheet"
+            | "info"
+            | "generator"
+            | "listtable"
+            | "listoverridetable"
+            | "datastore"
+            | "themedata"
+            | "colorschememapping"
+            | "header"
+            | "footer"
+            | "pict"
+            | "object"
+    )
+}
+
+fn parse_hex_byte(chars: &[char], index: &mut usize) -> u8 {
+    let hi = chars
+        .get(*index)
+        .and_then(|ch| ch.to_digit(16))
+        .and_then(|value| u8::try_from(value).ok())
+        .unwrap_or(0);
+    *index += usize::from(*index < chars.len());
+    let lo = chars
+        .get(*index)
+        .and_then(|ch| ch.to_digit(16))
+        .and_then(|value| u8::try_from(value).ok())
+        .unwrap_or(0);
+    *index += usize::from(*index < chars.len());
+    (hi << 4) | lo
+}
+
+fn cp1252_byte_to_char(value: u8) -> char {
+    match value {
+        0x80 => '\u{20ac}',
+        0x82 => '\u{201a}',
+        0x83 => '\u{0192}',
+        0x84 => '\u{201e}',
+        0x85 => '\u{2026}',
+        0x86 => '\u{2020}',
+        0x87 => '\u{2021}',
+        0x88 => '\u{02c6}',
+        0x89 => '\u{2030}',
+        0x8a => '\u{0160}',
+        0x8b => '\u{2039}',
+        0x8c => '\u{0152}',
+        0x8e => '\u{017d}',
+        0x91 => '\u{2018}',
+        0x92 => '\u{2019}',
+        0x93 => '\u{201c}',
+        0x94 => '\u{201d}',
+        0x95 => '\u{2022}',
+        0x96 => '\u{2013}',
+        0x97 => '\u{2014}',
+        0x98 => '\u{02dc}',
+        0x99 => '\u{2122}',
+        0x9a => '\u{0161}',
+        0x9b => '\u{203a}',
+        0x9c => '\u{0153}',
+        0x9e => '\u{017e}',
+        0x9f => '\u{0178}',
+        _ => char::from(value),
+    }
+}
+
+fn normalize_extracted_rtf_text(text: &str) -> String {
+    let normalized = text.replace('\u{00a0}', " ");
+    let lines = normalized.lines().map(str::trim_end).collect::<Vec<_>>();
+    let first = lines.iter().position(|line| !line.trim().is_empty());
+    let last = lines.iter().rposition(|line| !line.trim().is_empty());
+    match (first, last) {
+        (Some(first), Some(last)) => lines[first..=last].join("\n"),
+        _ => String::new(),
     }
 }
 
@@ -433,6 +707,70 @@ mod tests {
         let result = rtf_to_text(rtf).unwrap();
         assert!(result.contains("Line 1"));
         assert!(result.contains("Line 2"));
+    }
+
+    #[test]
+    fn test_legacy_backslash_newline_breaks() {
+        let rtf = "{\\rtf1\\ansi Line 1\\\nLine 2\\\nLine 3}";
+        let result = rtf_to_text(rtf).unwrap();
+        assert_eq!(result, "Line 1\nLine 2\nLine 3");
+    }
+
+    #[test]
+    fn raw_rtf_formatting_newlines_are_not_visible_text() {
+        let rtf = "{\\rtf1\\ansi\nLine 1\n\\par Line 2\n}";
+
+        assert_eq!(rtf_to_text(rtf).as_deref(), Some("Line 1\nLine 2"));
+    }
+
+    #[test]
+    fn test_rtf_to_text_skips_cocoa_header_groups() {
+        let rtf = r"{\rtf1\ansi{\fonttbl\f0\fswiss\fcharset0 Helvetica;}{\colortbl;\red255\green255\blue255;}\pard\pardeftab1680\f0\fs96 \cf1 Actual text\par Next line}";
+        let result = rtf_to_text(rtf).unwrap();
+        assert_eq!(result, "Actual text\nNext line");
+    }
+
+    #[test]
+    fn test_rtf_to_text_preserves_internal_blank_lines() {
+        let rtf = r"{\rtf1\ansi First\par \par Second\par}";
+        let result = rtf_to_text(rtf).unwrap();
+        assert_eq!(result, "First\n\nSecond");
+    }
+
+    #[test]
+    fn test_rtf_to_text_blank_slide_is_none() {
+        let rtf = r"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}\pard\par}";
+        assert_eq!(rtf_to_text(rtf), None);
+    }
+
+    #[test]
+    fn generated_unicode_round_trips_without_the_ansi_fallback() {
+        let rtf = text_to_rtf_styled("O\u{00a0}Lord", &RtfOptions::default());
+
+        assert_eq!(rtf_to_text(&rtf).as_deref(), Some("O Lord"));
+    }
+
+    #[test]
+    fn unicode_fallback_length_is_scoped_to_its_rtf_group() {
+        let rtf = r"{\rtf1\ansi\uc0 {\uc1\u8217 ?}\u8239 X}";
+
+        assert_eq!(rtf_to_text(rtf).as_deref(), Some("’\u{202f}X"));
+    }
+
+    #[test]
+    fn regenerated_rtf_preserves_template_paragraph_controls_and_version() {
+        let template = br"{\rtf1\ansi\ansicpg1252\cocoartf2709
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+\pard\qc\sl240\slmult1\pardirnatural
+\f0\fs96 Old text}";
+        let options = extract_rtf_options(template).expect("extract native RTF options");
+
+        let regenerated = segments_to_rtf(&[StyledSegment::unstyled("New text")], &options);
+
+        assert!(regenerated.contains("\\cocoartf2709"));
+        assert!(regenerated.contains("\\pard\\qc\\sl240\\slmult1\\pardirnatural"));
+        assert!(regenerated.contains("New text"));
     }
 
     #[test]

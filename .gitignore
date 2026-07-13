@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target/
+**/target/
 **/*.rs.bk
 *.pdb
 *.so
@@ -16,6 +17,9 @@
 # Local configuration
 .env
 .env.*
+!.env.example
+.mcp.json
+.mcp.json.*.tmp
 config.toml
 
 # Editor files
@@ -43,6 +47,7 @@ config.toml
 *.ipr
 .idea_modules/
 out/
+/mutants.out*/
 
 # Operating system files
 ## macOS

@@ -4,11 +4,13 @@
 
 #![allow(dead_code)]
 
-use std::fs::File;
+use std::ffi::{OsStr, OsString};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::propresenter::deserialize::has_native_document_identity;
 use crate::propresenter::generated::rv_data;
 use prost::Message;
 
@@ -22,6 +24,10 @@ pub enum SerializeError {
     /// Failed to encode the protobuf data
     #[error("Failed to encode ProPresenter file: {0}")]
     EncodeError(String),
+
+    /// A native presentation must have a stable document name and UUID.
+    #[error("Presentation requires a non-empty name and UUID")]
+    MissingDocumentIdentity,
 }
 
 /// Write a presentation to a `ProPresenter` file
@@ -42,7 +48,11 @@ pub enum SerializeError {
 /// use proflow::propresenter::serialize::write_presentation_file;
 /// use proflow::propresenter::generated::rv_data;
 ///
-/// let presentation = rv_data::Presentation::default();
+/// let presentation = rv_data::Presentation {
+///     uuid: Some(rv_data::Uuid { string: "example-id".to_string() }),
+///     name: "Example".to_string(),
+///     ..Default::default()
+/// };
 /// let path = Path::new("example.pro");
 /// match write_presentation_file(&presentation, &path) {
 ///     Ok(_) => println!("Successfully wrote presentation"),
@@ -54,23 +64,59 @@ pub fn write_presentation_file(
     path: impl AsRef<Path>,
 ) -> Result<(), SerializeError> {
     let path = path.as_ref();
-    let buf = encode_presentation(presentation);
+    let buf = encode_presentation(presentation)?;
 
-    // Create the file and write the buffer to it
-    let mut file = File::create(path)?;
-    file.write_all(&buf)?;
-
-    Ok(())
+    write_file_atomically(path, |mut file| {
+        file.write_all(&buf)?;
+        Ok(file)
+    })
 }
 
-/// Encode a presentation to protobuf bytes (for embedding in playlists)
-#[allow(clippy::expect_used)] // encode() only fails if buffer can't grow, impossible with Vec
-pub fn encode_presentation(presentation: &rv_data::Presentation) -> Vec<u8> {
-    let mut buf = Vec::new();
-    presentation
-        .encode(&mut buf)
-        .expect("Vec<u8> cannot fail to grow");
-    buf
+/// Write a complete sibling temporary file and atomically replace `path` only
+/// after the temporary file has been flushed successfully.
+pub(super) fn write_file_atomically<E, F>(path: &Path, write: F) -> Result<(), E>
+where
+    E: From<io::Error>,
+    F: FnOnce(File) -> Result<File, E>,
+{
+    let temporary_path = temporary_output_path(path);
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary_path)?;
+
+    let result = write(file).and_then(|file| {
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary_path, path)?;
+        Ok(())
+    });
+
+    if result.is_err() {
+        let _cleanup_result = std::fs::remove_file(&temporary_path);
+    }
+
+    result
+}
+
+fn temporary_output_path(path: &Path) -> PathBuf {
+    let mut temporary_name = OsString::from(".");
+    temporary_name.push(
+        path.file_name()
+            .unwrap_or_else(|| OsStr::new("propresenter")),
+    );
+    temporary_name.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    path.with_file_name(temporary_name)
+}
+
+/// Encode a presentation to protobuf bytes (for embedding in playlists).
+pub fn encode_presentation(
+    presentation: &rv_data::Presentation,
+) -> Result<Vec<u8>, SerializeError> {
+    if !has_native_document_identity(presentation) {
+        return Err(SerializeError::MissingDocumentIdentity);
+    }
+    Ok(presentation.encode_to_vec())
 }
 
 #[cfg(test)]
@@ -245,8 +291,14 @@ mod tests {
 
     #[test]
     fn test_write_empty_presentation() {
-        // Create an empty presentation
-        let empty = rv_data::Presentation::default();
+        // An otherwise-empty native document still requires an identity.
+        let empty = rv_data::Presentation {
+            uuid: Some(rv_data::Uuid {
+                string: "empty-presentation-id".to_string(),
+            }),
+            name: "Empty Presentation".to_string(),
+            ..Default::default()
+        };
 
         // Save the raw presentation struct to a test output file
         let test_output_path = get_test_output_path("test_output_empty.txt");
@@ -264,7 +316,7 @@ mod tests {
             read_presentation_file(&pro_output_path).expect("Failed to read empty presentation");
 
         // Verify properties match
-        assert_eq!(round_trip.name, "");
+        assert_eq!(round_trip.name, "Empty Presentation");
         assert!(round_trip.cues.is_empty());
         assert!(round_trip.cue_groups.is_empty());
         assert!(round_trip.arrangements.is_empty());
@@ -272,6 +324,18 @@ mod tests {
         println!("Successfully verified empty presentation serialization");
         println!("Test output saved to: {}", test_output_path.display());
         println!("ProPresenter file saved to: {}", pro_output_path.display());
+    }
+
+    #[test]
+    fn unidentified_presentation_is_rejected_before_writing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let output_path = directory.path().join("invalid.pro");
+
+        let error = write_presentation_file(&rv_data::Presentation::default(), &output_path)
+            .expect_err("an unidentified document must not be written");
+
+        assert!(matches!(error, SerializeError::MissingDocumentIdentity));
+        assert!(!output_path.exists());
     }
 
     #[test]
@@ -463,5 +527,22 @@ mod tests {
 
         println!("Successfully verified group structure");
         println!("Example output saved to: {}", example_output_path.display());
+    }
+
+    #[test]
+    fn atomic_write_preserves_existing_file_when_generation_fails() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let output_path = directory.path().join("existing.pro");
+        fs::write(&output_path, b"known-good").expect("write existing output");
+
+        let result = write_file_atomically::<SerializeError, _>(&output_path, |_file| {
+            Err(io::Error::other("injected write failure").into())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read(&output_path).expect("read preserved output"),
+            b"known-good"
+        );
     }
 }

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 4,
   "metadata": {
     "name": "VPC",
     "timezone": "America/New_York",
@@ -7,7 +7,15 @@
   },
   "defaults": {
     "theme": "VPC Theme",
-    "review_policy": "ask"
+    "background": "default",
+    "bible_version": "NRSVue",
+    "presentation_size": {
+      "width": 1920,
+      "height": 1080
+    }
+  },
+  "backgrounds": {
+    "default": "backgrounds/default.png"
   },
   "service_groups": {
     "primary": {
@@ -22,105 +30,117 @@
       ]
     }
   },
-  "profiles": {
-    "weekly": {
-      "description": "Primary weekly services",
-      "service_groups": [
-        "primary"
-      ],
-      "review_policy": "ask"
+  "required_playlist_items": [
+    {
+      "id": "pre_post_service",
+      "use_type": "static_graphic",
+      "library_file": "Pre-Service, Post-Service Slides.pro",
+      "placement": "start",
+      "service_group": "primary"
     },
-    "seasonal": {
-      "description": "Seasonal services",
-      "service_groups": [
-        "seasonal"
-      ],
-      "days_ahead": 60,
-      "review_policy": "ask"
+    {
+      "id": "stephen_minister",
+      "use_type": "static_graphic",
+      "library_file": "Stephen Minister Slide.pro",
+      "placement": "end",
+      "service_group": "primary"
+    }
+  ],
+  "cue_roles": {
+    "title": {
+      "slide": "Information (Projectors)",
+      "enter_macro": "Name Tag/Title"
+    },
+    "scripture_prayer": {
+      "slide": "Scripture (Projectors)",
+      "enter_macro": "Scripture/Prayer"
+    },
+    "responsive_scripture_prayer": {
+      "slide": "Scripture (Projectors) (Responsive)",
+      "enter_macro": "Scripture/Prayer",
+      "all_content_colored_macro": "Scripture/Prayer (Highlighted)"
     }
   },
   "presentation_types": {
-    "pre_post_service": {
+    "static_graphic": {
       "kind": "graphic",
       "content_source": "static",
       "output_strategy": "use_existing",
-      "background": "default",
-      "macro": "Graphics",
-      "description": "Static pre/post service slides"
+      "description": "Reusable graphic presentation"
     },
     "person_nametag": {
       "kind": "nametag",
       "content_source": "static",
       "output_strategy": "use_existing",
-      "template": "Name Tag",
-      "background": "default",
-      "macro": "Name Tag/Title",
       "description": "Static speaker nametag"
     },
     "content_nametag": {
       "kind": "nametag",
       "content_source": "description",
+      "description_parser": "content_nametag",
       "output_strategy": "edit_in_place",
-      "template": "Information (Projectors)",
-      "background": "default",
-      "macro": "Name Tag/Title",
+      "display": {
+        "kind": "single",
+        "role": "title"
+      },
+      "max_lines_per_slide": 4,
       "description": "Nametag-style slide with weekly content"
-    },
-    "announcements": {
-      "kind": "announcement",
-      "content_source": "static",
-      "output_strategy": "use_existing",
-      "background": "default",
-      "macro": "Graphics",
-      "description": "Announcements slides updated separately"
     },
     "song": {
       "kind": "song",
       "content_source": "song",
       "output_strategy": "use_existing",
-      "template": "Lyrics (Projectors)",
-      "background": "default",
-      "macro": "Song",
-      "arrangement": "Default",
-      "description": "Song or hymn from library"
+      "description": "Song or hymn from library; uses the Planning Center arrangement when supplied"
     },
     "liturgical_static": {
       "kind": "liturgy",
       "content_source": "static",
       "output_strategy": "use_existing",
-      "template": "Information (Projectors)",
-      "background": "default",
-      "macro": "Scripture/Prayer",
       "description": "Reusable liturgical text"
+    },
+    "doxology_with_prayer": {
+      "kind": "liturgy",
+      "content_source": "static",
+      "output_strategy": "use_existing",
+      "arrangement": "& Prayer of Dedication",
+      "description": "Doxology followed by the Prayer of Dedication"
     },
     "liturgical_edited": {
       "kind": "liturgy",
       "content_source": "description",
+      "description_parser": "liturgical",
       "output_strategy": "edit_in_place",
-      "template": "Scripture (Projectors) (Responsive)",
-      "background": "default",
-      "macro": "Name Tag/Title",
-      "content_macro": "Scripture/Prayer",
+      "display": {
+        "kind": "split",
+        "title": "title",
+        "content": "responsive_scripture_prayer"
+      },
+      "max_lines_per_slide": 8,
       "description": "Liturgical text regenerated from description"
+    },
+    "liturgical_generated": {
+      "kind": "liturgy",
+      "content_source": "description",
+      "description_parser": "liturgical",
+      "output_strategy": "generate_new",
+      "display": {
+        "kind": "split",
+        "title": "title",
+        "content": "responsive_scripture_prayer"
+      },
+      "max_lines_per_slide": 8,
+      "description": "One-off liturgical text generated from weekly description"
     },
     "scripture": {
       "kind": "scripture",
       "content_source": "scripture",
       "output_strategy": "generate_new",
-      "template": "Scripture (Projectors)",
-      "title_template": "Information (Projectors)",
-      "background": "default",
-      "macro": "Name Tag/Title",
-      "content_macro": "Scripture/Prayer",
+      "display": {
+        "kind": "split",
+        "title": "title",
+        "content": "scripture_prayer"
+      },
       "description": "Scripture slides generated from Bible data"
-    },
-    "final_slide": {
-      "kind": "graphic",
-      "content_source": "static",
-      "output_strategy": "use_existing",
-      "background": "default",
-      "macro": "Graphics",
-      "description": "End-of-service reflection slide"
     }
   },
   "people": {
@@ -147,6 +167,18 @@
   },
   "item_rules": [
     {
+      "id": "sermon_manual_only",
+      "match": {
+        "title_prefix": [
+          "sermon"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Sermon slides are added manually after ProFlow builds"
+      }
+    },
+    {
       "id": "skip_benediction",
       "match": {
         "title_prefix": [
@@ -159,15 +191,37 @@
       }
     },
     {
-      "id": "skip_sermon",
+      "id": "youth_choir_psalm_23_surely_goodness",
       "match": {
-        "title_prefix": [
-          "sermon"
+        "title_contains": [
+          "psalm 23 surely goodness"
         ]
       },
-      "action": {
-        "kind": "skip",
-        "reason": "Sermon - skip (added day-of)"
+      "use_type": "song",
+      "target": {
+        "library_file": "Psalm 23 (Surely Goodness).pro"
+      }
+    },
+    {
+      "id": "choir_anthem",
+      "match": {
+        "title_prefix": [
+          "choir anthem:",
+          "anthem:"
+        ]
+      },
+      "use_type": "song"
+    },
+    {
+      "id": "hymn_356_come_thou_fount",
+      "match": {
+        "title_prefix": [
+          "#356 come, thou fount of every blessing"
+        ]
+      },
+      "use_type": "song",
+      "target": {
+        "library_file": "[Hymn] Come, Thou Fount of Every Blessing.pro"
       }
     },
     {
@@ -182,23 +236,21 @@
       "match": {
         "title_prefix": [
           "scripture"
-        ],
-        "has_scripture_ref": true
+        ]
       },
       "use_type": "scripture"
     },
     {
-      "id": "pre_post_service",
+      "id": "skip_section_header",
       "match": {
         "title_prefix": [
           "pre-service",
-          "pre-service slides",
           "service"
         ]
       },
-      "use_type": "pre_post_service",
-      "target": {
-        "library_file": "Pre-Service, Post-Service Slides.pro"
+      "action": {
+        "kind": "skip",
+        "reason": "PCO section header - not a slide"
       }
     },
     {
@@ -208,21 +260,92 @@
           "post-service"
         ]
       },
-      "use_type": "final_slide",
-      "target": {
-        "library_file": "Final Slide - sermon reflection, prayer.pro"
+      "action": {
+        "kind": "skip",
+        "reason": "Post-service final slide no longer used"
       }
     },
     {
       "id": "greeting_one_another",
       "match": {
         "title_prefix": [
+          "greeting",
           "greeting one another"
         ]
       },
       "use_type": "liturgical_static",
       "target": {
         "library_file": "Greeting.pro"
+      }
+    },
+    {
+      "id": "baptism_contextual",
+      "match": {
+        "title_prefix": [
+          "baptism"
+        ]
+      },
+      "decision": {
+        "kind": "choose_existing_file",
+        "context_fields": [
+          "title",
+          "description",
+          "note"
+        ],
+        "instructions": "Choose based on who is being baptized. Use Him for a boy/son/he/him, Her for a girl/daughter/she/her, Them for multiple baptism candidates. Ask if unclear.",
+        "on_ambiguous": "ask",
+        "choices": {
+          "him": {
+            "use_type": "liturgical_static",
+            "file": "Baptism Him.pro",
+            "match": {
+              "any": [
+                "son of",
+                " he ",
+                " him ",
+                " his ",
+                " boy "
+              ],
+              "none": [
+                "daughter of",
+                "daughters of",
+                "children of",
+                "sons of"
+              ]
+            }
+          },
+          "her": {
+            "use_type": "liturgical_static",
+            "file": "Baptism Her.pro",
+            "match": {
+              "any": [
+                "daughter of",
+                " she ",
+                " her ",
+                " girl "
+              ],
+              "none": [
+                "son of",
+                "sons of",
+                "children of",
+                "daughters of"
+              ]
+            }
+          },
+          "them": {
+            "use_type": "liturgical_static",
+            "file": "Baptism Them.pro",
+            "match": {
+              "any": [
+                "children of",
+                "sons of",
+                "daughters of",
+                "twins",
+                "multiple baptisms"
+              ]
+            }
+          }
+        }
       }
     },
     {
@@ -239,26 +362,41 @@
       }
     },
     {
-      "id": "apostles_creed",
+      "id": "heidelberg_confession_q1",
       "match": {
         "title_prefix": [
+          "heidelberg confession, q1",
+          "heidelberg confession q1"
+        ]
+      },
+      "use_type": "liturgical_static",
+      "target": {
+        "library_file": "Heidleberg Chatechism - Question 1.pro"
+      }
+    },
+    {
+      "id": "apostles_creed",
+      "match": {
+        "title_contains": [
           "apostles' creed",
           "apostles creed"
         ]
       },
       "use_type": "liturgical_static",
       "target": {
-        "library_file": "Apostles' Creed.pro"
+        "library_file": "Apostles Creed.pro"
       }
     },
     {
       "id": "doxology",
       "match": {
         "title_prefix": [
-          "doxology and prayer of dedication"
+          "doxology and prayer of dedication",
+          "doxology/prayer of dedication",
+          "doxology / prayer of dedication"
         ]
       },
-      "use_type": "liturgical_static",
+      "use_type": "doxology_with_prayer",
       "target": {
         "library_file": "Doxology and Prayer of Dedication.pro"
       }
@@ -270,10 +408,31 @@
           "giving of tithes and offerings"
         ]
       },
-      "use_type": "content_nametag",
+      "use_type": "static_graphic",
       "target": {
         "library_file": "Offertory Nametag.pro"
       }
+    },
+    {
+      "id": "offertory_o_depth_tunny",
+      "match": {
+        "title_prefix": [
+          "offertory: o, the depth of the love of god"
+        ]
+      },
+      "use_type": "song",
+      "target": {
+        "library_file": "O, The Depth of the Love of God - Tunny.pro"
+      }
+    },
+    {
+      "id": "offertory_detail_music",
+      "match": {
+        "title_prefix": [
+          "offertory:"
+        ]
+      },
+      "use_type": "song"
     },
     {
       "id": "lords_prayer",
@@ -283,10 +442,18 @@
           "prayer and lord's prayer"
         ]
       },
-      "use_type": "liturgical_static",
-      "target": {
-        "library_file": "Prayer and The Lord's Prayer.pro"
-      }
+      "expand": [
+        {
+          "use_type": "person_nametag",
+          "speaker": "resolved"
+        },
+        {
+          "use_type": "liturgical_static",
+          "target": {
+            "library_file": "Prayer and The Lord's Prayer.pro"
+          }
+        }
+      ]
     },
     {
       "id": "call_to_worship",
@@ -295,17 +462,16 @@
           "call to worship"
         ]
       },
-      "use_type": "liturgical_edited",
-      "target": {
-        "library_file": "Call to Worship.pro"
-      },
       "expand": [
         {
           "use_type": "person_nametag",
           "speaker": "resolved"
         },
         {
-          "use_type": "liturgical_edited"
+          "use_type": "liturgical_edited",
+          "target": {
+            "library_file": "Call to Worship.pro"
+          }
         }
       ]
     },
@@ -328,7 +494,7 @@
           "affirmation of faith"
         ]
       },
-      "use_type": "liturgical_edited"
+      "use_type": "liturgical_generated"
     },
     {
       "id": "responsive_reading",
@@ -337,7 +503,7 @@
           "responsive reading"
         ]
       },
-      "use_type": "liturgical_edited"
+      "use_type": "liturgical_generated"
     },
     {
       "id": "litany",
@@ -346,7 +512,7 @@
           "litany"
         ]
       },
-      "use_type": "liturgical_edited"
+      "use_type": "liturgical_generated"
     },
     {
       "id": "unison_prayer",
@@ -355,7 +521,7 @@
           "unison prayer"
         ]
       },
-      "use_type": "liturgical_edited"
+      "use_type": "liturgical_generated"
     },
     {
       "id": "childrens_message",
@@ -377,6 +543,30 @@
         ]
       },
       "use_type": "content_nametag"
+    },
+    {
+      "id": "music_prelude",
+      "match": {
+        "title_contains": [
+          "prelude:"
+        ]
+      },
+      "use_type": "content_nametag",
+      "target": {
+        "library_file": "Prelude Nametag.pro"
+      }
+    },
+    {
+      "id": "music_postlude",
+      "match": {
+        "title_contains": [
+          "postlude:"
+        ]
+      },
+      "use_type": "content_nametag",
+      "target": {
+        "library_file": "Postlude Nametag.pro"
+      }
     },
     {
       "id": "organ_prelude",
@@ -405,15 +595,23 @@
       }
     },
     {
+      "id": "new_member_recognition",
+      "match": {
+        "title_prefix": [
+          "welcome of new members"
+        ]
+      },
+      "use_type": "liturgical_static",
+      "target": {
+        "library_file": "New Member Recognition.pro"
+      }
+    },
+    {
       "id": "welcome_bundle",
       "match": {
         "title_prefix": [
           "welcome"
         ]
-      },
-      "use_type": "announcements",
-      "target": {
-        "library_file": "Announcements.pro"
       },
       "expand": [
         {
@@ -421,7 +619,7 @@
           "speaker": "resolved"
         },
         {
-          "use_type": "announcements",
+          "use_type": "static_graphic",
           "target": {
             "library_file": "Announcements.pro"
           }

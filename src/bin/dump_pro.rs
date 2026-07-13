@@ -360,7 +360,10 @@ fn dump_graphics_element(
         if let (Some(origin), Some(size)) = (&bounds.origin, &bounds.size) {
             println!(
                 "{parent_prefix}     {child_prefix}                 ├─ Bounds: ({:.0},{:.0}) {}x{}",
-                origin.x, origin.y, size.width as i32, size.height as i32
+                origin.x.unwrap_or_default(),
+                origin.y,
+                size.width as i32,
+                size.height as i32
             );
         }
     }

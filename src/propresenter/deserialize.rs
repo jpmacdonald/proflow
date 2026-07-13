@@ -6,6 +6,90 @@ use thiserror::Error;
 use crate::propresenter::generated::rv_data;
 use prost::Message;
 
+/// On-disk content found behind a `.pro` filename.
+///
+/// Current `ProPresenter` library presentations are raw `Presentation`
+/// protobuf messages. A filename alone is not a format contract: ZIP exports,
+/// JSON fixtures, playlist nodes, and marker files can all be given the same
+/// extension and must not enter the presentation index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentationFileFormat {
+    /// A raw presentation protobuf with the required document identity.
+    NativePresentation,
+    /// A ZIP container, including old test/export packages with `data.pro`.
+    ZipArchive,
+    /// JSON content rather than a native presentation.
+    Json,
+    /// A standalone playlist node protobuf rather than a presentation.
+    Playlist,
+    /// Plain UTF-8 text rather than a native presentation.
+    Text,
+    /// Binary content that is not a supported presentation.
+    UnknownBinary,
+}
+
+impl std::fmt::Display for PresentationFileFormat {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::NativePresentation => "native presentation",
+            Self::ZipArchive => "ZIP archive",
+            Self::Json => "JSON",
+            Self::Playlist => "playlist protobuf",
+            Self::Text => "plain text",
+            Self::UnknownBinary => "unknown binary",
+        })
+    }
+}
+
+/// Detect the actual content stored behind a `.pro` filename.
+#[must_use]
+pub fn detect_presentation_file_format(data: &[u8]) -> PresentationFileFormat {
+    if data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") {
+        return PresentationFileFormat::ZipArchive;
+    }
+
+    let utf8 = std::str::from_utf8(data).ok();
+    if utf8.is_some_and(|text| {
+        let trimmed = text.trim_start_matches('\u{feff}').trim_start();
+        trimmed.starts_with('{') || trimmed.starts_with('[')
+    }) {
+        return PresentationFileFormat::Json;
+    }
+
+    if rv_data::Presentation::decode(data)
+        .is_ok_and(|presentation| has_native_document_identity(&presentation))
+    {
+        return PresentationFileFormat::NativePresentation;
+    }
+
+    if rv_data::Playlist::decode(data).is_ok_and(|playlist| {
+        playlist
+            .uuid
+            .as_ref()
+            .is_some_and(|uuid| !uuid.string.trim().is_empty())
+            && !playlist.name.trim().is_empty()
+    }) {
+        return PresentationFileFormat::Playlist;
+    }
+
+    if utf8.is_some_and(|text| {
+        text.chars()
+            .all(|character| !character.is_control() || character.is_whitespace())
+    }) {
+        return PresentationFileFormat::Text;
+    }
+
+    PresentationFileFormat::UnknownBinary
+}
+
+pub(crate) fn has_native_document_identity(presentation: &rv_data::Presentation) -> bool {
+    !presentation.name.trim().is_empty()
+        && presentation
+            .uuid
+            .as_ref()
+            .is_some_and(|uuid| !uuid.string.trim().is_empty())
+}
+
 /// Errors that can occur when reading `ProPresenter` files
 #[derive(Error, Debug)]
 pub enum ProPresenterError {
@@ -20,6 +104,15 @@ pub enum ProPresenterError {
     /// Failed to decode the protobuf data
     #[error("Failed to decode ProPresenter file: {0}")]
     DecodeError(#[from] prost::DecodeError),
+
+    /// The file has a `.pro` extension but is not a supported presentation.
+    #[error("Unsupported ProPresenter file format at {path}: {format}")]
+    UnsupportedFormat {
+        /// Path whose content was inspected.
+        path: String,
+        /// Detected on-disk format.
+        format: PresentationFileFormat,
+    },
 }
 
 /// Read a `ProPresenter` file and return the deserialized presentation
@@ -59,7 +152,15 @@ pub fn read_presentation_file(
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    // Decode the protobuf message
+    let format = detect_presentation_file_format(&buffer);
+    if format != PresentationFileFormat::NativePresentation {
+        return Err(ProPresenterError::UnsupportedFormat {
+            path: path.display().to_string(),
+            format,
+        });
+    }
+
+    // The format gate above proves this is a decodable, identified document.
     let presentation = rv_data::Presentation::decode(&buffer[..])?;
 
     Ok(presentation)
@@ -81,6 +182,83 @@ mod tests {
         path.push("propresenter");
         path.push(filename);
         path
+    }
+
+    fn uuid(value: &str) -> rv_data::Uuid {
+        rv_data::Uuid {
+            string: value.to_string(),
+        }
+    }
+
+    #[test]
+    fn detects_content_instead_of_trusting_pro_extension() {
+        let native = rv_data::Presentation {
+            uuid: Some(uuid("native-id")),
+            name: "Native".to_string(),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let playlist = rv_data::Playlist {
+            uuid: Some(uuid("playlist-id")),
+            name: "Test Playlist".to_string(),
+            r#type: rv_data::playlist::Type::Playlist as i32,
+            ..Default::default()
+        }
+        .encode_to_vec();
+
+        assert_eq!(
+            detect_presentation_file_format(&native),
+            PresentationFileFormat::NativePresentation
+        );
+        assert_eq!(
+            detect_presentation_file_format(b"PK\x03\x04archive"),
+            PresentationFileFormat::ZipArchive
+        );
+        assert_eq!(
+            detect_presentation_file_format(b"  {\"slides\": []}"),
+            PresentationFileFormat::Json
+        );
+        assert_eq!(
+            detect_presentation_file_format(b"\xef\xbb\xbf [\n]"),
+            PresentationFileFormat::Json
+        );
+        assert_eq!(
+            detect_presentation_file_format(&playlist),
+            PresentationFileFormat::Playlist
+        );
+        assert_eq!(
+            detect_presentation_file_format(b"MOCKPRESENTATION"),
+            PresentationFileFormat::Text
+        );
+        assert_eq!(
+            detect_presentation_file_format("not a présentation".as_bytes()),
+            PresentationFileFormat::Text
+        );
+        assert_eq!(
+            detect_presentation_file_format(&[0xff, 0x00]),
+            PresentationFileFormat::UnknownBinary
+        );
+        assert_eq!(
+            detect_presentation_file_format(&[0x0a, 0x01, b'x', 0x12, 0x01, b'y']),
+            PresentationFileFormat::UnknownBinary,
+            "UTF-8 protobuf control bytes are not plain text"
+        );
+    }
+
+    #[test]
+    fn read_rejects_non_native_pro_file_with_typed_format() {
+        let directory = tempfile::tempdir().expect("create temp directory");
+        let path = directory.path().join("fixture.pro");
+        std::fs::write(&path, b"{\"slides\":[]}").expect("write JSON fixture");
+
+        let error = read_presentation_file(&path).expect_err("JSON is not a presentation");
+        assert!(matches!(
+            error,
+            ProPresenterError::UnsupportedFormat {
+                format: PresentationFileFormat::Json,
+                ..
+            }
+        ));
     }
 
     #[test]

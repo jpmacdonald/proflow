@@ -5,24 +5,34 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
 /// Supported Bible versions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[allow(clippy::upper_case_acronyms)] // NRSV, NIV, KJV are standard Bible version abbreviations
 pub enum BibleVersion {
     /// New Revised Standard Version Updated Edition
     #[default]
+    #[serde(rename = "NRSVue", alias = "NRSVUE")]
     NRSVue,
     /// New Revised Standard Version
+    #[serde(rename = "NRSV")]
     NRSV,
     /// New International Version
+    #[serde(rename = "NIV")]
     NIV,
     /// King James Version
+    #[serde(rename = "KJV")]
     KJV,
     /// New King James Version
+    #[serde(rename = "NKJV")]
     NKJV,
     /// New Living Translation
+    #[serde(rename = "NLT")]
     NLT,
     /// New American Standard Bible
+    #[serde(rename = "NASB")]
     NASB,
 }
 
@@ -63,6 +73,20 @@ impl BibleVersion {
             Self::NKJV => "NKJV.json",
             Self::NLT => "NLT.json",
             Self::NASB => "NASB.json",
+        }
+    }
+
+    /// Parse one exact supported translation identifier.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_uppercase().as_str() {
+            "NRSVUE" => Some(Self::NRSVue),
+            "NRSV" => Some(Self::NRSV),
+            "NIV" => Some(Self::NIV),
+            "KJV" => Some(Self::KJV),
+            "NKJV" => Some(Self::NKJV),
+            "NLT" => Some(Self::NLT),
+            "NASB" => Some(Self::NASB),
+            _ => None,
         }
     }
 
@@ -109,6 +133,11 @@ pub struct ScriptureRef {
 
 /// Bible data structure: Book -> Chapter -> Verse -> Text
 type BibleData = HashMap<String, HashMap<String, HashMap<String, String>>>;
+
+struct CachedBibleData {
+    source_sha256: [u8; 32],
+    data: BibleData,
+}
 
 /// Book name normalization map
 static BOOK_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
@@ -293,15 +322,7 @@ fn normalize_book_name(name: &str) -> Option<&'static str> {
 /// Also handles complex titles like "Scripture: Isaiah 32:15-17; Luke 1:76-79
 /// `NRSVue` (Hope)" or "Scripture - Isaiah 35:1-10 (Adrian)".
 pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
-    // Strip various "Scripture" prefix formats
-    let text = text
-        .trim_start_matches("Scripture:")
-        .trim_start_matches("Scripture -")
-        .trim_start_matches("Scripture Reading:")
-        .trim_start_matches("Scripture Reading -")
-        .trim_start_matches("Reading:")
-        .trim_start_matches("Reading -")
-        .trim();
+    let text = strip_scripture_heading(text);
 
     // Take only the first reference if multiple (separated by ; or ,)
     let first_ref = text
@@ -328,6 +349,30 @@ pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
         .trim();
 
     parse_single_reference(cleaned)
+}
+
+fn strip_scripture_heading(text: &str) -> &str {
+    let trimmed = text.trim();
+    for prefix in ["Scripture Reading", "Scripture", "Reading"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return strip_heading_suffix(rest);
+        }
+    }
+    trimmed
+}
+
+fn strip_heading_suffix(rest: &str) -> &str {
+    let mut value = rest.trim_start();
+    if let Some(stripped) = value.strip_prefix('(') {
+        if let Some(end) = stripped.find(')') {
+            value = stripped[end + 1..].trim_start();
+        }
+    }
+    value
+        .strip_prefix(':')
+        .or_else(|| value.strip_prefix('-'))
+        .map_or(value, str::trim_start)
+        .trim()
 }
 
 /// Parse a single scripture reference like "Isaiah 32:15-17"
@@ -370,7 +415,7 @@ pub struct BibleService {
     /// Path to the directory containing Bible JSON data files
     data_path: PathBuf,
     /// Cached Bible data keyed by version
-    cache: HashMap<BibleVersion, BibleData>,
+    cache: HashMap<BibleVersion, CachedBibleData>,
 }
 
 impl BibleService {
@@ -384,20 +429,39 @@ impl BibleService {
 
     /// Load a Bible version into cache
     fn load_version(&mut self, version: BibleVersion) -> Result<(), crate::error::Error> {
-        if self.cache.contains_key(&version) {
+        let path = self.data_path.join(version.file_name());
+        let bytes = std::fs::read(&path).map_err(|e| {
+            crate::error::Error::Scripture(format!("Failed to read {}: {e}", path.display()))
+        })?;
+        self.load_version_bytes(version, &bytes, &path.display().to_string())
+    }
+
+    fn load_version_bytes(
+        &mut self,
+        version: BibleVersion,
+        bytes: &[u8],
+        source: &str,
+    ) -> Result<(), crate::error::Error> {
+        let source_sha256 = Sha256::digest(bytes).into();
+        if self
+            .cache
+            .get(&version)
+            .is_some_and(|cached| cached.source_sha256 == source_sha256)
+        {
             return Ok(());
         }
 
-        let path = self.data_path.join(version.file_name());
-        let content = std::fs::read_to_string(&path).map_err(|e| {
-            crate::error::Error::Scripture(format!("Failed to read {}: {e}", path.display()))
+        let data: BibleData = serde_json::from_slice(bytes).map_err(|error| {
+            crate::error::Error::Scripture(format!("Failed to parse {source}: {error}"))
         })?;
 
-        let data: BibleData = serde_json::from_str(&content).map_err(|e| {
-            crate::error::Error::Scripture(format!("Failed to parse {}: {e}", path.display()))
-        })?;
-
-        self.cache.insert(version, data);
+        self.cache.insert(
+            version,
+            CachedBibleData {
+                source_sha256,
+                data,
+            },
+        );
         Ok(())
     }
 
@@ -410,10 +474,32 @@ impl BibleService {
         version: BibleVersion,
     ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
         self.load_version(version)?;
+        self.lookup_cached(reference, version)
+    }
 
+    /// Look up verses from exact caller-supplied Bible source bytes.
+    ///
+    /// The cache is keyed by both version and content hash so a prior build
+    /// cannot leak stale translation data into a reviewed build.
+    pub fn lookup_verses_from_bytes(
+        &mut self,
+        reference: &ScriptureRef,
+        version: BibleVersion,
+        source_bytes: &[u8],
+    ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
+        self.load_version_bytes(version, source_bytes, "reviewed Bible source")?;
+        self.lookup_cached(reference, version)
+    }
+
+    fn lookup_cached(
+        &self,
+        reference: &ScriptureRef,
+        version: BibleVersion,
+    ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
         let bible = self
             .cache
             .get(&version)
+            .map(|cached| &cached.data)
             .ok_or_else(|| crate::error::Error::Scripture("Bible data not loaded".to_string()))?;
 
         let book_data = bible.get(&reference.book).ok_or_else(|| {
@@ -539,6 +625,22 @@ mod tests {
 
     use super::*;
 
+    fn bible_source(text: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "John": { "3": { "16": text } }
+        }))
+        .expect("serialize Bible fixture")
+    }
+
+    fn john_3_16() -> ScriptureRef {
+        ScriptureRef {
+            book: "John".to_string(),
+            chapter: 3,
+            start_verse: 16,
+            end_verse: None,
+        }
+    }
+
     #[test]
     fn test_parse_simple_ref() {
         let r = parse_scripture_ref("Isaiah 32:15-17").unwrap();
@@ -567,6 +669,15 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_scripture_title_with_speaker_prefix() {
+        let r = parse_scripture_ref("Scripture (Adrian) - Luke 8:26-39 NRSVue").unwrap();
+        assert_eq!(r.book, "Luke");
+        assert_eq!(r.chapter, 8);
+        assert_eq!(r.start_verse, 26);
+        assert_eq!(r.end_verse, Some(39));
+    }
+
+    #[test]
     fn test_parse_single_verse() {
         let r = parse_scripture_ref("John 3:16").unwrap();
         assert_eq!(r.book, "John");
@@ -591,5 +702,50 @@ mod tests {
         );
         assert_eq!(BibleVersion::from_text("KJV"), Some(BibleVersion::KJV));
         assert_eq!(BibleVersion::from_text("NIV"), Some(BibleVersion::NIV));
+    }
+
+    #[test]
+    fn exact_version_names_reject_ambiguous_text() {
+        assert_eq!(
+            BibleVersion::from_name("nrsvue"),
+            Some(BibleVersion::NRSVue)
+        );
+        assert_eq!(BibleVersion::from_name("NIV commentary"), None);
+        assert_eq!(BibleVersion::from_name("ESV"), None);
+    }
+
+    #[test]
+    fn reviewed_source_bytes_replace_a_stale_version_cache() {
+        let reference = john_3_16();
+        let mut bible = BibleService::new(PathBuf::new());
+
+        let (_, first) = bible
+            .lookup_verses_from_bytes(&reference, BibleVersion::NRSVue, &bible_source("old text"))
+            .expect("first reviewed lookup");
+        let (_, second) = bible
+            .lookup_verses_from_bytes(&reference, BibleVersion::NRSVue, &bible_source("new text"))
+            .expect("changed reviewed lookup");
+
+        assert_eq!(first[0].text, "old text");
+        assert_eq!(second[0].text, "new text");
+    }
+
+    #[test]
+    fn file_lookup_reloads_when_source_bytes_change_between_builds() {
+        let root = tempfile::tempdir().expect("temporary Bible root");
+        let path = root.path().join(BibleVersion::NRSVue.file_name());
+        std::fs::write(&path, bible_source("old text")).expect("write first Bible source");
+        let mut bible = BibleService::new(root.path().to_path_buf());
+
+        let (_, first) = bible
+            .lookup_verses(&john_3_16(), BibleVersion::NRSVue)
+            .expect("first file lookup");
+        std::fs::write(&path, bible_source("new text")).expect("replace Bible source");
+        let (_, second) = bible
+            .lookup_verses(&john_3_16(), BibleVersion::NRSVue)
+            .expect("second file lookup");
+
+        assert_eq!(first[0].text, "old text");
+        assert_eq!(second[0].text, "new text");
     }
 }

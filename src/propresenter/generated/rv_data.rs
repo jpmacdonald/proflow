@@ -764,8 +764,10 @@ pub mod graphics {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Point {
-        #[prost(double, tag = "1")]
-        pub x: f64,
+        /// ProPresenter writes an explicit IEEE -0.0 for some x coordinates. Track
+        /// presence so prost does not collapse that wire value into absent +0.0.
+        #[prost(double, optional, tag = "1")]
+        pub x: ::core::option::Option<f64>,
         #[prost(double, tag = "2")]
         pub y: f64,
     }
@@ -1423,8 +1425,10 @@ pub mod graphics {
             pub strikethrough_style: ::core::option::Option<attributes::Underline>,
             #[prost(message, optional, tag = "10")]
             pub strikethrough_color: ::core::option::Option<super::super::Color>,
-            #[prost(double, tag = "11")]
-            pub stroke_width: f64,
+            /// ProPresenter writes an explicit IEEE -0.0 for some text runs. Track
+            /// presence so prost does not collapse that wire value into absent +0.0.
+            #[prost(double, optional, tag = "11")]
+            pub stroke_width: ::core::option::Option<f64>,
             #[prost(message, optional, tag = "12")]
             pub stroke_color: ::core::option::Option<super::super::Color>,
             #[prost(message, repeated, tag = "13")]
@@ -1681,7 +1685,7 @@ pub mod graphics {
                 pub range: ::core::option::Option<super::super::super::IntRange>,
                 #[prost(
                     oneof = "custom_attribute::Attribute",
-                    tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11"
+                    tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"
                 )]
                 pub attribute: ::core::option::Option<custom_attribute::Attribute>,
             }
@@ -1711,6 +1715,8 @@ pub mod graphics {
                     BackgroundEffect(super::super::super::BackgroundEffect),
                     #[prost(enumeration = "super::CharacterSizeMode", tag = "11")]
                     CharacterSizeMode(i32),
+                    #[prost(message, tag = "12")]
+                    OriginalFont(super::super::super::super::Font),
                 }
             }
             #[derive(serde::Serialize, serde::Deserialize)]
@@ -2092,6 +2098,54 @@ pub mod media {
         pub artist: ::prost::alloc::string::String,
         #[prost(string, tag = "5")]
         pub format: ::prost::alloc::string::String,
+        #[prost(enumeration = "metadata::ColorFormat", tag = "6")]
+        pub color_format: i32,
+    }
+    /// Nested message and enum types in `Metadata`.
+    pub mod metadata {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            Hash,
+            PartialOrd,
+            Ord,
+            ::prost::Enumeration
+        )]
+        #[repr(i32)]
+        pub enum ColorFormat {
+            Unknown = 0,
+            Sdr = 1,
+            HdrRec2100Hlg = 2,
+            HdrRec2100Pq = 3,
+        }
+        impl ColorFormat {
+            /// String value of the enum field names used in the ProtoBuf definition.
+            ///
+            /// The values are not transformed in any way and thus are considered stable
+            /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+            pub fn as_str_name(&self) -> &'static str {
+                match self {
+                    ColorFormat::Unknown => "COLOR_FORMAT_UNKNOWN",
+                    ColorFormat::Sdr => "COLOR_FORMAT_SDR",
+                    ColorFormat::HdrRec2100Hlg => "COLOR_FORMAT_HDR_REC_2100_HLG",
+                    ColorFormat::HdrRec2100Pq => "COLOR_FORMAT_HDR_REC_2100_PQ",
+                }
+            }
+            /// Creates an enum from field names used in the ProtoBuf definition.
+            pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+                match value {
+                    "COLOR_FORMAT_UNKNOWN" => Some(Self::Unknown),
+                    "COLOR_FORMAT_SDR" => Some(Self::Sdr),
+                    "COLOR_FORMAT_HDR_REC_2100_HLG" => Some(Self::HdrRec2100Hlg),
+                    "COLOR_FORMAT_HDR_REC_2100_PQ" => Some(Self::HdrRec2100Pq),
+                    _ => None,
+                }
+            }
+        }
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2459,6 +2513,8 @@ pub mod media {
         pub soft_loop: bool,
         #[prost(double, tag = "6")]
         pub soft_loop_duration: f64,
+        #[prost(bool, tag = "7")]
+        pub hardware_decoding: bool,
     }
     /// Nested message and enum types in `VideoProperties`.
     pub mod video_properties {

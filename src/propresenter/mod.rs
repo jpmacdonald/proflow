@@ -5,8 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use resolution::{PresentationSize, PresentationSizeError, PresentationSizeStatus};
+
 /// The detected or user-assigned slide type for a service item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, rmcp::schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum SlideType {
     /// Generic text slides.
     #[default]
@@ -14,6 +19,7 @@ pub enum SlideType {
     /// Bible verse slides.
     Scripture,
     /// Song lyrics with verse/chorus markers.
+    #[serde(alias = "song")]
     Lyrics,
     /// Nametags and sermon titles.
     Title,
@@ -33,18 +39,6 @@ impl SlideType {
             Self::Text => "Text",
         }
     }
-
-    /// Cycle to next type (for 't' key override).
-    #[must_use]
-    pub const fn next(self) -> Self {
-        match self {
-            Self::Scripture => Self::Lyrics,
-            Self::Lyrics => Self::Title,
-            Self::Title => Self::Graphic,
-            Self::Graphic => Self::Text,
-            Self::Text => Self::Scripture,
-        }
-    }
 }
 
 /// Arrangement selection.
@@ -57,14 +51,25 @@ pub mod deserialize;
 pub mod extract;
 /// Generated protobuf types.
 pub mod generated;
+/// Live ProPresenter playlist library helpers.
+pub mod live;
 /// Macro injection for presentations.
 pub mod macros;
+/// Media dependency discovery.
+pub mod media;
+mod native_zip;
+/// Playlist package inspection utilities.
+pub mod package;
 /// Playlist file support (.proplaylist).
 pub mod playlist;
+/// Checked presentation-canvas dimensions and inspection.
+pub mod resolution;
 /// RTF conversion utilities.
 pub mod rtf;
 /// File serialization (writing .pro files).
 pub mod serialize;
+/// Song presentation structure repair.
+pub mod song;
 /// Template-based slide generation.
 pub mod template;
 /// UUID generation utilities.

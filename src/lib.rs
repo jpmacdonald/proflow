@@ -7,13 +7,11 @@
 pub mod bible;
 pub mod config;
 pub mod error;
-pub mod hymnal;
 pub mod mcp;
 pub mod paths;
 pub mod planning_center;
 pub mod project_config;
 pub mod propresenter;
-pub mod services;
 pub(crate) mod setup;
 pub mod utils;
-pub(crate) mod workflow;
+pub mod workflow;

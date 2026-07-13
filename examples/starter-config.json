@@ -1,14 +1,16 @@
 {
-  "version": 2,
+  "version": 4,
   "metadata": {
     "name": "Example Church",
     "timezone": "America/New_York",
     "notes": "Conservative MCP-first starter config"
   },
   "defaults": {
-    "theme": "Example Theme",
     "days_ahead": 14,
-    "review_policy": "ask"
+    "presentation_size": {
+      "width": 1920,
+      "height": 1080
+    }
   },
   "service_groups": {
     "weekly_primary": {
@@ -23,60 +25,30 @@
       ]
     }
   },
-  "profiles": {
-    "weekly": {
-      "description": "Normal weekly service prep",
-      "service_groups": [
-        "weekly_primary"
-      ],
-      "days_ahead": 14,
-      "review_policy": "ask"
-    },
-    "seasonal": {
-      "description": "Seasonal and holiday service prep",
-      "service_groups": [
-        "seasonal"
-      ],
-      "days_ahead": 60,
-      "review_policy": "ask"
-    }
-  },
   "presentation_types": {
     "song": {
       "kind": "song",
       "content_source": "song",
       "output_strategy": "use_existing",
-      "template": "Lyrics (Projectors)",
-      "macro": "Song",
-      "arrangement": "Default",
       "description": "Song or hymn from the library"
     },
     "scripture": {
       "kind": "scripture",
       "content_source": "scripture",
-      "output_strategy": "generate_new",
-      "template": "Scripture (Projectors)",
-      "title_template": "Information (Projectors)",
-      "background": "default",
-      "macro": "Name Tag/Title",
-      "content_macro": "Scripture/Prayer",
-      "description": "Scripture slides generated from Bible data"
+      "output_strategy": "needs_review",
+      "description": "Choose project cue roles before enabling scripture generation"
     },
     "liturgy": {
       "kind": "liturgy",
       "content_source": "description",
-      "output_strategy": "edit_in_place",
-      "template": "Information (Projectors)",
-      "background": "default",
-      "macro": "Scripture/Prayer",
-      "description": "Weekly liturgical text regenerated from description"
+      "description_parser": "liturgical",
+      "output_strategy": "needs_review",
+      "description": "Choose an installed theme cue role and target before enabling edit-in-place"
     },
     "person_nametag": {
       "kind": "nametag",
       "content_source": "static",
       "output_strategy": "use_existing",
-      "template": "Name Tag",
-      "macro": "Name Tag/Title",
       "description": "Speaker nametag slide"
     }
   },
@@ -105,8 +77,7 @@
       "match": {
         "title_prefix": [
           "scripture"
-        ],
-        "has_scripture_ref": true
+        ]
       },
       "use_type": "scripture"
     },
@@ -123,10 +94,7 @@
           "speaker": "resolved"
         },
         {
-          "use_type": "liturgy",
-          "target": {
-            "library_file": "Call to Worship.pro"
-          }
+          "use_type": "liturgy"
         }
       ],
       "notes": "Example multi-output rule: speaker nametag plus weekly liturgy"

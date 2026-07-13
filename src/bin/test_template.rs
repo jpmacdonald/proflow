@@ -1,33 +1,30 @@
-//! Test tool to verify template-based slide generation.
+//! Test tool to verify slide generation against a checked-in `.pro` fixture.
 //!
 //! Usage:
 //!   `cargo run --bin test_template`
 
-// Development/debug binary - allow expect/unwrap for simpler error handling
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
+use anyhow::{Context, Result};
+use proflow::propresenter::generated::rv_data;
 use proflow::propresenter::rtf::StyledSegment;
 use proflow::propresenter::template::{
-    build_presentation_from_template_with_options, clone_slide_with_text, ThemeCache,
+    build_presentation_from_template_with_options, clone_slide_with_text,
     DEFAULT_MAX_LINES_PER_SLIDE,
 };
 use prost::Message;
 use std::path::PathBuf;
 
-fn main() {
-    // Find templates
-    let template_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn main() -> Result<()> {
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("templates");
-    println!("Looking for templates in: {}", template_dir.display());
-
-    let mut cache = ThemeCache::new(None, vec![template_dir]);
-
-    // Load scripture template slide
-    let Some(template_slide) = cache.get("scripture").cloned() else {
-        eprintln!("Failed to load scripture template!");
-        return;
-    };
+        .join("templates")
+        .join("__template_scripture__.pro");
+    println!("Loading fixture: {}", fixture_path.display());
+    let data = std::fs::read(&fixture_path)
+        .with_context(|| format!("read fixture {}", fixture_path.display()))?;
+    let fixture = rv_data::Presentation::decode(data.as_slice())
+        .with_context(|| format!("decode fixture {}", fixture_path.display()))?;
+    let template_slide = first_presentation_slide(&fixture)
+        .context("scripture fixture does not contain a presentation slide")?;
 
     println!("\n--- Loaded scripture template slide ---");
 
@@ -87,17 +84,15 @@ fn main() {
         "¹⁷and the fruitful field is deemed a forest.".to_string(),
     ]);
 
-    let Some(presentation) = build_presentation_from_template_with_options(
+    let presentation = build_presentation_from_template_with_options(
         "Test Scripture - Isaiah 32:15-17",
         &template_slide,
         &content,
         45,
         DEFAULT_MAX_LINES_PER_SLIDE,
         None,
-    ) else {
-        eprintln!("Failed to build presentation!");
-        return;
-    };
+    )
+    .context("failed to build presentation from scripture fixture")?;
 
     println!("\nBuilt presentation: {}", presentation.name);
     println!("   {} cues", presentation.cues.len());
@@ -109,7 +104,8 @@ fn main() {
     let output_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("test_scripture.pro");
-    std::fs::write(&output_path, &encoded).expect("Failed to write test file");
+    std::fs::write(&output_path, &encoded)
+        .with_context(|| format!("write generated presentation {}", output_path.display()))?;
 
     println!("\nWritten test file to: {}", output_path.display());
     println!("   {} bytes", encoded.len());
@@ -118,4 +114,25 @@ fn main() {
         "\nRun 'cargo run --bin dump_pro -- {}' to inspect",
         output_path.display()
     );
+    Ok(())
+}
+
+fn first_presentation_slide(
+    presentation: &rv_data::Presentation,
+) -> Option<rv_data::PresentationSlide> {
+    presentation.cues.iter().find_map(|cue| {
+        cue.actions.iter().find_map(|action| {
+            let rv_data::action::ActionTypeData::Slide(slide_type) =
+                action.action_type_data.as_ref()?
+            else {
+                return None;
+            };
+            let rv_data::action::slide_type::Slide::Presentation(slide) =
+                slide_type.slide.as_ref()?
+            else {
+                return None;
+            };
+            Some(slide.clone())
+        })
+    })
 }

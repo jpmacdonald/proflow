@@ -7,10 +7,11 @@
 use serde::Serialize;
 
 use super::classify::strip_speaker;
+use crate::project_config::DescriptionParserKind;
 use crate::propresenter::rtf::StyledSegment;
 
 /// Banana yellow used for congregational responses (ALL/PEOPLE lines).
-const YELLOW: &str = "#FEFC8B";
+const YELLOW: &str = "#FEDB4F";
 
 /// A parsed segment of description text with formatting hints.
 #[derive(Debug, Clone, Serialize)]
@@ -32,23 +33,80 @@ pub struct ParsedContent {
     pub title_text: Option<String>,
 }
 
+/// Description content that cannot safely become operator-visible text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DescriptionParseError {
+    /// A Planning Center instruction or blank remains where final text belongs.
+    UnresolvedPlaceholder(String),
+}
+
+impl std::fmt::Display for DescriptionParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnresolvedPlaceholder(value) => {
+                write!(formatter, "Unresolved description placeholder '{value}'")
+            }
+        }
+    }
+}
+
 /// Parse a PCO item description into slide-ready segments.
 ///
-/// Strategy varies by type:
-/// - `liturgical_edited`: marker-based (`[SLIDE]`, `[SLIDE/ALL]`) or responsive reading
-/// - `content_nametag`: extract piece title, composer, performer
+/// The configured parser controls whether content is treated as liturgical text
+/// or as a content nametag. Presentation type names do not affect parsing.
 ///
-/// Returns `None` if the description has no slide-worthy content.
+/// Returns `Ok(None)` if the description has no slide-worthy content. An
+/// unresolved editorial placeholder is a typed error so it cannot enter a
+/// renderable plan as parsed content.
 pub fn parse_description(
     description: &str,
     item_title: &str,
-    type_key: &str,
-) -> Option<ParsedContent> {
-    match type_key {
-        "liturgical_edited" => parse_liturgical(description, item_title),
-        "content_nametag" => Some(parse_content_nametag(description, item_title)),
-        _ => None,
+    parser: DescriptionParserKind,
+) -> Result<Option<ParsedContent>, DescriptionParseError> {
+    if is_unresolved_placeholder(item_title) {
+        return Err(DescriptionParseError::UnresolvedPlaceholder(
+            item_title.trim().to_string(),
+        ));
     }
+
+    let parsed = match parser {
+        DescriptionParserKind::Liturgical => parse_liturgical(description, item_title),
+        DescriptionParserKind::ContentNametag => {
+            Some(parse_content_nametag(description, item_title))
+        }
+    };
+
+    if let Some(placeholder) = parsed.as_ref().and_then(unresolved_placeholder) {
+        return Err(DescriptionParseError::UnresolvedPlaceholder(placeholder));
+    }
+
+    Ok(parsed)
+}
+
+fn unresolved_placeholder(content: &ParsedContent) -> Option<String> {
+    content
+        .segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .chain(content.title_text.iter().map(String::as_str))
+        .find(|text| is_unresolved_placeholder(text))
+        .map(|text| text.trim().trim_matches(['[', ']']).trim().to_string())
+}
+
+fn is_unresolved_placeholder(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.as_bytes().windows(3).any(|window| window == b"___") {
+        return true;
+    }
+
+    let normalized = trimmed.trim_matches(['[', ']']).trim().to_ascii_lowercase();
+    normalized == "tbd"
+        || normalized == "tba"
+        || normalized == "todo"
+        || normalized.starts_with("insert ")
+        || normalized.starts_with("add ")
+        || trimmed.to_ascii_lowercase().contains("[insert ")
+        || trimmed.to_ascii_lowercase().contains("[add ")
 }
 
 // ---------------------------------------------------------------------------
@@ -193,27 +251,29 @@ fn parse_markers(description: &str, title_text: &str) -> Option<ParsedContent> {
 
 /// Parse responsive reading descriptions (`Leader:`/`People:` format).
 ///
-/// Keeps LEADER:/ALL:/PEOPLE: cue prefixes in the output text.
+/// Keeps `LEADER:`/`ALL:`/`PEOPLE:` cue prefixes in the output text.
 /// Groups content by blank-line-separated sections — each section becomes
 /// one slide (one `ParsedSegment` per cued line within the section).
 /// Metadata lines (containing `[SLIDE]`, `Liturgist:`, etc.) are filtered out.
 fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum ResponsiveLineKind {
+        Leader,
+        Congregation,
+    }
+
     let mut segments: Vec<ParsedSegment> = Vec::new();
     let mut current_color: Option<String> = None;
+    let mut previous_kind: Option<ResponsiveLineKind> = None;
 
     for line in description.lines() {
         let trimmed = line.trim();
 
-        // Blank lines become slide breaks (empty segment as separator)
+        // Blank lines request a separator between response blocks. The packer
+        // decides whether that separator fits on the current slide.
         if trimmed.is_empty() {
-            if !segments.is_empty() {
-                segments.push(ParsedSegment {
-                    text: String::new(),
-                    color: None,
-                    bold: None,
-                    italic: None,
-                });
-            }
+            push_separator(&mut segments);
+            previous_kind = None;
             continue;
         }
 
@@ -225,21 +285,25 @@ fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent
         let lower = trimmed.to_lowercase();
 
         if starts_with_any(&lower, LEADER_PREFIXES) {
+            push_response_separator(&mut segments, previous_kind.is_some());
             current_color = None;
             segments.push(ParsedSegment {
                 text: trimmed.to_string(),
-                color: None,
+                color: current_color.clone(),
                 bold: None,
                 italic: None,
             });
+            previous_kind = Some(ResponsiveLineKind::Leader);
         } else if starts_with_any(&lower, CONGREGATION_PREFIXES) {
+            push_response_separator(&mut segments, previous_kind.is_some());
             current_color = Some(YELLOW.to_string());
             segments.push(ParsedSegment {
                 text: trimmed.to_string(),
-                color: Some(YELLOW.to_string()),
+                color: current_color.clone(),
                 bold: None,
                 italic: None,
             });
+            previous_kind = Some(ResponsiveLineKind::Congregation);
         } else {
             // Continuation line — inherit previous color
             segments.push(ParsedSegment {
@@ -264,6 +328,24 @@ fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent
         segments,
         title_text: Some(title_text.to_string()),
     })
+}
+
+fn push_response_separator(segments: &mut Vec<ParsedSegment>, previous_kind_exists: bool) {
+    if previous_kind_exists {
+        push_separator(segments);
+    }
+}
+
+fn push_separator(segments: &mut Vec<ParsedSegment>) {
+    if segments.is_empty() || segments.last().is_some_and(|seg| seg.text.is_empty()) {
+        return;
+    }
+    segments.push(ParsedSegment {
+        text: String::new(),
+        color: None,
+        bold: None,
+        italic: None,
+    });
 }
 
 /// Check if a line starts with any of the given prefixes.
@@ -449,7 +531,7 @@ pub fn to_styled_segments(parsed: &ParsedContent) -> Vec<StyledSegment> {
         .collect()
 }
 
-/// Parse a hex color string like "#FEFC8B" into RGB tuple.
+/// Parse a hex color string like "#FEDB4F" into RGB tuple.
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
     let hex = s.strip_prefix('#').unwrap_or(s);
     if hex.len() != 6 {
@@ -470,30 +552,85 @@ mod tests {
     #[test]
     fn test_responsive_reading() {
         let desc = "Leader: The Lord is my shepherd;\nPeople: I shall not want.\nLeader: He makes me lie down in green pastures.\nAll: He restores my soul.";
-        let result = parse_description(desc, "Call to Worship (Robert)", "liturgical_edited");
+        let result = parse_description(
+            desc,
+            "Call to Worship (Robert)",
+            DescriptionParserKind::Liturgical,
+        )
+        .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
         assert_eq!(content.title_text.as_deref(), Some("Call to Worship"));
-        assert_eq!(content.segments.len(), 4);
+        assert_eq!(content.segments.len(), 7);
         // Leader lines keep prefix and have no color (white/default)
         assert!(content.segments[0].text.starts_with("Leader:"));
         assert!(content.segments[0].color.is_none());
         // People/All lines keep prefix and are yellow
-        assert!(content.segments[1].text.starts_with("People:"));
-        assert_eq!(content.segments[1].color.as_deref(), Some("#FEFC8B"));
-        assert!(content.segments[3].text.starts_with("All:"));
-        assert_eq!(content.segments[3].color.as_deref(), Some("#FEFC8B"));
+        assert!(content.segments[1].text.is_empty());
+        assert!(content.segments[2].text.starts_with("People:"));
+        assert_eq!(content.segments[2].color.as_deref(), Some("#FEDB4F"));
+        assert!(content.segments[3].text.is_empty());
+        assert!(content.segments[6].text.starts_with("All:"));
+        assert_eq!(content.segments[6].color.as_deref(), Some("#FEDB4F"));
     }
 
     #[test]
     fn test_marker_parsing() {
         let desc = "[CONFESSION no slide] - If we say that we have no sin...\n[SLIDE/ALL] - [Precious Lord, the cross is ever before us...]\n[SILENT CONFESSION]\n[ASSURANCE no slide] - Rejoice!";
-        let result = parse_description(desc, "Prayer of Confession (Hope)", "liturgical_edited");
+        let result = parse_description(
+            desc,
+            "Prayer of Confession (Hope)",
+            DescriptionParserKind::Liturgical,
+        )
+        .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
         assert_eq!(content.segments.len(), 1);
         assert!(content.segments[0].text.contains("Precious Lord"));
-        assert_eq!(content.segments[0].color.as_deref(), Some("#FEFC8B"));
+        assert_eq!(content.segments[0].color.as_deref(), Some("#FEDB4F"));
+    }
+
+    #[test]
+    fn unresolved_editorial_placeholders_are_typed_errors() {
+        for (description, title, parser, expected) in [
+            (
+                "[CONFESSION no slide] - introduction\n[SLIDE/ALL] - [insert prayer]\n[SILENT CONFESSION]",
+                "Prayer of Confession",
+                DescriptionParserKind::Liturgical,
+                "insert prayer",
+            ),
+            (
+                "[ADD TITLE]",
+                "Weekly Liturgy",
+                DescriptionParserKind::Liturgical,
+                "ADD TITLE",
+            ),
+            (
+                "[INSERT TRANSLATION]",
+                "Weekly Liturgy",
+                DescriptionParserKind::Liturgical,
+                "INSERT TRANSLATION",
+            ),
+            (
+                "[SLIDE] ___",
+                "Weekly Liturgy",
+                DescriptionParserKind::Liturgical,
+                "___",
+            ),
+            (
+                "Robert, Speaker",
+                "Offertory [ADD TITLE, COMPOSER LAST NAME]",
+                DescriptionParserKind::ContentNametag,
+                "Offertory [ADD TITLE, COMPOSER LAST NAME]",
+            ),
+        ] {
+            let error = parse_description(description, title, parser)
+                .expect_err("placeholder must not become parsed content");
+            assert_eq!(
+                error,
+                DescriptionParseError::UnresolvedPlaceholder(expected.to_string())
+            );
+        }
     }
 
     #[test]
@@ -502,8 +639,9 @@ mod tests {
         let result = parse_description(
             desc,
             "Organ Prelude: Meditation with Aria",
-            "content_nametag",
-        );
+            DescriptionParserKind::ContentNametag,
+        )
+        .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
         assert_eq!(content.segments[0].text, "Meditation with Aria");
@@ -522,7 +660,7 @@ mod tests {
                 },
                 ParsedSegment {
                     text: "World".to_string(),
-                    color: Some("#FEFC8B".to_string()),
+                    color: Some("#FEDB4F".to_string()),
                     bold: Some(true),
                     italic: None,
                 },
@@ -532,20 +670,26 @@ mod tests {
         let styled = to_styled_segments(&parsed);
         assert_eq!(styled.len(), 2);
         assert!(styled[0].color.is_none());
-        assert_eq!(styled[1].color, Some((254, 252, 139)));
+        assert_eq!(styled[1].color, Some((254, 219, 79)));
         assert_eq!(styled[1].bold, Some(true));
     }
 
     #[test]
     fn test_no_content_returns_none() {
-        let result = parse_description("", "Empty Item", "liturgical_edited");
+        let result = parse_description("", "Empty Item", DescriptionParserKind::Liturgical)
+            .expect("empty description should not be invalid");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_plain_text_fallback() {
         let desc = "Grace and peace to you.\nIn Christ we are made whole.";
-        let result = parse_description(desc, "Affirmation of Faith", "liturgical_edited");
+        let result = parse_description(
+            desc,
+            "Affirmation of Faith",
+            DescriptionParserKind::Liturgical,
+        )
+        .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
         assert_eq!(content.segments.len(), 2);
@@ -564,18 +708,24 @@ mod tests {
     #[test]
     fn test_slide_all_without_brackets() {
         let desc = "[SLIDE/ALL] Hear our prayer, O Lord.";
-        let result = parse_description(desc, "Prayer (Hope)", "liturgical_edited");
+        let result = parse_description(desc, "Prayer (Hope)", DescriptionParserKind::Liturgical)
+            .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
         assert_eq!(content.segments.len(), 1);
         assert!(content.segments[0].text.contains("Hear our prayer"));
-        assert_eq!(content.segments[0].color.as_deref(), Some("#FEFC8B"));
+        assert_eq!(content.segments[0].color.as_deref(), Some("#FEDB4F"));
     }
 
     #[test]
     fn test_content_nametag_no_colon() {
         let desc = "Special offering for missions";
-        let result = parse_description(desc, "Giving of Tithes and Offerings", "content_nametag");
+        let result = parse_description(
+            desc,
+            "Giving of Tithes and Offerings",
+            DescriptionParserKind::ContentNametag,
+        )
+        .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
         // Should use description content, not the full title
@@ -586,37 +736,61 @@ mod tests {
     fn test_responsive_without_colon() {
         // "Leader " (space, no colon) should also work
         let desc = "Leader The Lord is good.\nPeople We give thanks.";
-        let result = parse_description(desc, "Responsive Reading", "liturgical_edited");
+        let result = parse_description(
+            desc,
+            "Responsive Reading",
+            DescriptionParserKind::Liturgical,
+        )
+        .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
-        assert_eq!(content.segments.len(), 2);
+        assert_eq!(content.segments.len(), 3);
         // Prefixes kept in text
         assert!(content.segments[0].text.starts_with("Leader"));
         assert!(content.segments[0].color.is_none());
-        assert!(content.segments[1].text.starts_with("People"));
-        assert_eq!(content.segments[1].color.as_deref(), Some("#FEFC8B"));
+        assert!(content.segments[1].text.is_empty());
+        assert!(content.segments[2].text.starts_with("People"));
+        assert_eq!(content.segments[2].color.as_deref(), Some("#FEDB4F"));
     }
 
     #[test]
     fn test_responsive_filters_metadata() {
         let desc = "Liturgist: Bill Ichord; Scripture/Liturgy [SLIDE]\nLEADER: The Lord reigns.\nALL: Let the earth rejoice.";
-        let result = parse_description(desc, "Call to Worship", "liturgical_edited");
+        let result = parse_description(desc, "Call to Worship", DescriptionParserKind::Liturgical)
+            .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
         // Metadata line filtered out, only LEADER and ALL remain
-        assert_eq!(content.segments.len(), 2);
+        assert_eq!(content.segments.len(), 3);
         assert!(content.segments[0].text.starts_with("LEADER:"));
-        assert!(content.segments[1].text.starts_with("ALL:"));
+        assert!(content.segments[1].text.is_empty());
+        assert!(content.segments[2].text.starts_with("ALL:"));
     }
 
     #[test]
     fn test_responsive_blank_line_separators() {
         let desc = "LEADER: First section.\nALL: Response one.\n\nLEADER: Second section.\nALL: Response two.";
-        let result = parse_description(desc, "Call to Worship", "liturgical_edited");
+        let result = parse_description(desc, "Call to Worship", DescriptionParserKind::Liturgical)
+            .expect("description should parse");
         assert!(result.is_some());
         let content = result.unwrap();
-        // 4 content segments + 1 empty separator = 5
-        assert_eq!(content.segments.len(), 5);
-        assert!(content.segments[2].text.is_empty());
+        // 4 content segments + separators between every response = 7
+        assert_eq!(content.segments.len(), 7);
+        assert!(content.segments[1].text.is_empty());
+        assert!(content.segments[3].text.is_empty());
+        assert!(content.segments[5].text.is_empty());
+    }
+
+    #[test]
+    fn test_responsive_inserts_separator_between_response_blocks() {
+        let desc = "LEADER: First section.\nALL: Response one.\nLEADER: Second section.\nALL: Response two.";
+        let result = parse_description(desc, "Call to Worship", DescriptionParserKind::Liturgical)
+            .expect("description should parse");
+        assert!(result.is_some());
+        let content = result.unwrap();
+        assert_eq!(content.segments.len(), 7);
+        assert!(content.segments[1].text.is_empty());
+        assert!(content.segments[3].text.is_empty());
+        assert!(content.segments[4].text.starts_with("LEADER: Second"));
     }
 }

@@ -9,10 +9,8 @@ use rmcp::ServiceExt;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load config from environment / .env
-    let config = Config::load().unwrap_or_default();
-
-    let server = ProFlowServer::new(config)
-        .ok_or("Planning Center credentials not configured. Set PCO_APP_ID and PCO_SECRET.")?;
+    let config = Config::load()?;
+    let server = ProFlowServer::new(&config)?;
 
     let service = server.serve(rmcp::transport::stdio()).await?;
     service.waiting().await?;
