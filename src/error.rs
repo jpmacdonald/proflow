@@ -52,10 +52,6 @@ pub enum Error {
         message: String,
     },
 
-    /// Library/index error
-    #[error("Library error: {0}")]
-    Library(String),
-
     /// `ProPresenter` format error
     #[error("ProPresenter format error: {0}")]
     ProPresenter(String),

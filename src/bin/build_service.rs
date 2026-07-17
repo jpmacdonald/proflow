@@ -5,26 +5,25 @@
 //! cargo run --bin build_service -- <plan_id> <service_name> [playlist_name] [--skip <output_key> ...] [--decisions decisions.json] [--library-local]
 //! ```
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
 use proflow::bible::BibleService;
 use proflow::config::Config;
-use proflow::paths::{find_data_subdir, project_config_path};
+use proflow::paths::{expand_user_path, BuildLocations, PROJECT_CONFIG_FILE};
 use proflow::planning_center::PlanningCenterClient;
-use proflow::project_config::{
-    load_project_config, validate_project_config, BackgroundId, ProjectConfig,
-};
-use proflow::propresenter::macros::MacroCache;
+#[cfg(test)]
+use proflow::project_config::RawProjectConfig;
+use proflow::project_config::{load_project_config, BackgroundId, ProjectConfig};
+use proflow::propresenter::library::LibraryCatalog;
 use proflow::propresenter::package::PlaylistPackageMode;
 use proflow::propresenter::playlist::PlaylistMetadata;
-use proflow::propresenter::template::ThemeCache;
-use proflow::utils::file_index::FileIndex;
 use proflow::workflow::execute::{
-    BuildRequest, EntryOverride, OverrideSlideType, ServiceBuildExecutor,
+    BuildRequest, EntryOverride, OverrideAction, OverrideSlideType, RenderAssetSnapshot,
+    ServiceBuildExecutor,
 };
-use proflow::workflow::{PlanAction, ResolvedBackground};
+use proflow::workflow::ResolvedBackground;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
@@ -42,19 +41,30 @@ struct DecisionFile {
 struct DecisionOverride {
     output_key: String,
     action: Option<DecisionAction>,
-    file_path: Option<String>,
     slide_type: Option<OverrideSlideType>,
     playlist_name: Option<String>,
-    background: Option<BackgroundId>,
-    arrangement: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum DecisionAction {
-    UseExisting,
-    EditInPlace,
-    GenerateNew,
+    UseExisting {
+        file_path: String,
+        arrangement: Option<String>,
+    },
+    EditDescription {
+        file_path: String,
+        background: Option<BackgroundId>,
+    },
+    GenerateNew {
+        background: Option<BackgroundId>,
+    },
+    SetBackground {
+        background: BackgroundId,
+    },
+    SelectArrangement {
+        arrangement: String,
+    },
 }
 
 struct BuildCliArgs {
@@ -79,57 +89,43 @@ async fn main() -> anyhow::Result<()> {
     } = cli;
 
     let config = Config::load()?;
-    let mappings = load_project_config(&project_config_path())?;
-    let issues = validate_project_config(&mappings);
-    if !issues.is_empty() {
-        for issue in &issues {
-            eprintln!("Config error at {}: {}", issue.path, issue.message);
-        }
-        anyhow::bail!("config validation failed");
-    }
+    let project_data_root = BuildLocations::discover_project_data_root()?;
+    let mappings = load_project_config(&project_data_root.join(PROJECT_CONFIG_FILE))?;
+    let locations = BuildLocations::discover(&mappings.defaults().library)?;
     let overrides = pending_overrides
         .into_iter()
         .map(|pending| resolve_decision_override(pending, &mappings))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let library_path = env_path("LIBRARY_DIR")
-        .or_else(proflow::utils::file_index::get_default_library_path)
-        .context("LIBRARY_DIR or the default ProPresenter library path is required")?;
-    let playlist_output_dir = env_path("PLAYLIST_DIR").or_else(|| Some(library_path.clone()));
-    let generated_presentation_dir = env_path("GENERATED_PRESENTATIONS_DIR")
-        .unwrap_or_else(|| default_generated_dir(&library_path));
-
-    let pco_client = PlanningCenterClient::new(&config);
-    let bible_service = Arc::new(Mutex::new(BibleService::new(find_data_subdir("bibles"))));
-    let file_index = Arc::new(Mutex::new(Some(FileIndex::build(&library_path)?)));
-    let template_cache = ThemeCache::load(mappings.defaults.theme.as_deref())?;
-    let macro_cache = MacroCache::load_default()?;
-    let playlist_metadata = PlaylistMetadata::read_from_library_dir(&library_path)?;
+    let pco_client = PlanningCenterClient::new(&config)?;
+    let bible_service = Arc::new(Mutex::new(BibleService::new(
+        locations.project_data_root().join("bibles"),
+    )));
+    let file_index = Arc::new(Mutex::new(LibraryCatalog::build(
+        locations.presentation_library(),
+    )?));
+    let playlist_metadata =
+        PlaylistMetadata::read_from_propresenter_root(locations.propresenter_root())?;
+    let render_assets = RenderAssetSnapshot::load(mappings, locations)?;
 
     let executor = ServiceBuildExecutor::new(
         &pco_client,
         &bible_service,
         &file_index,
-        &template_cache,
-        &macro_cache,
+        &render_assets,
         &playlist_metadata,
-        playlist_output_dir.as_deref(),
-        Some(&generated_presentation_dir),
     );
 
     let result = executor
-        .build_service(
-            &BuildRequest {
-                plan_id,
-                service_name: Some(service_name),
-                playlist_name,
-                skip_output_keys,
-                overrides,
-                playlist_package_mode,
-                media_assets: Vec::new(),
-            },
-            &mappings,
-        )
+        .build_service(&BuildRequest {
+            plan_id,
+            service_name: Some(service_name),
+            playlist_name,
+            skip_output_keys,
+            overrides,
+            playlist_package_mode,
+            media_assets: Vec::new(),
+        })
         .await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -147,7 +143,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
     let mut playlist_name: Option<String> = None;
     let mut skip_output_keys = Vec::new();
     let mut overrides = Vec::new();
-    let mut playlist_package_mode = PlaylistPackageMode::ExportPortable;
+    let mut playlist_package_mode = PlaylistPackageMode::default();
     let mut package_mode_was_set = false;
 
     while let Some(arg) = args.next() {
@@ -179,12 +175,12 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
                 .map(ToString::to_string);
             overrides.push(DecisionOverride {
                 output_key,
-                action: None,
+                action: Some(DecisionAction::UseExisting {
+                    file_path: file_path.display().to_string(),
+                    arrangement: None,
+                }),
                 playlist_name,
-                file_path: Some(file_path.display().to_string()),
                 slide_type: Some(slide_type),
-                background: None,
-                arrangement: None,
             });
         } else if matches!(arg.as_str(), "--portable" | "--library-local") {
             if package_mode_was_set {
@@ -213,12 +209,6 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
     })
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var(name)
-        .ok()
-        .map(|value| PathBuf::from(shellexpand::tilde(&value).to_string()))
-}
-
 fn read_decision_file(path: &str) -> anyhow::Result<DecisionFile> {
     let path = expand_path(path);
     let text = std::fs::read_to_string(&path)?;
@@ -226,64 +216,77 @@ fn read_decision_file(path: &str) -> anyhow::Result<DecisionFile> {
 }
 
 fn expand_path(path: &str) -> PathBuf {
-    PathBuf::from(shellexpand::tilde(path).to_string())
+    expand_user_path(path)
 }
 
 fn resolve_decision_override(
     value: DecisionOverride,
     config: &ProjectConfig,
 ) -> anyhow::Result<EntryOverride> {
-    let file_path = value.file_path.map(|path| expand_path(&path));
-    let playlist_name = value.playlist_name.or_else(|| {
-        file_path
-            .as_ref()
-            .and_then(|path| path.file_stem())
-            .and_then(|name| name.to_str())
-            .map(ToString::to_string)
-    });
-    let background = if let Some(id) = value.background {
-        let asset = config
-            .backgrounds
-            .get(&id)
-            .cloned()
-            .with_context(|| format!("override references unknown background '{id}'"))?;
-        Some(ResolvedBackground::new(id, asset))
-    } else {
-        None
-    };
+    let action = value
+        .action
+        .map(|action| resolve_decision_action(action, config))
+        .transpose()?;
 
     Ok(EntryOverride {
         output_key: value.output_key,
-        action: value.action.map(PlanAction::from),
-        playlist_name,
-        file_path: file_path.map(|path| path.display().to_string()),
+        playlist_name: value.playlist_name,
         slide_type: value.slide_type,
-        background,
-        arrangement: value.arrangement,
+        action,
     })
 }
 
-impl From<DecisionAction> for PlanAction {
-    fn from(value: DecisionAction) -> Self {
-        match value {
-            DecisionAction::UseExisting => Self::UseExisting,
-            DecisionAction::EditInPlace => Self::EditInPlace,
-            DecisionAction::GenerateNew => Self::GenerateNew,
+fn resolve_decision_action(
+    action: DecisionAction,
+    config: &ProjectConfig,
+) -> anyhow::Result<OverrideAction> {
+    match action {
+        DecisionAction::UseExisting {
+            file_path,
+            arrangement,
+        } => Ok(OverrideAction::UseExisting {
+            file_path: expand_path(&file_path),
+            arrangement,
+        }),
+        DecisionAction::EditDescription {
+            file_path,
+            background,
+        } => Ok(OverrideAction::EditDescription {
+            file_path: expand_path(&file_path),
+            background: background
+                .map(|id| resolve_background(id, config))
+                .transpose()?,
+        }),
+        DecisionAction::GenerateNew { background } => Ok(OverrideAction::GenerateNew {
+            background: background
+                .map(|id| resolve_background(id, config))
+                .transpose()?,
+        }),
+        DecisionAction::SetBackground { background } => Ok(OverrideAction::SetBackground {
+            background: resolve_background(background, config)?,
+        }),
+        DecisionAction::SelectArrangement { arrangement } => {
+            Ok(OverrideAction::SelectArrangement { arrangement })
         }
     }
 }
 
-fn default_generated_dir(library_path: &Path) -> PathBuf {
-    let default_library = library_path.join("Default");
-    if default_library.is_dir() {
-        default_library
-    } else {
-        library_path.to_path_buf()
-    }
+fn resolve_background(
+    id: BackgroundId,
+    config: &ProjectConfig,
+) -> anyhow::Result<ResolvedBackground> {
+    let asset = config
+        .backgrounds()
+        .get(&id)
+        .cloned()
+        .with_context(|| format!("override references unknown background '{id}'"))?;
+    Ok(ResolvedBackground::new(id, asset))
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use proflow::project_config::BackgroundAssetPath;
 
     use super::*;
@@ -291,12 +294,9 @@ mod tests {
     fn pending_background_override(id: BackgroundId) -> DecisionOverride {
         DecisionOverride {
             output_key: "item:1".to_string(),
-            action: None,
-            file_path: None,
+            action: Some(DecisionAction::SetBackground { background: id }),
             slide_type: None,
             playlist_name: None,
-            background: Some(id),
-            arrangement: None,
         }
     }
 
@@ -305,12 +305,19 @@ mod tests {
         let id = BackgroundId::new("communion").expect("valid test background id");
         let asset = BackgroundAssetPath::new("backgrounds/communion.png")
             .expect("valid test background path");
-        let mut config = ProjectConfig::default();
-        config.backgrounds.insert(id.clone(), asset.clone());
+        let mut raw = RawProjectConfig::default();
+        raw.backgrounds.insert(id.clone(), asset.clone());
+        let config = ProjectConfig::try_from(raw).expect("valid runtime config");
 
         let resolved = resolve_decision_override(pending_background_override(id.clone()), &config)
             .expect("registered background should resolve");
-        let background = resolved.background.expect("background should be present");
+        let background = resolved
+            .action
+            .and_then(|action| match action {
+                OverrideAction::SetBackground { background } => Some(background),
+                _ => None,
+            })
+            .expect("background should be present");
 
         assert_eq!(background.id(), &id);
         assert_eq!(background.file(), &asset);
@@ -319,9 +326,10 @@ mod tests {
     #[test]
     fn rejects_unregistered_background_override() {
         let id = BackgroundId::new("missing").expect("valid test background id");
-        let error =
-            resolve_decision_override(pending_background_override(id), &ProjectConfig::default())
-                .expect_err("unregistered background should fail");
+        let config = ProjectConfig::try_from(RawProjectConfig::default())
+            .expect("valid empty runtime config");
+        let error = resolve_decision_override(pending_background_override(id), &config)
+            .expect_err("unregistered background should fail");
 
         assert!(error
             .to_string()

@@ -44,7 +44,7 @@
     "song": {
       "kind": "song",
       "content_source": "song",
-      "output_strategy": "use_existing"
+      "output_strategy": "preserve_existing"
     },
     "scripture": {
       "kind": "scripture",

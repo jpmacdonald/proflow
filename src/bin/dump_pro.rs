@@ -185,6 +185,7 @@ fn dump_presentation(path: &Path) {
                 "   ├─ App Group ID: {:?}",
                 g.application_group_identifier.as_ref().map(|u| &u.string)
             );
+            println!("   ├─ App Group Name: {:?}", g.application_group_name);
             println!(
                 "   └─ Cue IDs: {:?}",
                 group

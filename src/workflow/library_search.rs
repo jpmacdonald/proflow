@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::utils::file_index::{normalize_name, FileEntry, FileIndex};
+use crate::propresenter::library::{normalize_name, LibraryCatalog, LibraryEntry};
 
 /// Result of resolving a configured `library_file` target.
 ///
@@ -20,7 +20,7 @@ pub(super) enum ExactLibraryFileMatch {
 
 /// Resolve a configured library filename exactly and uniquely.
 pub(super) fn resolve_exact_library_file(
-    index: Option<&FileIndex>,
+    index: Option<&LibraryCatalog>,
     requested_file: &str,
 ) -> ExactLibraryFileMatch {
     let Some(index) = index else {
@@ -31,10 +31,10 @@ pub(super) fn resolve_exact_library_file(
     };
 
     let mut paths = index
-        .entries
+        .entries()
         .iter()
-        .filter(|entry| exact_filename_key(&entry.file_name).as_ref() == Some(&requested_key))
-        .map(|entry| entry.full_path.to_string_lossy().to_string());
+        .filter(|entry| exact_filename_key(entry.file_name()).as_ref() == Some(&requested_key))
+        .map(|entry| entry.full_path().to_string_lossy().to_string());
     let Some(path) = paths.next() else {
         return ExactLibraryFileMatch::Missing;
     };
@@ -59,19 +59,19 @@ fn exact_filename_key(value: &str) -> Option<String> {
 }
 
 /// Standard library search — accepts fuzzy matches with word overlap.
-pub(super) fn search_index(index: Option<&FileIndex>, query: &str) -> Option<String> {
+pub(super) fn search_index(index: Option<&LibraryCatalog>, query: &str) -> Option<String> {
     let idx = index?;
     let matches = idx.find_matches(query, 1);
     let entry = matches.first()?;
 
-    let name_lower = entry.file_name.to_lowercase();
+    let name_lower = entry.file_name().to_lowercase();
     let query_lower = query.to_lowercase();
 
     if name_lower == query_lower
         || name_lower.contains(&query_lower)
         || query_lower.contains(&name_lower)
     {
-        return Some(entry.full_path.to_string_lossy().to_string());
+        return Some(entry.full_path().to_string_lossy().to_string());
     }
 
     // Word overlap
@@ -85,7 +85,7 @@ pub(super) fn search_index(index: Option<&FileIndex>, query: &str) -> Option<Str
         .collect();
     let overlap = query_words.intersection(&name_words).count();
     if overlap >= 2 || (overlap == 1 && query_words.len() == 1) {
-        return Some(entry.full_path.to_string_lossy().to_string());
+        return Some(entry.full_path().to_string_lossy().to_string());
     }
 
     None
@@ -123,17 +123,8 @@ pub(super) enum SongLibraryMatch {
     Missing,
 }
 
-impl SongLibraryMatch {
-    pub(super) fn into_path(self) -> Option<String> {
-        match self {
-            Self::Resolved(path) | Self::Candidate(path) => Some(path),
-            Self::Missing => None,
-        }
-    }
-}
-
 pub(super) fn resolve_song_library_match(
-    index: Option<&FileIndex>,
+    index: Option<&LibraryCatalog>,
     song_title: &str,
     item_title: &str,
     stripped_title: &str,
@@ -223,7 +214,7 @@ fn song_search_queries(
             push_unique_variant(&mut variants, format!("{prefix} {normalized}"), -10);
         }
 
-        let without_speaker = super::classify::strip_speaker(candidate);
+        let without_speaker = super::classify_matching::strip_speaker(candidate);
         if without_speaker != candidate.trim() {
             push_unique_variant(&mut variants, without_speaker.clone(), -20);
             let normalized_without_speaker = normalize_song_query(&without_speaker);
@@ -264,7 +255,7 @@ fn normalize_song_query(query: &str) -> String {
 /// word overlap. Prevents false positives like "Have Thine Own Way" matching
 /// "We Have Come at Christ's Own Bidding".
 #[cfg(test)]
-pub(super) fn search_index_strict(index: Option<&FileIndex>, query: &str) -> Option<String> {
+pub(super) fn search_index_strict(index: Option<&LibraryCatalog>, query: &str) -> Option<String> {
     preferred_song_match(&search_index_strict_matches(
         index,
         query,
@@ -275,7 +266,7 @@ pub(super) fn search_index_strict(index: Option<&FileIndex>, query: &str) -> Opt
 }
 
 fn search_index_strict_matches(
-    index: Option<&FileIndex>,
+    index: Option<&LibraryCatalog>,
     query: &str,
     requested_role: SongRole,
     query_penalty: i32,
@@ -285,7 +276,7 @@ fn search_index_strict_matches(
     };
 
     let mut matches = Vec::new();
-    for entry in &idx.entries {
+    for entry in idx.entries() {
         if let Some(title_score) = strict_title_score(entry, query) {
             // Generated prefixes and speaker-stripped fallbacks remain useful
             // candidates but cannot equal direct title evidence.
@@ -321,13 +312,13 @@ fn preferred_song_match(matches: &[ScoredSongMatch]) -> Option<PreferredSongMatc
 
 fn push_scored_song_match(
     matches: &mut Vec<ScoredSongMatch>,
-    entry: &FileEntry,
+    entry: &LibraryEntry,
     title_score: i32,
     requested_role: SongRole,
 ) {
-    let path = entry.full_path.to_string_lossy().to_string();
+    let path = entry.full_path().to_string_lossy().to_string();
     let candidate = ScoredSongMatch {
-        role_score: role_compatibility_score(requested_role, file_song_role(&entry.file_name)),
+        role_score: role_compatibility_score(requested_role, file_song_role(entry.file_name())),
         path_score: path_penalty(&path),
         title_score,
         path,
@@ -345,7 +336,7 @@ fn push_scored_song_match(
     }
 }
 
-fn strict_title_score(entry: &FileEntry, query: &str) -> Option<i32> {
+fn strict_title_score(entry: &LibraryEntry, query: &str) -> Option<i32> {
     let normalized_query = normalize_song_query(query);
     if normalized_query.is_empty() {
         return None;
@@ -353,9 +344,9 @@ fn strict_title_score(entry: &FileEntry, query: &str) -> Option<i32> {
 
     let query_lower = query.trim().to_lowercase();
     let normalized_lower = normalized_query.to_lowercase();
-    let name_lower = entry.file_name.to_lowercase();
-    let normalized_name = entry.normalized_name.to_lowercase();
-    let name_norm_lower = normalize_name(&entry.file_name).to_lowercase();
+    let name_lower = entry.file_name().to_lowercase();
+    let normalized_name = entry.normalized_name().to_lowercase();
+    let name_norm_lower = normalize_name(entry.file_name()).to_lowercase();
 
     let mut score = None;
     update_score(
@@ -604,12 +595,12 @@ mod tests {
         fs::write(path, presentation.encode_to_vec()).expect("write presentation fixture");
     }
 
-    fn build_index(files: &[&str]) -> (tempfile::TempDir, FileIndex) {
+    fn build_index(files: &[&str]) -> (tempfile::TempDir, LibraryCatalog) {
         let dir = tempdir().expect("temp dir");
         for file in files {
             write_presentation(&dir.path().join(file));
         }
-        let index = FileIndex::build(dir.path()).expect("index fixture library");
+        let index = LibraryCatalog::build(dir.path()).expect("index fixture library");
         (dir, index)
     }
 
@@ -634,7 +625,7 @@ mod tests {
         fs::create_dir(&nested).expect("create nested library folder");
         write_presentation(&dir.path().join("Announcements.pro"));
         write_presentation(&nested.join("announcements.pro"));
-        let index = FileIndex::build(dir.path()).expect("index fixture library");
+        let index = LibraryCatalog::build(dir.path()).expect("index fixture library");
 
         assert_eq!(
             resolve_exact_library_file(Some(&index), "Announcements.pro"),

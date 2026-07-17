@@ -1,0 +1,109 @@
+{
+  "source": "Mixed fixture corpus; each artifact records whether it is an independent native file or a ProFlow reconstruction",
+  "playlists": [
+    {
+      "path": "playlists/2026-04-19-0900-contemporary.proplaylist",
+      "provenance": "proflow_reconstruction_from_live_library",
+      "independent_native_export": false,
+      "mode": "library_local",
+      "item_count": 16,
+      "embedded_file_count": 16,
+      "required_embedded_files": [
+        "Pre-Service, Post-Service Slides.pro",
+        "Announcements.pro",
+        "Psalms 68v4-6 NASB.pro",
+        "Final Slide - sermon reflection, prayer.pro"
+      ]
+    },
+    {
+      "path": "playlists/2026-04-19-1030-traditional.proplaylist",
+      "provenance": "proflow_reconstruction_from_live_library",
+      "independent_native_export": false,
+      "mode": "library_local",
+      "item_count": 19,
+      "embedded_file_count": 19,
+      "required_embedded_files": [
+        "Pre-Service, Post-Service Slides.pro",
+        "Prelude Nametag.pro",
+        "Call to Worship.pro",
+        "Prayer of Confession.pro",
+        "Postlude Nametag.pro"
+      ]
+    },
+    {
+      "path": "playlists/native-template-library.proplaylist",
+      "provenance": "independent_native_export",
+      "independent_native_export": true,
+      "mode": "library_local",
+      "item_count": 3,
+      "embedded_file_count": 3,
+      "required_embedded_files": [
+        "__template_scripture__.pro",
+        "__template_info__.pro",
+        "__template_song__.pro"
+      ]
+    }
+  ],
+  "presentations": [
+    {
+      "path": "presentations/call-to-worship.pro",
+      "provenance": "native_library_file",
+      "independent_native_export": true,
+      "name": "Call to Worship",
+      "cue_count": 3,
+      "cue_group_count": 1,
+      "arrangement_count": 0,
+      "media_dependency_count": 0
+    },
+    {
+      "path": "presentations/prayer-of-confession.pro",
+      "provenance": "native_library_file",
+      "independent_native_export": true,
+      "name": "Prayer of Confession",
+      "cue_count": 2,
+      "cue_group_count": 1,
+      "arrangement_count": 0,
+      "media_dependency_count": 0
+    },
+    {
+      "path": "presentations/announcements.pro",
+      "provenance": "native_library_file",
+      "independent_native_export": true,
+      "name": "Announcements",
+      "cue_count": 5,
+      "cue_group_count": 4,
+      "arrangement_count": 0,
+      "media_dependency_count": 4
+    },
+    {
+      "path": "presentations/we-walk-by-faith-and-not-by-sight.pro",
+      "provenance": "native_library_file",
+      "independent_native_export": true,
+      "name": "We Walk by Faith and Not by Sight",
+      "cue_count": 6,
+      "cue_group_count": 6,
+      "arrangement_count": 0,
+      "media_dependency_count": 1
+    },
+    {
+      "path": "presentations/psalm-23-surely-goodness.pro",
+      "provenance": "native_library_file",
+      "independent_native_export": true,
+      "name": "Psalm 23 (Surely Goodness)",
+      "cue_count": 13,
+      "cue_group_count": 6,
+      "arrangement_count": 1,
+      "media_dependency_count": 0
+    },
+    {
+      "path": "presentations/heidelberg-catechism-question-1.pro",
+      "provenance": "native_library_file",
+      "independent_native_export": true,
+      "name": "Heidleberg Chatechism - Question 1",
+      "cue_count": 5,
+      "cue_group_count": 1,
+      "arrangement_count": 0,
+      "media_dependency_count": 1
+    }
+  ]
+}

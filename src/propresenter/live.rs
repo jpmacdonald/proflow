@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use prost::Message;
 
+use super::deserialize::decode_presentation_bytes;
 use super::generated::rv_data::{self, playlist, playlist_item, url};
 use super::native_zip::{self, Entry as NativeZipEntry};
 use super::package::{presentation_items, PlaylistItemSummary};
@@ -241,7 +242,11 @@ fn preserved_presentation_for_item(
         .with_context(|| format!("resolve linked presentation for {:?}", item.name))?;
     let embedded_data = std::fs::read(&presentation_path)
         .with_context(|| format!("read linked presentation {}", presentation_path.display()))?;
-    rv_data::Presentation::decode(embedded_data.as_slice()).with_context(|| {
+    decode_presentation_bytes(
+        embedded_data.as_slice(),
+        &presentation_path.display().to_string(),
+    )
+    .with_context(|| {
         format!(
             "decode linked presentation {} for playlist item {:?}",
             presentation_path.display(),
@@ -479,6 +484,9 @@ mod tests {
         let presentation_path = library.join("Actual File.pro");
         let presentation = rv_data::Presentation {
             name: "Actual File".to_string(),
+            uuid: Some(rv_data::Uuid {
+                string: "actual-file-id".to_string(),
+            }),
             ..rv_data::Presentation::default()
         };
         std::fs::write(&presentation_path, presentation.encode_to_vec())
@@ -592,6 +600,31 @@ mod tests {
                 rv_data::music_key_scale::MusicScale::Major as i32,
             ))
         );
+    }
+
+    #[test]
+    fn rejects_identityless_linked_presentation_during_materialization() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path();
+        let library = root.join("Libraries/Default");
+        std::fs::create_dir_all(&library).expect("create library");
+        std::fs::write(library.join("Identityless.pro"), []).expect("write presentation");
+        let item = rv_data::PlaylistItem {
+            name: "Identityless".to_string(),
+            item_type: Some(playlist_item::ItemType::Presentation(
+                playlist_item::Presentation {
+                    document_path: Some(show_relative_url("Libraries/Default/Identityless.pro")),
+                    ..playlist_item::Presentation::default()
+                },
+            )),
+            ..rv_data::PlaylistItem::default()
+        };
+
+        let error = preserved_presentation_for_item(&item, root)
+            .err()
+            .expect("identity-less protobuf must not enter a package");
+
+        assert!(error.to_string().contains("decode linked presentation"));
     }
 
     #[cfg(unix)]

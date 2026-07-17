@@ -13,10 +13,6 @@ name = "dump_pro"
 path = "src/bin/dump_pro.rs"
 
 [[bin]]
-name = "test_template"
-path = "src/bin/test_template.rs"
-
-[[bin]]
 name = "proflow_mcp"
 path = "src/bin/proflow_mcp.rs"
 
@@ -51,10 +47,10 @@ dotenv = { package = "dotenvy", version = "0.15.7" }
 # Common utilities
 fuzzy-matcher = "0.3"
 walkdir = "2.4"
-shellexpand = "3.1.0"
 unicode-width = "0.1.11"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 crc32fast = "1.5"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff"] }
 
 # Additional dependencies
 dirs = "6"

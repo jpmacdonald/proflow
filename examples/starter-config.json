@@ -29,7 +29,7 @@
     "song": {
       "kind": "song",
       "content_source": "song",
-      "output_strategy": "use_existing",
+      "output_strategy": "preserve_existing",
       "description": "Song or hymn from the library"
     },
     "scripture": {
@@ -48,7 +48,7 @@
     "person_nametag": {
       "kind": "nametag",
       "content_source": "static",
-      "output_strategy": "use_existing",
+      "output_strategy": "preserve_existing",
       "description": "Speaker nametag slide"
     }
   },

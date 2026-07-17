@@ -11,11 +11,12 @@ use serde::Serialize;
 
 use crate::project_config::{
     ContentSourceKind, DisplayBindingConfig, ItemKind, OutputStrategy, PresentationTypeConfig,
-    ProjectConfig, ServiceGroupConfig,
+    ProjectConfig, ServiceGroupConfig, SpeakerColorConfig,
 };
+use crate::propresenter::groups::GroupCatalog;
+use crate::propresenter::library::LibraryCatalog;
 use crate::propresenter::macros::{MacroCache, MacroSummary};
-use crate::propresenter::template::ThemeCache;
-use crate::utils::file_index::FileIndex;
+use crate::propresenter::theme::ThemeCache;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AssetCatalog {
@@ -23,15 +24,18 @@ pub(crate) struct AssetCatalog {
     pub project_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub library_path: Option<String>,
+    pub library_path: String,
+    /// Exact installed names retained for existing catalog consumers.
     pub theme_slides: Vec<String>,
+    pub theme_slide_summaries: Vec<ThemeSlideSummary>,
     /// Exact installed names retained for existing catalog consumers.
     pub macros: Vec<String>,
     pub macro_summaries: Vec<MacroSummary>,
+    /// Exact names from the installed `ProPresenter` cue-group catalog.
+    pub groups: Vec<String>,
     pub backgrounds: Vec<BackgroundSummary>,
     pub cue_roles: Vec<CueRoleSummary>,
-    pub library: LibraryCatalog,
+    pub library: LibrarySummary,
     pub service_groups: Vec<ServiceGroupSummary>,
     pub presentation_types: Vec<PresentationTypeSummary>,
 }
@@ -46,14 +50,35 @@ pub(crate) struct BackgroundSummary {
 pub(crate) struct CueRoleSummary {
     pub name: String,
     pub slide: String,
+    pub text_slots: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enter_macro: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub all_content_colored_macro: Option<String>,
+    pub leader_enter_macro: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_colors: Option<SpeakerColorConfig>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct LibraryCatalog {
+pub(crate) struct ThemeSlideSummary {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canvas_size: Option<ThemeSlideCanvasSummary>,
+    pub named_text_slots: Vec<String>,
+    pub default_text_slot_candidates: usize,
+    pub embedded_action_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub generation_issues: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ThemeSlideCanvasSummary {
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct LibrarySummary {
     pub file_count: usize,
     pub top_level_folders: Vec<NamedCount>,
     pub sample_files: Vec<LibraryFileSummary>,
@@ -97,18 +122,20 @@ pub(crate) fn catalog_assets(
     config: &ProjectConfig,
     theme_cache: &ThemeCache,
     macro_cache: &MacroCache,
-    file_index: Option<&FileIndex>,
-    library_path: Option<&Path>,
+    group_catalog: &GroupCatalog,
+    file_index: &LibraryCatalog,
+    library_path: &Path,
     sample_limit: usize,
 ) -> AssetCatalog {
-    let mut service_groups: Vec<_> = config
+    let raw = config.as_raw();
+    let mut service_groups: Vec<_> = raw
         .service_groups
         .iter()
         .map(|(name, group)| summarize_service_group(name, group))
         .collect();
     service_groups.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let mut presentation_types: Vec<_> = config
+    let mut presentation_types: Vec<_> = raw
         .presentation_types
         .iter()
         .map(|(name, ptype)| summarize_presentation_type(name, ptype))
@@ -120,6 +147,21 @@ pub(crate) fn catalog_assets(
         .into_iter()
         .map(str::to_string)
         .collect();
+    let theme_slide_summaries = theme_cache
+        .theme_slide_facts()
+        .into_iter()
+        .map(|facts| ThemeSlideSummary {
+            name: facts.name,
+            canvas_size: facts.canvas_size.map(|size| ThemeSlideCanvasSummary {
+                width: size.width,
+                height: size.height,
+            }),
+            named_text_slots: facts.named_text_slots,
+            default_text_slot_candidates: facts.default_text_slot_candidates,
+            embedded_action_count: facts.embedded_action_count,
+            generation_issues: facts.generation_issues,
+        })
+        .collect();
 
     let macro_summaries = macro_cache.summaries();
     let macros = macro_summaries
@@ -127,7 +169,7 @@ pub(crate) fn catalog_assets(
         .map(|summary| summary.name.clone())
         .collect();
 
-    let mut backgrounds: Vec<_> = config
+    let mut backgrounds: Vec<_> = raw
         .backgrounds
         .iter()
         .map(|(id, path)| BackgroundSummary {
@@ -137,25 +179,33 @@ pub(crate) fn catalog_assets(
         .collect();
     backgrounds.sort_by(|a, b| a.id.cmp(&b.id));
 
-    let mut cue_roles: Vec<_> = config
+    let mut cue_roles: Vec<_> = raw
         .cue_roles
         .iter()
         .map(|(name, role)| CueRoleSummary {
             name: name.clone(),
             slide: role.slide.clone(),
+            text_slots: role.text_slots.clone(),
             enter_macro: role.enter_macro.clone(),
-            all_content_colored_macro: role.all_content_colored_macro.clone(),
+            leader_enter_macro: role.leader_enter_macro.clone(),
+            speaker_colors: role.speaker_colors,
         })
         .collect();
     cue_roles.sort_by(|a, b| a.name.cmp(&b.name));
 
     AssetCatalog {
-        project_name: config.metadata.name.clone(),
+        project_name: raw.metadata.name.clone(),
         theme_name: theme_cache.theme_name().map(str::to_string),
-        library_path: library_path.map(|path| path.display().to_string()),
+        library_path: library_path.display().to_string(),
         theme_slides,
+        theme_slide_summaries,
         macros,
         macro_summaries,
+        groups: group_catalog
+            .names()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         backgrounds,
         cue_roles,
         library: summarize_library(file_index, sample_limit),
@@ -164,37 +214,29 @@ pub(crate) fn catalog_assets(
     }
 }
 
-fn summarize_library(file_index: Option<&FileIndex>, sample_limit: usize) -> LibraryCatalog {
-    let Some(index) = file_index else {
-        return LibraryCatalog {
-            file_count: 0,
-            top_level_folders: Vec::new(),
-            sample_files: Vec::new(),
-        };
-    };
-
+fn summarize_library(index: &LibraryCatalog, sample_limit: usize) -> LibrarySummary {
     let mut folder_counts: BTreeMap<String, usize> = BTreeMap::new();
-    for entry in &index.entries {
+    for entry in index.entries() {
         let folder = entry
-            .relative_path
+            .relative_path()
             .split_once('/')
             .map_or_else(|| "(root)".to_string(), |(segment, _)| segment.to_string());
         *folder_counts.entry(folder).or_default() += 1;
     }
 
     let mut sample_files: Vec<_> = index
-        .entries
+        .entries()
         .iter()
         .map(|entry| LibraryFileSummary {
-            file_name: entry.file_name.clone(),
-            relative_path: entry.relative_path.clone(),
+            file_name: entry.file_name().to_string(),
+            relative_path: entry.relative_path().to_string(),
         })
         .collect();
     sample_files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     sample_files.truncate(sample_limit);
 
-    LibraryCatalog {
-        file_count: index.entries.len(),
+    LibrarySummary {
+        file_count: index.entries().len(),
         top_level_folders: sort_named_counts(folder_counts),
         sample_files,
     }
@@ -259,7 +301,8 @@ const fn content_source_name(kind: ContentSourceKind) -> &'static str {
 const fn output_strategy_name(strategy: OutputStrategy) -> &'static str {
     match strategy {
         OutputStrategy::Skip => "skip",
-        OutputStrategy::UseExisting => "use_existing",
+        OutputStrategy::PreserveExisting => "preserve_existing",
+        OutputStrategy::RestyleExisting => "restyle_existing",
         OutputStrategy::EditInPlace => "edit_in_place",
         OutputStrategy::GenerateNew => "generate_new",
         OutputStrategy::NeedsReview => "needs_review",
@@ -285,25 +328,27 @@ mod tests {
         let config =
             parse_project_config_str(include_str!("../../tests/fixtures/workflow/v4_config.json"))
                 .expect("fixture config should parse");
-        let index = FileIndex::build(&fixture_root().join("library"))
+        let index = LibraryCatalog::build(&fixture_root().join("library"))
             .expect("fixture library should index");
-        let theme_cache = ThemeCache::load(None).expect("empty theme configuration should load");
+        let theme_cache = ThemeCache::empty();
         let macro_cache = MacroCache::empty();
+        let group_catalog = GroupCatalog::default();
 
         let catalog = catalog_assets(
             &config,
             &theme_cache,
             &macro_cache,
-            Some(&index),
-            Some(Path::new("/tmp/library")),
+            &group_catalog,
+            &index,
+            Path::new("/tmp/library"),
             3,
         );
 
         assert_eq!(catalog.project_name.as_deref(), Some("Fixture Church"));
-        assert_eq!(catalog.library.file_count, index.entries.len());
+        assert_eq!(catalog.library.file_count, index.entries().len());
         assert_eq!(
             catalog.library.sample_files.len(),
-            index.entries.len().min(3)
+            index.entries().len().min(3)
         );
         assert!(catalog
             .presentation_types
@@ -364,9 +409,21 @@ mod tests {
         let config =
             parse_project_config_str(include_str!("../../tests/fixtures/workflow/v4_config.json"))
                 .expect("fixture config should parse");
-        let theme_cache = ThemeCache::load(None).expect("empty theme configuration should load");
+        let theme_cache = ThemeCache::empty();
+        let group_catalog = GroupCatalog::default();
+        let library = directory.path().join("library");
+        std::fs::create_dir(&library).expect("create empty library");
+        let index = LibraryCatalog::build(&library).expect("index empty library");
 
-        let catalog = catalog_assets(&config, &theme_cache, &macro_cache, None, None, 0);
+        let catalog = catalog_assets(
+            &config,
+            &theme_cache,
+            &macro_cache,
+            &group_catalog,
+            &index,
+            &library,
+            0,
+        );
         let serialized = serde_json::to_value(&catalog).expect("serialize asset catalog");
 
         assert_eq!(catalog.macros, vec!["Song"]);
@@ -382,5 +439,45 @@ mod tests {
             serialized["macro_summaries"][0]["actions"][0]["target"],
             "Song Look"
         );
+    }
+
+    #[test]
+    fn catalog_assets_exposes_exact_configured_text_slot_bindings() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config = parse_project_config_str(
+            r#"{
+              "version": 4,
+              "cue_roles": {
+                "nametag": {
+                  "slide": "Name Tag",
+                  "text_slots": {
+                    "body": "Speaker Name",
+                    "role": "Speaker Role"
+                  }
+                }
+              }
+            }"#,
+        )
+        .expect("config should parse");
+        let index = LibraryCatalog::build(directory.path()).expect("index empty directory");
+
+        let catalog = catalog_assets(
+            &config,
+            &ThemeCache::empty(),
+            &MacroCache::empty(),
+            &GroupCatalog::default(),
+            &index,
+            directory.path(),
+            0,
+        );
+
+        assert_eq!(
+            catalog.cue_roles[0].text_slots,
+            BTreeMap::from([
+                ("body".to_string(), "Speaker Name".to_string()),
+                ("role".to_string(), "Speaker Role".to_string()),
+            ])
+        );
+        assert!(catalog.theme_slide_summaries.is_empty());
     }
 }

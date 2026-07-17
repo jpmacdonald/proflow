@@ -3,10 +3,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use prost::Message;
-
+use crate::propresenter::deserialize::{decode_presentation_bytes, ProPresenterError};
 use crate::propresenter::generated::rv_data::{
-    self, action, graphics, presentation, presentation_slide, slide, url,
+    self, action, graphics, media, presentation, presentation_slide, slide, url,
 };
 
 /// A media file reference found inside a presentation.
@@ -25,8 +24,8 @@ pub struct MediaDependency {
 /// Decode a `.pro` presentation and return referenced media dependencies.
 pub fn presentation_media_dependencies_from_bytes(
     data: &[u8],
-) -> Result<Vec<MediaDependency>, prost::DecodeError> {
-    let presentation = rv_data::Presentation::decode(data)?;
+) -> Result<Vec<MediaDependency>, ProPresenterError> {
+    let presentation = decode_presentation_bytes(data, "in-memory presentation")?;
     Ok(presentation_media_dependencies(&presentation))
 }
 
@@ -38,6 +37,10 @@ pub fn presentation_media_dependencies(
     let mut dependencies = Vec::new();
     let mut seen = HashSet::new();
 
+    if let Some(chord_chart) = &presentation.chord_chart {
+        push_url_dependency(chord_chart, &mut dependencies, &mut seen);
+    }
+
     for cue in &presentation.cues {
         for action in &cue.actions {
             collect_action_dependencies(action, &mut dependencies, &mut seen);
@@ -48,6 +51,17 @@ pub fn presentation_media_dependencies(
         collect_timeline_dependencies(timeline, &mut dependencies, &mut seen);
     }
 
+    dependencies
+}
+
+/// Return unique media dependencies inherited from one native theme slide.
+#[must_use]
+pub(crate) fn presentation_slide_media_dependencies(
+    slide: &rv_data::PresentationSlide,
+) -> Vec<MediaDependency> {
+    let mut dependencies = Vec::new();
+    let mut seen = HashSet::new();
+    collect_presentation_slide_dependencies(slide, &mut dependencies, &mut seen);
     dependencies
 }
 
@@ -93,6 +107,11 @@ fn collect_action_dependencies(
             }
             None => {}
         },
+        Some(action::ActionTypeData::ExternalPresentation(external_presentation)) => {
+            if let Some(url) = &external_presentation.url {
+                push_url_dependency(url, dependencies, seen);
+            }
+        }
         _ => {}
     }
 }
@@ -134,18 +153,40 @@ fn collect_slide_element_dependencies(
     dependencies: &mut Vec<MediaDependency>,
     seen: &mut HashSet<String>,
 ) {
-    let Some(graphics_element) = &element.element else {
-        return;
-    };
+    if let Some(graphics_element) = &element.element {
+        if let Some(fill) = &graphics_element.fill {
+            collect_graphics_fill_dependencies(fill, dependencies, seen);
+        }
 
-    if let Some(fill) = &graphics_element.fill {
-        collect_graphics_fill_dependencies(fill, dependencies, seen);
+        if let Some(text) = &graphics_element.text {
+            if let Some(attributes) = &text.attributes {
+                collect_text_attribute_dependencies(attributes, dependencies, seen);
+            }
+        }
     }
 
-    if let Some(text) = &graphics_element.text {
-        if let Some(attributes) = &text.attributes {
-            collect_text_attribute_dependencies(attributes, dependencies, seen);
-        }
+    for data_link in &element.data_links {
+        collect_data_link_dependencies(data_link, dependencies, seen);
+    }
+}
+
+fn collect_data_link_dependencies(
+    data_link: &slide::element::DataLink,
+    dependencies: &mut Vec<MediaDependency>,
+    seen: &mut HashSet<String>,
+) {
+    use slide::element::data_link::{ticker::SourceType, PropertyType};
+
+    let url = match &data_link.property_type {
+        Some(PropertyType::FileFeed(file_feed)) => file_feed.url.as_ref(),
+        Some(PropertyType::Ticker(ticker)) => match &ticker.source_type {
+            Some(SourceType::FileType(file)) => file.url.as_ref(),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(url) = url {
+        push_url_dependency(url, dependencies, seen);
     }
 }
 
@@ -169,6 +210,17 @@ fn collect_text_attribute_dependencies(
             push_media_dependency(media, dependencies, seen);
         }
     }
+
+    for custom_attribute in &attributes.custom_attributes {
+        if let Some(graphics::text::attributes::custom_attribute::Attribute::MediaFill(
+            media_fill,
+        )) = &custom_attribute.attribute
+        {
+            if let Some(media) = &media_fill.media {
+                push_media_dependency(media, dependencies, seen);
+            }
+        }
+    }
 }
 
 fn push_media_dependency(
@@ -179,6 +231,34 @@ fn push_media_dependency(
     if let Some(url) = &media.url {
         push_url_dependency(url, dependencies, seen);
     }
+
+    let file = match &media.type_properties {
+        Some(media::TypeProperties::Audio(properties)) => properties.file.as_ref(),
+        Some(media::TypeProperties::Image(properties)) => properties.file.as_ref(),
+        Some(media::TypeProperties::Video(properties)) => properties.file.as_ref(),
+        Some(media::TypeProperties::WebContent(properties)) => {
+            if let Some(url) = &properties.url {
+                push_local_url_dependency(url, dependencies, seen);
+            }
+            None
+        }
+        Some(media::TypeProperties::LiveVideo(_)) | None => None,
+    };
+    if let Some(local_url) = file.and_then(|file| file.local_url.as_ref()) {
+        push_url_dependency(local_url, dependencies, seen);
+    }
+}
+
+fn push_local_url_dependency(
+    url: &rv_data::Url,
+    dependencies: &mut Vec<MediaDependency>,
+    seen: &mut HashSet<String>,
+) {
+    push_dependency(
+        dependency_from_url(url).filter(|dependency| dependency.path.is_some()),
+        dependencies,
+        seen,
+    );
 }
 
 fn push_url_dependency(
@@ -186,7 +266,15 @@ fn push_url_dependency(
     dependencies: &mut Vec<MediaDependency>,
     seen: &mut HashSet<String>,
 ) {
-    let Some(dependency) = dependency_from_url(url) else {
+    push_dependency(dependency_from_url(url), dependencies, seen);
+}
+
+fn push_dependency(
+    dependency: Option<MediaDependency>,
+    dependencies: &mut Vec<MediaDependency>,
+    seen: &mut HashSet<String>,
+) {
+    let Some(dependency) = dependency else {
         return;
     };
     if seen.insert(dependency.source.clone()) {
@@ -277,7 +365,33 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
-    use crate::propresenter::background::make_background_media_action;
+    use crate::propresenter::background::make_background_media_action_for_test;
+    use prost::Message;
+
+    #[test]
+    fn byte_dependency_scan_requires_native_presentation_identity() {
+        let error = presentation_media_dependencies_from_bytes(&[])
+            .expect_err("empty protobuf is not a native presentation");
+
+        assert!(matches!(error, ProPresenterError::UnsupportedFormat { .. }));
+    }
+
+    #[test]
+    fn byte_dependency_scan_accepts_identified_native_presentation() {
+        let presentation = rv_data::Presentation {
+            name: "Identified".to_string(),
+            uuid: Some(rv_data::Uuid {
+                string: "identified-id".to_string(),
+            }),
+            ..rv_data::Presentation::default()
+        };
+
+        let dependencies =
+            presentation_media_dependencies_from_bytes(&presentation.encode_to_vec())
+                .expect("identified presentation");
+
+        assert!(dependencies.is_empty());
+    }
 
     #[test]
     fn decodes_file_url_dependency() {
@@ -303,7 +417,11 @@ mod tests {
         let media_path = Path::new("/tmp/proflow-media-test/default.jpg");
         let presentation = rv_data::Presentation {
             cues: vec![rv_data::Cue {
-                actions: vec![make_background_media_action(media_path)],
+                actions: vec![make_background_media_action_for_test(
+                    media_path,
+                    (1, 1),
+                    Path::new("/tmp"),
+                )],
                 ..rv_data::Cue::default()
             }],
             ..rv_data::Presentation::default()
@@ -359,10 +477,139 @@ mod tests {
         );
     }
 
+    #[test]
+    fn finds_local_dependencies_across_native_file_carriers() {
+        let presentation = rv_data::Presentation {
+            chord_chart: Some(file_url("/show/charts/presentation.prochord")),
+            cues: vec![rv_data::Cue {
+                actions: vec![
+                    media_action("/show/media/action.jpg"),
+                    media_action_for(media_with_type_properties(media::TypeProperties::Audio(
+                        media::AudioTypeProperties {
+                            file: Some(file_properties("/show/audio/cue.mp3")),
+                            ..media::AudioTypeProperties::default()
+                        },
+                    ))),
+                    external_presentation_action("/show/presentations/external.key"),
+                    media_action_for(media_with_type_properties(
+                        media::TypeProperties::WebContent(media::WebContentTypeProperties {
+                            url: Some(file_url("/show/web/local.html")),
+                            ..media::WebContentTypeProperties::default()
+                        }),
+                    )),
+                    presentation_slide_action(rv_data::PresentationSlide {
+                        chord_chart: Some(file_url("/show/charts/slide.prochord")),
+                        base_slide: Some(rv_data::Slide {
+                            elements: vec![
+                                graphics_media_element(media_with_type_properties(
+                                    media::TypeProperties::Image(media::ImageTypeProperties {
+                                        file: Some(file_properties("/show/media/fill.png")),
+                                        ..media::ImageTypeProperties::default()
+                                    }),
+                                )),
+                                file_feed_element(file_url("/show/data/feed.txt")),
+                                ticker_file_element("/show/data/ticker.txt"),
+                                custom_attribute_media_element(media(
+                                    "/show/media/custom-attribute.png",
+                                )),
+                            ],
+                            ..rv_data::Slide::default()
+                        }),
+                        ..rv_data::PresentationSlide::default()
+                    }),
+                ],
+                ..rv_data::Cue::default()
+            }],
+            timeline: Some(presentation::Timeline {
+                audio_action: Some(media_action_for(media_with_type_properties(
+                    media::TypeProperties::Video(media::VideoTypeProperties {
+                        file: Some(file_properties("/show/video/timeline.mov")),
+                        ..media::VideoTypeProperties::default()
+                    }),
+                ))),
+                ..presentation::Timeline::default()
+            }),
+            ..rv_data::Presentation::default()
+        };
+
+        let paths = presentation_media_dependencies(&presentation)
+            .into_iter()
+            .map(|dependency| dependency.path)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            [
+                "/show/charts/presentation.prochord",
+                "/show/media/action.jpg",
+                "/show/audio/cue.mp3",
+                "/show/presentations/external.key",
+                "/show/web/local.html",
+                "/show/charts/slide.prochord",
+                "/show/media/fill.png",
+                "/show/data/feed.txt",
+                "/show/data/ticker.txt",
+                "/show/media/custom-attribute.png",
+                "/show/video/timeline.mov",
+            ]
+            .map(|path| Some(PathBuf::from(path)))
+        );
+    }
+
+    #[test]
+    fn preserves_remote_file_references_as_unresolved_dependencies() {
+        let presentation = rv_data::Presentation {
+            chord_chart: Some(remote_url("https://example.com/chart.prochord")),
+            cues: vec![rv_data::Cue {
+                actions: vec![
+                    media_action_for(media_with_type_properties(
+                        media::TypeProperties::WebContent(media::WebContentTypeProperties {
+                            url: Some(remote_url("https://example.com/live")),
+                            ..media::WebContentTypeProperties::default()
+                        }),
+                    )),
+                    presentation_slide_action(rv_data::PresentationSlide {
+                        base_slide: Some(rv_data::Slide {
+                            elements: vec![file_feed_element(remote_url(
+                                "https://example.com/feed.txt",
+                            ))],
+                            ..rv_data::Slide::default()
+                        }),
+                        ..rv_data::PresentationSlide::default()
+                    }),
+                ],
+                ..rv_data::Cue::default()
+            }],
+            ..rv_data::Presentation::default()
+        };
+
+        let dependencies = presentation_media_dependencies(&presentation);
+
+        assert_eq!(
+            dependencies,
+            vec![
+                MediaDependency {
+                    source: "https://example.com/chart.prochord".to_string(),
+                    path: None,
+                    basename: Some("chart.prochord".to_string()),
+                },
+                MediaDependency {
+                    source: "https://example.com/feed.txt".to_string(),
+                    path: None,
+                    basename: Some("feed.txt".to_string()),
+                },
+            ]
+        );
+    }
+
     fn media_action(path: &str) -> rv_data::Action {
+        media_action_for(media(path))
+    }
+
+    fn media_action_for(media: rv_data::Media) -> rv_data::Action {
         rv_data::Action {
             action_type_data: Some(action::ActionTypeData::Media(action::MediaType {
-                element: Some(media(path)),
+                element: Some(media),
                 ..action::MediaType::default()
             })),
             ..rv_data::Action::default()
@@ -394,6 +641,110 @@ mod tests {
         rv_data::Url {
             storage: Some(url::Storage::AbsoluteString(format!("file://{path}"))),
             ..rv_data::Url::default()
+        }
+    }
+
+    fn remote_url(source: &str) -> rv_data::Url {
+        rv_data::Url {
+            storage: Some(url::Storage::AbsoluteString(source.to_string())),
+            ..rv_data::Url::default()
+        }
+    }
+
+    fn file_properties(path: &str) -> rv_data::FileProperties {
+        rv_data::FileProperties {
+            local_url: Some(file_url(path)),
+            ..rv_data::FileProperties::default()
+        }
+    }
+
+    fn media_with_type_properties(type_properties: media::TypeProperties) -> rv_data::Media {
+        rv_data::Media {
+            type_properties: Some(type_properties),
+            ..rv_data::Media::default()
+        }
+    }
+
+    fn graphics_media_element(media: rv_data::Media) -> slide::Element {
+        slide::Element {
+            element: Some(graphics::Element {
+                fill: Some(graphics::Fill {
+                    enable: true,
+                    fill_type: Some(graphics::fill::FillType::Media(media)),
+                }),
+                ..graphics::Element::default()
+            }),
+            ..slide::Element::default()
+        }
+    }
+
+    fn custom_attribute_media_element(media: rv_data::Media) -> slide::Element {
+        use graphics::text::attributes::{custom_attribute::Attribute, CustomAttribute};
+
+        slide::Element {
+            element: Some(graphics::Element {
+                text: Some(graphics::Text {
+                    attributes: Some(graphics::text::Attributes {
+                        custom_attributes: vec![CustomAttribute {
+                            attribute: Some(Attribute::MediaFill(graphics::text::MediaFill {
+                                media: Some(media),
+                            })),
+                            ..CustomAttribute::default()
+                        }],
+                        ..graphics::text::Attributes::default()
+                    }),
+                    ..graphics::Text::default()
+                }),
+                ..graphics::Element::default()
+            }),
+            ..slide::Element::default()
+        }
+    }
+
+    fn file_feed_element(url: rv_data::Url) -> slide::Element {
+        use slide::element::data_link::{FileFeed, PropertyType};
+
+        slide::Element {
+            data_links: vec![slide::element::DataLink {
+                property_type: Some(PropertyType::FileFeed(FileFeed { url: Some(url) })),
+            }],
+            ..slide::Element::default()
+        }
+    }
+
+    fn ticker_file_element(path: &str) -> slide::Element {
+        use slide::element::data_link::{ticker, PropertyType, Ticker};
+
+        slide::Element {
+            data_links: vec![slide::element::DataLink {
+                property_type: Some(PropertyType::Ticker(Ticker {
+                    source_type: Some(ticker::SourceType::FileType(ticker::FileType {
+                        url: Some(file_url(path)),
+                    })),
+                    ..Ticker::default()
+                })),
+            }],
+            ..slide::Element::default()
+        }
+    }
+
+    fn presentation_slide_action(slide: rv_data::PresentationSlide) -> rv_data::Action {
+        rv_data::Action {
+            action_type_data: Some(action::ActionTypeData::Slide(action::SlideType {
+                slide: Some(action::slide_type::Slide::Presentation(slide)),
+            })),
+            ..rv_data::Action::default()
+        }
+    }
+
+    fn external_presentation_action(path: &str) -> rv_data::Action {
+        rv_data::Action {
+            action_type_data: Some(action::ActionTypeData::ExternalPresentation(
+                action::ExternalPresentationType {
+                    url: Some(file_url(path)),
+                },
+            )),
+            ..rv_data::Action::default()
         }
     }
 

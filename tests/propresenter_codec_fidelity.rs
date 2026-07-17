@@ -16,25 +16,25 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const NATIVE_PRESENTATION_FIXTURES: &[&str] = &[
-    "data/examples/propresenter/Tom Nametag.pro",
-    "data/examples/propresenter/[Hymn] Amazing Grace.pro",
-    "data/examples/propresenter/Titus 2v11-13 (NRSVue).pro",
-    "data/fixtures/propresenter/real/announcements.pro",
-    "data/fixtures/propresenter/real/call-to-worship.pro",
-    "data/fixtures/propresenter/real/heidleberg-chatechism-question-1.pro",
-    "data/fixtures/propresenter/real/prayer-of-confession.pro",
-    "data/fixtures/propresenter/real/psalm-23-surely-goodness.pro",
-    "data/fixtures/propresenter/real/we-walk-by-faith-and-not-by-sight.pro",
+    "tests/fixtures/propresenter/native/examples/title-nametag.pro",
+    "tests/fixtures/propresenter/native/examples/hymn-amazing-grace.pro",
+    "tests/fixtures/propresenter/native/examples/scripture-titus-2v11-13-nrsvue.pro",
+    "tests/fixtures/propresenter/native/corpus/presentations/announcements.pro",
+    "tests/fixtures/propresenter/native/corpus/presentations/call-to-worship.pro",
+    "tests/fixtures/propresenter/native/corpus/presentations/heidelberg-catechism-question-1.pro",
+    "tests/fixtures/propresenter/native/corpus/presentations/prayer-of-confession.pro",
+    "tests/fixtures/propresenter/native/corpus/presentations/psalm-23-surely-goodness.pro",
+    "tests/fixtures/propresenter/native/corpus/presentations/we-walk-by-faith-and-not-by-sight.pro",
 ];
 
 const NATIVE_PLAYLIST_PACKAGES: &[&str] = &[
-    "data/test.proplaylist",
-    "data/fixtures/propresenter/real/april-19-2026-1030am-traditional.proplaylist",
-    "data/fixtures/propresenter/real/april-19-2026-9am-contemporary.proplaylist",
+    "tests/fixtures/propresenter/native/corpus/playlists/native-template-library.proplaylist",
+    "tests/fixtures/propresenter/native/corpus/playlists/2026-04-19-1030-traditional.proplaylist",
+    "tests/fixtures/propresenter/native/corpus/playlists/2026-04-19-0900-contemporary.proplaylist",
 ];
 
 const NATIVE_PACKAGE_PRESENTATIONS: &[(&str, &[&str])] = &[(
-    "data/test.proplaylist",
+    "tests/fixtures/propresenter/native/corpus/playlists/native-template-library.proplaylist",
     &[
         "__template_info__.pro",
         "__template_scripture__.pro",

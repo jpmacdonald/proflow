@@ -17,11 +17,8 @@ use std::time::Instant;
 
 fn setup_client() -> PlanningCenterClient {
     let config = Config::load().expect("live Planning Center smoke test requires valid config");
-    assert!(
-        config.has_planning_center_credentials(),
-        "live Planning Center smoke test requires PCO_APP_ID and PCO_SECRET"
-    );
     PlanningCenterClient::new(&config)
+        .expect("live Planning Center smoke test requires a valid HTTP client")
 }
 
 // Test fetching services and plans

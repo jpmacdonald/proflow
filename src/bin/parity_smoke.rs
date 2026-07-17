@@ -15,10 +15,10 @@ use proflow::propresenter::package::{
     presentation_items, read_playlist_package, PlaylistPackageIssue, PlaylistPackageMode,
 };
 use proflow::propresenter::playlist::{
-    build_playlist, linked_presentation_filename, write_playlist_file, PlaylistEntry,
+    build_playlist, linked_presentation_filename, write_playlist_document_for_fidelity,
+    PlaylistEntry,
     PlaylistMetadata, SelectedArrangement,
 };
-use proflow::propresenter::SlideType;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -150,7 +150,7 @@ fn run() -> Result<SmokeReport> {
 }
 
 fn default_fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("data/fixtures/propresenter/real")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/propresenter/native/corpus")
 }
 
 fn read_manifest(fixture_root: &Path) -> Result<Manifest> {
@@ -246,25 +246,27 @@ fn round_trip_compare(
             })?;
             let embedded_data = package.embedded_file_data.get(&embedded_filename).cloned();
             let selected_arrangement = selected_arrangement(item, embedded_data.as_deref())?;
-            Ok(PlaylistEntry {
-                name: item.name.clone(),
-                slide_type: SlideType::Text,
-                from_matched_file: true,
-                presentation_path: item
-                    .local_relative_path
-                    .as_ref()
-                    .map(|path| format!("/Users/jimmy/Documents/ProPresenter/{path}"))
-                    .or_else(|| item.absolute_string.clone())
-                    .unwrap_or_default(),
-                selected_arrangement,
-                user_music_key: item.user_music_key.map(|(music_key, music_scale)| {
+            let presentation_path = item
+                .local_relative_path
+                .as_ref()
+                .map(|path| format!("/Users/jimmy/Documents/ProPresenter/{path}"))
+                .or_else(|| item.absolute_string.clone())
+                .with_context(|| {
+                    format!("playlist item {:?} has no presentation path", item.name)
+                })?;
+            let entry = if let Some(data) = embedded_data {
+                PlaylistEntry::embedded(item.name.clone(), presentation_path, data)?
+            } else {
+                PlaylistEntry::linked(item.name.clone(), presentation_path)?
+            };
+            Ok(entry
+                .with_selected_arrangement(selected_arrangement)?
+                .with_user_music_key(item.user_music_key.map(|(music_key, music_scale)| {
                     rv_data::MusicKeyScale {
                         music_key,
                         music_scale,
                     }
-                }),
-                embedded_data,
-            })
+                })))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -283,7 +285,7 @@ fn round_trip_compare(
     let playlist = build_playlist(playlist_name, &entries, &metadata);
     let actual_path =
         std::env::temp_dir().join(format!("proflow-parity-{}.proplaylist", Uuid::new_v4()));
-    write_playlist_file(&playlist, &entries, &actual_path)
+    write_playlist_document_for_fidelity(&playlist, &entries, &actual_path)
         .with_context(|| format!("write round-trip playlist {}", actual_path.display()))?;
     let comparison = compare_playlist_packages(expected_path, &actual_path).with_context(|| {
         format!(
