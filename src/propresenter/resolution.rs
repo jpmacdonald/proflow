@@ -121,6 +121,23 @@ pub enum PresentationSizeStatus {
     },
 }
 
+/// Failure to normalize one legacy presentation canvas without changing its
+/// visual aspect ratio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PresentationResizeError {
+    /// The source does not contain one valid, uniform slide size.
+    #[error("presentation size is not uniformly resizable: {0:?}")]
+    NonUniform(PresentationSizeStatus),
+    /// Scaling between different aspect ratios would require layout judgment.
+    #[error("cannot resize presentation from {actual} to {target}: aspect ratios differ")]
+    AspectRatio {
+        /// Uniform native canvas found in the source presentation.
+        actual: PresentationSize,
+        /// Configured project canvas requested by the build.
+        target: PresentationSize,
+    },
+}
+
 impl PresentationSizeStatus {
     /// Whether every indexed slide has the expected canvas size.
     #[must_use]
@@ -149,6 +166,34 @@ impl PresentationSizeStatus {
                 slide_index + 1
             ),
         }
+    }
+
+    /// Validate whether this native canvas can be normalized mechanically.
+    ///
+    /// `Ok(None)` means it already matches. `Ok(Some(source))` means every
+    /// slide can be scaled from `source` without changing aspect ratio. The
+    /// same predicate is shared by planning and execution so preview never
+    /// promises a resize the renderer later rejects.
+    pub fn resize_source(
+        self,
+        target: PresentationSize,
+    ) -> Result<Option<PresentationSize>, PresentationResizeError> {
+        let source = match self {
+            Self::Uniform { size } => size,
+            status => return Err(PresentationResizeError::NonUniform(status)),
+        };
+        if source == target {
+            return Ok(None);
+        }
+        if u64::from(source.width()) * u64::from(target.height())
+            != u64::from(target.width()) * u64::from(source.height())
+        {
+            return Err(PresentationResizeError::AspectRatio {
+                actual: source,
+                target,
+            });
+        }
+        Ok(Some(source))
     }
 }
 
@@ -197,6 +242,120 @@ pub fn inspect_presentation_size(presentation: &rv_data::Presentation) -> Presen
     first.map_or(PresentationSizeStatus::Empty, |size| {
         PresentationSizeStatus::Uniform { size }
     })
+}
+
+/// Resize a uniform legacy presentation to the configured canvas while
+/// preserving its visual proportions.
+///
+/// Slide canvases, element bounds, text metrics, and RTF font-size controls are
+/// scaled together. A different aspect ratio is rejected because that requires
+/// a theme/layout decision rather than a mechanical transform.
+pub fn resize_presentation_canvas(
+    presentation: &mut rv_data::Presentation,
+    target: PresentationSize,
+) -> Result<bool, PresentationResizeError> {
+    let Some(source) = inspect_presentation_size(presentation).resize_source(target)? else {
+        return Ok(false);
+    };
+    let horizontal = f64::from(target.width()) / f64::from(source.width());
+    let vertical = f64::from(target.height()) / f64::from(source.height());
+    for cue in &mut presentation.cues {
+        for action in &mut cue.actions {
+            let Some(rv_data::action::ActionTypeData::Slide(slide_action)) =
+                &mut action.action_type_data
+            else {
+                continue;
+            };
+            let Some(rv_data::action::slide_type::Slide::Presentation(slide)) =
+                &mut slide_action.slide
+            else {
+                continue;
+            };
+            let Some(base) = slide.base_slide.as_mut() else {
+                continue;
+            };
+            base.size = Some(rv_data::graphics::Size {
+                width: f64::from(target.width()),
+                height: f64::from(target.height()),
+            });
+            for slide_element in &mut base.elements {
+                let Some(element) = slide_element.element.as_mut() else {
+                    continue;
+                };
+                if let Some(bounds) = element.bounds.as_mut() {
+                    if let Some(origin) = bounds.origin.as_mut() {
+                        origin.x = origin.x.map(|value| value * horizontal);
+                        origin.y *= vertical;
+                    }
+                    if let Some(size) = bounds.size.as_mut() {
+                        size.width *= horizontal;
+                        size.height *= vertical;
+                    }
+                }
+                if let Some(text) = element.text.as_mut() {
+                    scale_text(text, vertical);
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn scale_text(text: &mut rv_data::graphics::Text, scale: f64) {
+    if let Some(attributes) = text.attributes.as_mut() {
+        if let Some(font) = attributes.font.as_mut() {
+            font.size *= scale;
+        }
+        if let Some(paragraph) = attributes.paragraph_style.as_mut() {
+            paragraph.first_line_head_indent *= scale;
+            paragraph.head_indent *= scale;
+            paragraph.tail_indent *= scale;
+            paragraph.maximum_line_height *= scale;
+            paragraph.minimum_line_height *= scale;
+            paragraph.line_spacing *= scale;
+            paragraph.paragraph_spacing *= scale;
+            paragraph.paragraph_spacing_before *= scale;
+            paragraph.default_tab_interval *= scale;
+            for tab in &mut paragraph.tab_stops {
+                tab.location *= scale;
+            }
+        }
+    }
+    if let Some(margins) = text.margins.as_mut() {
+        margins.left *= scale;
+        margins.right *= scale;
+        margins.top *= scale;
+        margins.bottom *= scale;
+    }
+    text.rtf_data = scale_rtf_font_sizes(&text.rtf_data, scale);
+}
+
+fn scale_rtf_font_sizes(input: &[u8], scale: f64) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index..].starts_with(b"\\fs") {
+            output.extend_from_slice(b"\\fs");
+            index += 3;
+            let start = index;
+            while input.get(index).is_some_and(u8::is_ascii_digit) {
+                index += 1;
+            }
+            if let Ok(value) = std::str::from_utf8(&input[start..index])
+                .unwrap_or("")
+                .parse::<u32>()
+            {
+                let scaled = (f64::from(value) * scale).round();
+                output.extend_from_slice(scaled.to_string().as_bytes());
+            } else {
+                output.extend_from_slice(&input[start..index]);
+            }
+        } else {
+            output.push(input[index]);
+            index += 1;
+        }
+    }
+    output
 }
 
 /// Read one slide's positive integral native canvas dimensions.
@@ -255,6 +414,40 @@ mod tests {
                 .collect(),
             ..rv_data::Presentation::default()
         }
+    }
+
+    #[test]
+    fn same_aspect_legacy_canvas_resizes_to_project_size() {
+        let mut presentation = presentation_with_sizes(&[Some((1280.0, 720.0))]);
+
+        assert!(
+            resize_presentation_canvas(&mut presentation, PresentationSize::FULL_HD)
+                .expect("same aspect ratio is mechanically resizable")
+        );
+
+        assert_eq!(
+            inspect_presentation_size(&presentation),
+            PresentationSizeStatus::Uniform {
+                size: PresentationSize::FULL_HD
+            }
+        );
+    }
+
+    #[test]
+    fn different_aspect_canvas_cannot_be_promised_or_resized() {
+        let status = PresentationSizeStatus::Uniform {
+            size: PresentationSize::new(1024, 768).expect("valid source size"),
+        };
+        assert!(matches!(
+            status.resize_source(PresentationSize::FULL_HD),
+            Err(PresentationResizeError::AspectRatio { .. })
+        ));
+
+        let mut presentation = presentation_with_sizes(&[Some((1024.0, 768.0))]);
+        assert!(matches!(
+            resize_presentation_canvas(&mut presentation, PresentationSize::FULL_HD),
+            Err(PresentationResizeError::AspectRatio { .. })
+        ));
     }
 
     #[test]

@@ -47,10 +47,14 @@ pub mod arrangement;
 pub mod background;
 /// File deserialization (reading .pro files).
 pub mod deserialize;
-/// Extract plain text from presentations.
-pub mod extract;
 /// Generated protobuf types.
 pub mod generated;
+/// Installed cue-group metadata.
+pub mod groups;
+/// Standalone semantic presentation inspection.
+pub mod inspection;
+/// Native presentation library catalog and fuzzy matching.
+pub mod library;
 /// Live ProPresenter playlist library helpers.
 pub mod live;
 /// Macro injection for presentations.
@@ -62,15 +66,19 @@ mod native_zip;
 pub mod package;
 /// Playlist file support (.proplaylist).
 pub mod playlist;
+/// Checked renderer-independent presentation specifications.
+pub mod presentation_spec;
+/// Pure presentation-specification renderer.
+pub mod render;
 /// Checked presentation-canvas dimensions and inspection.
 pub mod resolution;
 /// RTF conversion utilities.
 pub mod rtf;
+/// Verse-aware scripture slide layout.
+pub mod scripture_layout;
 /// File serialization (writing .pro files).
 pub mod serialize;
-/// Song presentation structure repair.
-pub mod song;
-/// Template-based slide generation.
-pub mod template;
-/// UUID generation utilities.
-pub mod uuid;
+/// Pure checked text flow for presentation slides.
+pub mod text_flow;
+/// Installed theme loading and exact text-box geometry.
+pub mod theme;

@@ -5,8 +5,13 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use super::plan::{ContentSource, ResolvedItemPlan, ScriptureRequest};
+use super::plan::{ResolvedItemPlan, ScriptureRequest};
 use crate::bible::BibleVersion;
+
+mod output;
+
+pub use output::OutputReviewError;
+pub(super) use output::{OutputManifest, PhysicalPath, ReviewedOutput};
 
 /// A resolved plan whose file-backed inputs have been captured for later
 /// verification.
@@ -16,7 +21,7 @@ use crate::bible::BibleVersion;
 #[derive(Debug)]
 pub(super) struct ReviewedServicePlan {
     plans: Vec<ResolvedItemPlan>,
-    sources: SourceManifest,
+    sources: CapturedSources,
 }
 
 impl ReviewedServicePlan {
@@ -29,7 +34,7 @@ impl ReviewedServicePlan {
         paths.extend(additional_sources);
         Ok(Self {
             plans,
-            sources: SourceManifest::capture(paths)?,
+            sources: CapturedSources::capture(paths)?,
         })
     }
 
@@ -42,6 +47,10 @@ impl ReviewedServicePlan {
         self.sources.bytes(path)
     }
 
+    pub(super) const fn sources(&self) -> &CapturedSources {
+        &self.sources
+    }
+
     pub(super) fn extend_sources(
         &mut self,
         paths: impl IntoIterator<Item = PathBuf>,
@@ -52,8 +61,7 @@ impl ReviewedServicePlan {
     pub(super) fn into_verified_parts(
         self,
     ) -> Result<(Vec<ResolvedItemPlan>, SourceManifest), SourceReviewError> {
-        self.sources.verify()?;
-        Ok((self.plans, self.sources))
+        Ok((self.plans, self.sources.into_verified_manifest()?))
     }
 }
 
@@ -94,184 +102,18 @@ pub enum SourceReviewError {
     },
 }
 
-/// Failure to capture or verify one reviewed output target.
-#[derive(Debug, thiserror::Error)]
-pub enum OutputReviewError {
-    /// An output target could not be read while capturing or verifying it.
-    #[error("failed to read reviewed output '{}': {source}", path.display())]
-    Read {
-        /// Output path that could not be read.
-        path: PathBuf,
-        /// Underlying filesystem failure.
-        source: std::io::Error,
-    },
-    /// A target reviewed as absent appeared before the build could stage it.
-    #[error(
-        "reviewed output '{}' appeared after preview with SHA-256 {actual}",
-        path.display()
-    )]
-    Appeared {
-        /// Output path that appeared.
-        path: PathBuf,
-        /// SHA-256 of the newly present bytes.
-        actual: String,
-    },
-    /// A target reviewed as present disappeared before the build could stage it.
-    #[error(
-        "reviewed output '{}' disappeared after preview (expected SHA-256 {expected})",
-        path.display()
-    )]
-    Disappeared {
-        /// Output path that disappeared.
-        path: PathBuf,
-        /// SHA-256 reviewed during preview.
-        expected: String,
-    },
-    /// A target reviewed as present changed before the build could stage it.
-    #[error(
-        "reviewed output '{}' changed after preview (expected SHA-256 {expected}, found {actual})",
-        path.display()
-    )]
-    Changed {
-        /// Output path whose bytes changed.
-        path: PathBuf,
-        /// SHA-256 reviewed during preview.
-        expected: String,
-        /// SHA-256 observed before execution.
-        actual: String,
-    },
-    /// Execution attempted to stage a path absent from the reviewed output set.
-    #[error("build attempted to stage unreviewed output '{}'", path.display())]
-    UnreviewedTarget {
-        /// Output path that was not part of the preview.
-        path: PathBuf,
-    },
-}
-
-/// Exact present/absent state of every path one reviewed build may overwrite.
+/// Reviewed source payloads available only while native artifacts are prepared.
 #[derive(Debug)]
-pub(super) struct OutputManifest {
-    outputs: Vec<ReviewedOutput>,
+pub(super) struct CapturedSources {
+    sources: Vec<CapturedSource>,
 }
 
-impl OutputManifest {
-    pub(super) fn capture(
-        paths: impl IntoIterator<Item = PathBuf>,
-    ) -> Result<Self, OutputReviewError> {
-        let paths = paths.into_iter().collect::<BTreeSet<_>>();
-        let mut outputs = Vec::with_capacity(paths.len());
-        for path in paths {
-            outputs.push(ReviewedOutput::capture(path)?);
-        }
-        Ok(Self { outputs })
-    }
-
-    pub(super) fn verify(&self) -> Result<(), OutputReviewError> {
-        for output in &self.outputs {
-            output.verify()?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn verify_target(&self, path: &Path) -> Result<(), OutputReviewError> {
-        let output = self
-            .outputs
-            .iter()
-            .find(|output| output.path == path)
-            .ok_or_else(|| OutputReviewError::UnreviewedTarget {
-                path: path.to_path_buf(),
-            })?;
-        output.verify()
-    }
-}
-
-#[derive(Debug)]
-struct ReviewedOutput {
-    path: PathBuf,
-    state: ReviewedOutputState,
-}
-
-impl ReviewedOutput {
-    fn capture(path: PathBuf) -> Result<Self, OutputReviewError> {
-        let state = ReviewedOutputState::read(&path)?;
-        Ok(Self { path, state })
-    }
-
-    fn verify(&self) -> Result<(), OutputReviewError> {
-        let actual = ReviewedOutputState::read(&self.path)?;
-        match (&self.state, actual) {
-            (ReviewedOutputState::Absent, ReviewedOutputState::Absent) => Ok(()),
-            (ReviewedOutputState::Absent, ReviewedOutputState::Present { sha256, .. }) => {
-                Err(OutputReviewError::Appeared {
-                    path: self.path.clone(),
-                    actual: digest_hex(&sha256),
-                })
-            }
-            (ReviewedOutputState::Present { sha256, .. }, ReviewedOutputState::Absent) => {
-                Err(OutputReviewError::Disappeared {
-                    path: self.path.clone(),
-                    expected: digest_hex(sha256),
-                })
-            }
-            (
-                ReviewedOutputState::Present {
-                    bytes: expected_bytes,
-                    sha256: expected,
-                },
-                ReviewedOutputState::Present {
-                    bytes: actual_bytes,
-                    sha256: actual,
-                },
-            ) if *expected == actual && *expected_bytes == actual_bytes => Ok(()),
-            (
-                ReviewedOutputState::Present {
-                    sha256: expected, ..
-                },
-                ReviewedOutputState::Present { sha256: actual, .. },
-            ) => Err(OutputReviewError::Changed {
-                path: self.path.clone(),
-                expected: digest_hex(expected),
-                actual: digest_hex(&actual),
-            }),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum ReviewedOutputState {
-    Absent,
-    Present { bytes: Vec<u8>, sha256: [u8; 32] },
-}
-
-impl ReviewedOutputState {
-    fn read(path: &Path) -> Result<Self, OutputReviewError> {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                let sha256 = hash_bytes(&bytes);
-                Ok(Self::Present { bytes, sha256 })
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::Absent),
-            Err(source) => Err(OutputReviewError::Read {
-                path: path.to_path_buf(),
-                source,
-            }),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct SourceManifest {
-    sources: Vec<SourceFingerprint>,
-}
-
-impl SourceManifest {
-    pub(super) fn capture(
-        paths: impl IntoIterator<Item = PathBuf>,
-    ) -> Result<Self, SourceReviewError> {
+impl CapturedSources {
+    fn capture(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self, SourceReviewError> {
         let paths = paths.into_iter().collect::<BTreeSet<_>>();
         let mut sources = Vec::with_capacity(paths.len());
         for path in paths {
-            sources.push(SourceFingerprint::capture(path)?);
+            sources.push(CapturedSource::capture(path)?);
         }
         Ok(Self { sources })
     }
@@ -286,7 +128,7 @@ impl SourceManifest {
     pub(super) fn bytes(&self, path: &Path) -> Option<&[u8]> {
         self.sources
             .iter()
-            .find(|source| source.path == path)
+            .find(|source| source.fingerprint.path == path)
             .map(|source| source.bytes.as_slice())
     }
 
@@ -297,18 +139,74 @@ impl SourceManifest {
         let existing = self
             .sources
             .iter()
-            .map(|source| source.path.clone())
+            .map(|source| source.fingerprint.path.clone())
             .collect::<BTreeSet<_>>();
         for path in paths
             .into_iter()
             .collect::<BTreeSet<_>>()
             .difference(&existing)
         {
-            self.sources.push(SourceFingerprint::capture(path.clone())?);
+            self.sources.push(CapturedSource::capture(path.clone())?);
         }
         self.sources
-            .sort_by(|left, right| left.path.cmp(&right.path));
+            .sort_by(|left, right| left.fingerprint.path.cmp(&right.fingerprint.path));
         Ok(())
+    }
+
+    fn into_verified_manifest(self) -> Result<SourceManifest, SourceReviewError> {
+        self.verify()?;
+        Ok(SourceManifest {
+            sources: self
+                .sources
+                .into_iter()
+                .map(|source| source.fingerprint)
+                .collect(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct CapturedSource {
+    fingerprint: SourceFingerprint,
+    bytes: Vec<u8>,
+}
+
+impl CapturedSource {
+    fn capture(path: PathBuf) -> Result<Self, SourceReviewError> {
+        let bytes = read_file(&path)?;
+        Ok(Self {
+            fingerprint: SourceFingerprint {
+                path,
+                sha256: hash_bytes(&bytes),
+            },
+            bytes,
+        })
+    }
+
+    fn verify(&self) -> Result<(), SourceReviewError> {
+        self.fingerprint.verify()
+    }
+}
+
+/// Paths and hashes retained after reviewed source payloads have been consumed.
+///
+/// This is the only source state allowed to cross the prepared-build boundary.
+#[derive(Debug)]
+pub(super) struct SourceManifest {
+    sources: Vec<SourceFingerprint>,
+}
+
+impl SourceManifest {
+    pub(super) fn verify(&self) -> Result<(), SourceReviewError> {
+        for source in &self.sources {
+            source.verify()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn contains(&self, path: &Path) -> bool {
+        self.sources.iter().any(|source| source.path == path)
     }
 }
 
@@ -316,20 +214,9 @@ impl SourceManifest {
 struct SourceFingerprint {
     path: PathBuf,
     sha256: [u8; 32],
-    bytes: Vec<u8>,
 }
 
 impl SourceFingerprint {
-    fn capture(path: PathBuf) -> Result<Self, SourceReviewError> {
-        let bytes = read_file(&path)?;
-        let sha256 = hash_bytes(&bytes);
-        Ok(Self {
-            path,
-            sha256,
-            bytes,
-        })
-    }
-
     fn verify(&self) -> Result<(), SourceReviewError> {
         let actual = hash_file(&self.path)?;
         if actual == self.sha256 {
@@ -349,10 +236,10 @@ pub(super) fn plan_source_paths(
 ) -> Result<Vec<PathBuf>, SourceReviewError> {
     let mut paths = BTreeSet::new();
     for plan in plans {
-        if let Some(path) = plan.file_path.as_deref().filter(|path| !path.is_empty()) {
-            paths.insert(PathBuf::from(path));
+        if let Some(path) = plan.file_path() {
+            paths.insert(path.to_path_buf());
         }
-        if let Some(background) = &plan.style.background {
+        if let Some(background) = plan.background() {
             let configured = background.file().as_path();
             let resolved = crate::propresenter::background::resolve_background_image(
                 project_data_root,
@@ -374,18 +261,19 @@ fn add_bible_source_paths(
     project_data_root: &Path,
     paths: &mut BTreeSet<PathBuf>,
 ) -> Result<(), SourceReviewError> {
-    let ContentSource::Scripture { scripture } = &plan.content_source else {
+    let Some(scripture) = plan.scripture_content() else {
         return Ok(());
     };
 
     match scripture.request() {
-        ScriptureRequest::Single { bible_version, .. } => {
+        ScriptureRequest::Single { bible_version, .. }
+        | ScriptureRequest::PrefixExcerpt { bible_version, .. } => {
             let version = parse_bible_version(bible_version)?;
             paths.insert(project_data_root.join("bibles").join(version.file_name()));
         }
         ScriptureRequest::Combined(references) => {
             for reference in references {
-                let version = parse_bible_version(&reference.version)?;
+                let version = parse_bible_version(reference.version())?;
                 paths.insert(project_data_root.join("bibles").join(version.file_name()));
             }
         }
@@ -428,7 +316,25 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::workflow::plan::{PlanAction, ResolvedItemPlan};
+    use crate::workflow::plan::{
+        ItemKind, OutputKey, PlanDisposition, ReadyAction, ResolvedItemPlan,
+    };
+
+    fn existing_plan(output_key: &str, source: &Path) -> ResolvedItemPlan {
+        ResolvedItemPlan {
+            output_key: OutputKey::new(output_key.to_string()).expect("valid test output key"),
+            position: 0,
+            pco_title: "Existing presentation".to_string(),
+            playlist_name: "Existing presentation".to_string(),
+            reason: "Test fixture".to_string(),
+            item_kind: ItemKind::Other,
+            item_type: None,
+            disposition: PlanDisposition::Ready(ReadyAction::UseExisting {
+                file_path: source.to_path_buf(),
+                arrangement: None,
+            }),
+        }
+    }
 
     #[test]
     fn reviewed_plan_rejects_changed_source_bytes() {
@@ -436,12 +342,7 @@ mod tests {
         let source = root.path().join("source.pro");
         std::fs::write(&source, b"reviewed bytes").expect("write reviewed source");
         let reviewed = ReviewedServicePlan::capture_with_additional_sources(
-            vec![ResolvedItemPlan {
-                output_key: "pco:item-1:main".to_string(),
-                file_path: Some(source.display().to_string()),
-                action: PlanAction::UseExisting,
-                ..ResolvedItemPlan::default()
-            }],
+            vec![existing_plan("pco:item-1:main", &source)],
             root.path(),
             std::iter::empty(),
         )
@@ -462,12 +363,7 @@ mod tests {
         std::fs::write(&source, b"same bytes").expect("write source");
         let plans = ["one", "two"]
             .into_iter()
-            .map(|key| ResolvedItemPlan {
-                output_key: key.to_string(),
-                file_path: Some(source.display().to_string()),
-                action: PlanAction::UseExisting,
-                ..ResolvedItemPlan::default()
-            })
+            .map(|key| existing_plan(key, &source))
             .collect();
 
         let reviewed = ReviewedServicePlan::capture_with_additional_sources(
@@ -480,15 +376,20 @@ mod tests {
     }
 
     #[test]
-    fn manifest_retains_reviewed_bytes_instead_of_rereading_the_path() {
+    fn capture_owns_bytes_only_until_the_verified_manifest_transition() {
         let root = tempfile::tempdir().expect("temporary root");
         let source = root.path().join("source.pro");
         std::fs::write(&source, b"reviewed").expect("write reviewed source");
-        let manifest = SourceManifest::capture([source.clone()]).expect("capture source");
+        let captured = CapturedSources::capture([source.clone()]).expect("capture source");
+
+        assert_eq!(captured.bytes(&source), Some(b"reviewed".as_slice()));
+        let manifest = captured
+            .into_verified_manifest()
+            .expect("seal source fingerprints");
+        assert!(manifest.contains(&source));
 
         std::fs::write(&source, b"changed").expect("change source path");
 
-        assert_eq!(manifest.bytes(&source), Some(b"reviewed".as_slice()));
         assert!(matches!(
             manifest.verify(),
             Err(SourceReviewError::Changed { path, .. }) if path == source

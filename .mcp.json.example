@@ -4,7 +4,8 @@
       "command": "/absolute/path/to/proflow/target/release/proflow_mcp",
       "cwd": "/absolute/path/to/proflow",
       "env": {
-        "PROFLOW_DATA": "/absolute/path/to/proflow/data"
+        "PROFLOW_DATA": "/absolute/path/to/proflow/data",
+        "PROPRESENTER_DIR": "/Users/you/Documents/ProPresenter"
       }
     }
   }

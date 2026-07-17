@@ -11,6 +11,14 @@ pub(super) struct ParsedScriptureRef {
     pub version: String,
 }
 
+/// One terminal `a` reference represented as a whole lookup plus display form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedPrefixScriptureRef {
+    pub reference: String,
+    pub display_reference: String,
+    pub version: String,
+}
+
 /// A malformed multi-reference title must never be partially generated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ScriptureRefsError {
@@ -101,6 +109,65 @@ pub(super) fn parse_scripture_refs(
             })
         })
         .collect()
+}
+
+/// Parse one terminal `a` reference without guessing where its text ends.
+///
+/// The returned whole-verse reference is suitable only for lookup. Planning
+/// Center description text must still prove the exact cutoff before execution.
+pub(super) fn parse_prefix_scripture_ref(
+    title: &str,
+    configured_default: Option<BibleVersion>,
+) -> Result<ParsedPrefixScriptureRef, ScriptureRefsError> {
+    let stripped = strip_trailing_speaker(strip_scripture_heading(title));
+    let parts = stripped
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let [part] = parts.as_slice() else {
+        return Err(ScriptureRefsError::PartialVerse(stripped.to_string()));
+    };
+    let explicit = explicit_version(part);
+    let version = explicit
+        .or_else(|| configured_default.map(BibleVersion::name))
+        .ok_or(ScriptureRefsError::MissingVersion)?;
+    let partial_reference = strip_explicit_version(part, explicit).trim();
+    let Some(suffix) = partial_reference.chars().next_back() else {
+        return Err(ScriptureRefsError::Missing);
+    };
+    if !suffix.eq_ignore_ascii_case(&'a') {
+        return Err(ScriptureRefsError::PartialVerse(
+            partial_reference.to_string(),
+        ));
+    }
+    let whole_reference =
+        partial_reference[..partial_reference.len() - suffix.len_utf8()].trim_end();
+    if !whole_reference
+        .chars()
+        .next_back()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        return Err(ScriptureRefsError::PartialVerse(
+            partial_reference.to_string(),
+        ));
+    }
+    let parsed = crate::bible::parse_scripture_ref(whole_reference)
+        .ok_or_else(|| ScriptureRefsError::Invalid(partial_reference.to_string()))?;
+    let reference = parsed.end_verse.map_or_else(
+        || format!("{} {}:{}", parsed.book, parsed.chapter, parsed.start_verse),
+        |end| {
+            format!(
+                "{} {}:{}-{end}",
+                parsed.book, parsed.chapter, parsed.start_verse
+            )
+        },
+    );
+    Ok(ParsedPrefixScriptureRef {
+        display_reference: format!("{reference}a"),
+        reference,
+        version: version.to_string(),
+    })
 }
 
 fn has_partial_verse_marker(reference: &str) -> bool {
@@ -231,6 +298,34 @@ mod tests {
             ),
             Err(ScriptureRefsError::PartialVerse(
                 "Exodus 16:1-4a".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn terminal_a_is_parsed_as_a_distinct_whole_lookup_and_display_reference() {
+        assert_eq!(
+            parse_prefix_scripture_ref(
+                "Scripture (Robert) - Exodus 16:1-4a",
+                Some(crate::bible::BibleVersion::NRSVue),
+            ),
+            Ok(ParsedPrefixScriptureRef {
+                reference: "Exodus 16:1-4".to_string(),
+                display_reference: "Exodus 16:1-4a".to_string(),
+                version: "NRSVue".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn non_prefix_partial_suffix_is_not_reinterpreted() {
+        assert_eq!(
+            parse_prefix_scripture_ref(
+                "Scripture - Exodus 16:1-4b",
+                Some(crate::bible::BibleVersion::NRSVue),
+            ),
+            Err(ScriptureRefsError::PartialVerse(
+                "Exodus 16:1-4b".to_string()
             ))
         );
     }

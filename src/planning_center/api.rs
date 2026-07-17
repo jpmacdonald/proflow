@@ -5,9 +5,10 @@ use serde_json::Value;
 use std::time::Duration as StdDuration;
 use tokio::time::sleep;
 
+use super::normalize::{parse_items, parse_plan, parse_service_types};
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::planning_center::types::{Category, Item, Plan, Scripture, Service, Song};
+use crate::planning_center::types::{Item, Plan, Service};
 
 const BASE_URL: &str = "https://api.planningcenteronline.com/services/v2";
 
@@ -43,41 +44,46 @@ struct PaginatedResponse {
 }
 
 impl PlanningCenterClient {
-    /// Create a new Planning Center client from config
-    pub fn new(config: &Config) -> Self {
+    /// Create a new Planning Center client from config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when credentials are missing or the HTTP client cannot
+    /// be constructed with the required timeout policy.
+    pub fn new(config: &Config) -> Result<Self> {
         Self::new_with_base_url(config, BASE_URL)
     }
 
-    fn new_with_base_url(config: &Config, base_url: impl Into<String>) -> Self {
+    fn new_with_base_url(config: &Config, base_url: impl Into<String>) -> Result<Self> {
         let base_url = base_url.into();
         Self::with_base_url(config, normalize_base_url(&base_url))
     }
 
-    fn with_base_url(config: &Config, base_url: String) -> Self {
-        // Client::build() should never fail with default settings, but if it does,
-        // we create a client without timeout rather than silently failing
+    fn with_base_url(config: &Config, base_url: String) -> Result<Self> {
+        let app_id = config.pco_app_id.trim();
+        let secret = config.pco_secret.trim();
+        if app_id.is_empty() || secret.is_empty() {
+            return Err(Error::config(
+                "Planning Center credentials are missing or blank",
+                "Set PCO_APP_ID and PCO_SECRET environment variables",
+            ));
+        }
+
         let client = Client::builder()
             .timeout(StdDuration::from_secs(30))
             .no_proxy()
             .build()
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    "Failed to create HTTP client with timeout, using default client: {e}"
-                );
-                Client::default()
-            });
-        Self {
-            app_id: config.pco_app_id.clone(),
-            secret: config.pco_secret.clone(),
+            .map_err(|error| {
+                Error::Network(format!(
+                    "failed to initialize Planning Center HTTP client: {error}"
+                ))
+            })?;
+        Ok(Self {
+            app_id: app_id.to_string(),
+            secret: secret.to_string(),
             client,
             base_url,
-        }
-    }
-
-    /// Check if credentials are configured
-    const fn is_configured(&self) -> bool {
-        // String::is_empty is not const, so we check len directly
-        !self.app_id.is_empty() && !self.secret.is_empty()
+        })
     }
 
     /// Internal method that performs the actual request with retry logic
@@ -211,13 +217,6 @@ impl PlanningCenterClient {
         &self,
         days_ahead: i64,
     ) -> Result<(Vec<Service>, Vec<Plan>)> {
-        if !self.is_configured() {
-            return Err(Error::config(
-                "Planning Center client not configured",
-                "Set PCO_APP_ID and PCO_SECRET environment variables",
-            ));
-        }
-
         // Fetch all service types
         let services = self.fetch_service_types().await?;
 
@@ -240,13 +239,6 @@ impl PlanningCenterClient {
     /// Returns an error instead of a partial plan set when any service-type
     /// request fails.
     pub async fn get_recent_services(&self, days_back: i64) -> Result<(Vec<Service>, Vec<Plan>)> {
-        if !self.is_configured() {
-            return Err(Error::config(
-                "Planning Center client not configured",
-                "Set PCO_APP_ID and PCO_SECRET environment variables",
-            ));
-        }
-
         let services = self.fetch_service_types().await?;
         let now = Utc::now();
         let start_date = now - Duration::days(days_back);
@@ -265,19 +257,7 @@ impl PlanningCenterClient {
     /// Fetch all service types
     async fn fetch_service_types(&self) -> Result<Vec<Service>> {
         let response = self.get_paginated_with_query("/service_types", &[]).await?;
-        let entries = &response.data;
-
-        Ok(entries
-            .iter()
-            .filter_map(|s| {
-                let id = s["id"].as_str()?.to_string();
-                let name = s["attributes"]["name"]
-                    .as_str()
-                    .unwrap_or("Unknown")
-                    .to_string();
-                Some(Service { id, name })
-            })
-            .collect())
+        Ok(parse_service_types(&response.data)?)
     }
 
     async fn fetch_plans_for_service_in_range(
@@ -307,40 +287,14 @@ impl PlanningCenterClient {
             .await?;
         let entries = response.data.as_slice();
 
-        Ok(entries
-            .iter()
-            .filter_map(|plan_value| {
-                let id = plan_value["id"].as_str()?.to_string();
-                let attrs = &plan_value["attributes"];
-
-                #[allow(clippy::similar_names)]
-                let date = DateTime::parse_from_rfc3339(attrs["sort_date"].as_str()?)
-                    .ok()?
-                    .with_timezone(&Utc);
-
-                if date < start_date {
-                    return None;
-                }
-                if date > end_date {
-                    return None;
-                }
-
-                let title = attrs["title"]
-                    .as_str()
-                    .or_else(|| attrs["dates"].as_str())
-                    .unwrap_or("Untitled Plan")
-                    .to_string();
-
-                Some(Plan {
-                    id,
-                    service_id: service_id.to_string(),
-                    service_name: service_name.to_string(),
-                    date,
-                    title,
-                    items: Vec::new(),
-                })
-            })
-            .collect())
+        let mut plans = Vec::new();
+        for (index, plan_value) in entries.iter().enumerate() {
+            let plan = parse_plan(plan_value, index, service_id, service_name)?;
+            if (start_date..=end_date).contains(&plan.date) {
+                plans.push(plan);
+            }
+        }
+        Ok(plans)
     }
 
     async fn fetch_plans_for_services(
@@ -387,13 +341,6 @@ impl PlanningCenterClient {
 
     /// Get service items for a specific plan
     pub async fn get_service_items(&self, plan_id: &str) -> Result<Vec<Item>> {
-        if !self.is_configured() {
-            return Err(Error::config(
-                "Planning Center client not configured",
-                "Set PCO_APP_ID and PCO_SECRET environment variables",
-            ));
-        }
-
         let path = format!("/plans/{plan_id}/items");
         let response = self
             .get_paginated_with_query(
@@ -401,153 +348,7 @@ impl PlanningCenterClient {
                 &[("include", "song,arrangement"), ("per_page", "100")],
             )
             .await?;
-        let entries = response.data.as_slice();
-
-        // Build lookup maps for included Song and Arrangement data
-        let songs: std::collections::HashMap<_, _> = response
-            .included
-            .iter()
-            .filter(|v| v["type"].as_str() == Some("Song"))
-            .filter_map(|v| Some((v["id"].as_str()?, v)))
-            .collect();
-        let arrangements: std::collections::HashMap<_, _> = response
-            .included
-            .iter()
-            .filter(|v| v["type"].as_str() == Some("Arrangement"))
-            .filter_map(|v| Some((v["id"].as_str()?, v)))
-            .collect();
-
-        // Parse items
-        let items = entries
-            .iter()
-            .enumerate()
-            .map(|(idx, item_value)| {
-                let id = item_value["id"].as_str().ok_or_else(|| {
-                    Error::pco(format!(
-                        "plan '{plan_id}' item at response index {idx} has no id"
-                    ))
-                })?;
-                let attrs = &item_value["attributes"];
-                let rels = &item_value["relationships"];
-
-                let title = attrs["title"].as_str().unwrap_or("Untitled").to_string();
-                let description = attrs["description"].as_str().map(String::from);
-                let note = attrs["notes"].as_str().map(String::from);
-
-                // Parse linked song if present
-                let song = parse_song(rels, &songs, &arrangements);
-
-                // Classify item
-                let category = classify_item(&title, song.is_some());
-
-                // Parse scripture reference using the bible module's parser,
-                // which correctly handles verse ranges with dashes.
-                let scripture =
-                    if category == Category::Title && title.to_lowercase().contains("scripture") {
-                        crate::bible::parse_scripture_ref(&title).map(|r| {
-                            let reference = if let Some(end) = r.end_verse {
-                                format!("{} {}:{}-{}", r.book, r.chapter, r.start_verse, end)
-                            } else {
-                                format!("{} {}:{}", r.book, r.chapter, r.start_verse)
-                            };
-                            Scripture {
-                                reference,
-                                text: description.clone(),
-                                translation: None,
-                            }
-                        })
-                    } else {
-                        None
-                    };
-
-                Ok(Item {
-                    id: id.to_string(),
-                    position: idx + 1,
-                    title,
-                    description,
-                    category,
-                    note,
-                    song,
-                    scripture,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(items)
-    }
-}
-
-/// Parse song data from relationships and included maps
-fn parse_song(
-    rels: &Value,
-    songs: &std::collections::HashMap<&str, &Value>,
-    arrangements: &std::collections::HashMap<&str, &Value>,
-) -> Option<Song> {
-    let song_id = rels.get("song")?.get("data")?.get("id")?.as_str()?;
-    let song_value = songs.get(song_id)?;
-    let attrs = &song_value["attributes"];
-
-    let title = attrs["title"].as_str().unwrap_or("").to_string();
-    let author = attrs["author"].as_str().map(String::from);
-    let copyright = attrs["copyright"].as_str().map(String::from);
-    let ccli = attrs["ccli_number"].as_str().map(String::from);
-
-    // Get lyrics from arrangement
-    let (lyrics, arrangement) = rels
-        .get("arrangement")
-        .and_then(|a| a.get("data")?.get("id")?.as_str())
-        .and_then(|arr_id| arrangements.get(arr_id))
-        .map_or((None, None), |arr| {
-            let lyrics = arr["attributes"]["lyrics"].as_str().map(String::from);
-            let name = arr["attributes"]["name"].as_str().map(String::from);
-            (lyrics, name)
-        });
-
-    Some(Song {
-        title,
-        author,
-        copyright,
-        ccli,
-        themes: None,
-        lyrics,
-        arrangement,
-    })
-}
-
-/// Classify an item based on its title and whether it has song data
-fn classify_item(title: &str, has_song: bool) -> Category {
-    if has_song {
-        return Category::Song;
-    }
-
-    let lowercase_title = title.to_lowercase();
-    if ["scripture", "reading", "sermon", "message"]
-        .iter()
-        .any(|category| lowercase_title.contains(category))
-    {
-        Category::Title
-    } else if ["announcements", "welcome"]
-        .iter()
-        .any(|category| lowercase_title.contains(category))
-    {
-        Category::Graphic
-    } else if [
-        "PRE-SERVICE",
-        "SERVICE",
-        "POST-SERVICE",
-        "PRAISE",
-        "OFFERING",
-        "GIVING",
-        "PRAYER",
-        "LORD'S PRAYER",
-        "GREETING",
-    ]
-    .iter()
-    .any(|heading| title.to_uppercase().contains(heading))
-    {
-        Category::Other
-    } else {
-        Category::Text
+        Ok(parse_items(&response.data, &response.included, plan_id)?)
     }
 }
 
@@ -581,371 +382,6 @@ fn resolve_pagination_url(base_url: &str, current_url: &str, next: &str) -> Resu
 
     Ok(candidate.into())
 }
-
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
-    use super::*;
-    use httptest::{
-        matchers::request,
-        matchers::{all_of, contains, url_decoded},
-        responders::{json_encoded, status_code},
-        Expectation, Server,
-    };
-    use proptest::prelude::*;
-    use serde_json::json;
-
-    fn test_config() -> Config {
-        Config {
-            pco_app_id: "dummy-app".to_string(),
-            pco_secret: "dummy-secret".to_string(),
-        }
-    }
-
-    #[test]
-    fn join_base_and_path_normalizes_slashes() {
-        assert_eq!(
-            join_base_and_path("https://example.test/", "/service_types"),
-            "https://example.test/service_types"
-        );
-        assert_eq!(
-            join_base_and_path("https://example.test", "plans/123/items"),
-            "https://example.test/plans/123/items"
-        );
-    }
-
-    #[test]
-    fn resolve_pagination_url_accepts_relative_same_origin_links() {
-        let resolved = resolve_pagination_url(
-            "https://api.example.test/services/v2",
-            "https://api.example.test/services/v2/service_types?page=1",
-            "?page=2",
-        )
-        .expect("same-origin pagination URL should resolve");
-
-        assert_eq!(
-            resolved,
-            "https://api.example.test/services/v2/service_types?page=2"
-        );
-    }
-
-    proptest! {
-        #[test]
-        fn property_relative_pagination_links_remain_same_origin(
-            path in "/[a-z0-9][a-z0-9/_]{0,64}",
-            page in 0_u16..10_000,
-        ) {
-            let base = "https://api.example.test/services/v2";
-            let current = "https://api.example.test/services/v2/service_types?page=1";
-            let next = format!("{path}?page={page}");
-            let resolved = resolve_pagination_url(base, current, &next)
-                .expect("generated relative URL should resolve");
-            let resolved = Url::parse(&resolved).expect("resolved URL should parse");
-
-            prop_assert_eq!(resolved.scheme(), "https");
-            prop_assert_eq!(resolved.host_str(), Some("api.example.test"));
-            prop_assert_eq!(resolved.port_or_known_default(), Some(443));
-        }
-    }
-
-    #[tokio::test]
-    async fn get_paginated_with_query_accumulates_pages() {
-        let server = Server::run();
-        let base_url = server.url_str("/").trim_end_matches('/').to_string();
-
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/service_types"),
-                request::query(url_decoded(contains(("per_page", "25")))),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [
-                    { "id": "1", "attributes": { "name": "Sunday" } }
-                ],
-                "links": {
-                    "next": format!("{base_url}/service_types?page=2")
-                }
-            }))),
-        );
-
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/service_types"),
-                request::query(url_decoded(contains(("page", "2")))),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [
-                    { "id": "2", "attributes": { "name": "Wednesday" } }
-                ],
-                "links": {
-                    "next": null
-                }
-            }))),
-        );
-
-        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
-        let response = client
-            .get_paginated_with_query("/service_types", &[("per_page", "25")])
-            .await
-            .expect("pagination should succeed");
-
-        let ids: Vec<_> = response
-            .data
-            .iter()
-            .filter_map(|item| item["id"].as_str())
-            .collect();
-
-        assert_eq!(ids, vec!["1", "2"]);
-    }
-
-    #[tokio::test]
-    async fn get_paginated_with_query_rejects_cross_origin_next_link() {
-        let server = Server::run();
-        let base_url = server.url_str("/").trim_end_matches('/').to_string();
-
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/service_types"),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [],
-                "links": {
-                    "next": "https://attacker.invalid/collect"
-                }
-            }))),
-        );
-
-        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
-        let error = client
-            .get_paginated_with_query("/service_types", &[])
-            .await
-            .expect_err("cross-origin pagination URL should fail");
-
-        assert!(error.to_string().contains("different origin"));
-    }
-
-    #[tokio::test]
-    async fn fetch_plans_for_service_uses_server_bounded_date_range() {
-        let server = Server::run();
-        let base_url = server.url_str("/").trim_end_matches('/').to_string();
-
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/service_types/1/plans"),
-                request::query(url_decoded(contains(("filter", "after,before")))),
-                request::query(url_decoded(contains(("after", "2026-07-05")))),
-                request::query(url_decoded(contains(("before", "2026-07-12")))),
-                request::query(url_decoded(contains(("order", "sort_date")))),
-                request::query(url_decoded(contains(("per_page", "25")))),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [
-                    {
-                        "id": "in-range",
-                        "attributes": {
-                            "sort_date": "2026-07-12T09:00:00Z",
-                            "title": "July 12"
-                        }
-                    },
-                    {
-                        "id": "outside-exact-window",
-                        "attributes": {
-                            "sort_date": "2026-07-12T18:00:01Z",
-                            "title": "Later July 12"
-                        }
-                    }
-                ],
-                "links": { "next": null }
-            }))),
-        );
-
-        let start = DateTime::parse_from_rfc3339("2026-07-05T06:00:00Z")
-            .expect("valid start date")
-            .with_timezone(&Utc);
-        let end = DateTime::parse_from_rfc3339("2026-07-12T18:00:00Z")
-            .expect("valid end date")
-            .with_timezone(&Utc);
-        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
-
-        let plans = client
-            .fetch_plans_for_service_in_range("1", "Sunday", start, end)
-            .await
-            .expect("bounded plan request should succeed");
-
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].id, "in-range");
-    }
-
-    #[tokio::test]
-    async fn get_upcoming_services_fails_if_any_service_plan_fetch_fails() {
-        let server = Server::run();
-        let base_url = server.url_str("/").trim_end_matches('/').to_string();
-
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/service_types"),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [
-                    { "id": "1", "attributes": { "name": "Sunday" } },
-                    { "id": "2", "attributes": { "name": "Wednesday" } }
-                ],
-                "links": { "next": null }
-            }))),
-        );
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/service_types/1/plans"),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [],
-                "links": { "next": null }
-            }))),
-        );
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/service_types/2/plans"),
-            ])
-            .respond_with(status_code(400)),
-        );
-
-        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
-        let error = client
-            .get_upcoming_services(30)
-            .await
-            .expect_err("partial service plan results should fail");
-
-        assert!(error.to_string().contains("Wednesday"));
-    }
-
-    #[tokio::test]
-    async fn get_service_items_merges_paginated_included_payloads() {
-        let server = Server::run();
-        let base_url = server.url_str("/").trim_end_matches('/').to_string();
-
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/plans/plan-1/items"),
-                request::query(url_decoded(contains(("include", "song,arrangement")))),
-                request::query(url_decoded(contains(("per_page", "100")))),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [
-                    {
-                        "id": "item-1",
-                        "attributes": {
-                            "title": "Amazing Grace",
-                            "description": "Opening song",
-                            "notes": "Sing all verses"
-                        },
-                        "relationships": {
-                            "song": { "data": { "id": "song-1" } },
-                            "arrangement": { "data": { "id": "arr-1" } }
-                        }
-                    }
-                ],
-                "included": [
-                    {
-                        "type": "Song",
-                        "id": "song-1",
-                        "attributes": {
-                            "title": "Amazing Grace",
-                            "author": "John Newton",
-                            "copyright": "Public Domain",
-                            "ccli_number": "12345"
-                        }
-                    }
-                ],
-                "links": {
-                    "next": format!("{base_url}/plans/plan-1/items?page=2")
-                }
-            }))),
-        );
-
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/plans/plan-1/items"),
-                request::query(url_decoded(contains(("page", "2")))),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [],
-                "included": [
-                    {
-                        "type": "Arrangement",
-                        "id": "arr-1",
-                        "attributes": {
-                            "name": "Default Arrangement",
-                            "lyrics": "[Verse 1]\nAmazing grace"
-                        }
-                    }
-                ],
-                "links": {
-                    "next": null
-                }
-            }))),
-        );
-
-        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
-        let items = client
-            .get_service_items("plan-1")
-            .await
-            .expect("service items should resolve merged includes");
-
-        assert_eq!(items.len(), 1);
-
-        let item = &items[0];
-        assert_eq!(item.title, "Amazing Grace");
-        assert_eq!(item.category, Category::Song);
-
-        let song = item.song.as_ref().expect("song data should be linked");
-        assert_eq!(song.title, "Amazing Grace");
-        assert_eq!(song.author.as_deref(), Some("John Newton"));
-        assert_eq!(song.arrangement.as_deref(), Some("Default Arrangement"));
-        assert_eq!(song.lyrics.as_deref(), Some("[Verse 1]\nAmazing grace"));
-    }
-
-    #[tokio::test]
-    async fn get_service_items_rejects_an_entry_without_a_stable_id() {
-        let server = Server::run();
-        let base_url = server.url_str("/").trim_end_matches('/').to_string();
-        server.expect(
-            Expectation::matching(all_of![
-                request::method("GET"),
-                request::path("/plans/plan-1/items"),
-            ])
-            .respond_with(json_encoded(json!({
-                "data": [{
-                    "attributes": { "title": "Unidentified item" },
-                    "relationships": {}
-                }],
-                "included": [],
-                "links": { "next": null }
-            }))),
-        );
-
-        let client = PlanningCenterClient::new_with_base_url(&test_config(), base_url);
-        let error = client
-            .get_service_items("plan-1")
-            .await
-            .expect_err("an item without an id must not disappear from the plan");
-
-        assert!(error.to_string().contains("response index 0 has no id"));
-    }
-
-    #[test]
-    fn item_classification_is_case_insensitive() {
-        assert_eq!(classify_item("scripture - John 1", false), Category::Title);
-        assert_eq!(classify_item("WELCOME", false), Category::Graphic);
-        assert_eq!(classify_item("Sunday SERMON", false), Category::Title);
-    }
-}
+#[path = "api/tests.rs"]
+mod tests;

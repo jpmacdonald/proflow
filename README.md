@@ -10,9 +10,9 @@ The central workflow is:
 Planning Center plan
     -> v4 rules classify each item
     -> resolved / needs-review / skip
-    -> preview resolved build decisions and source paths
+    -> materialize exact native artifacts into a sealed preview transaction
     -> operator resolves uncertainty and confirms the preview
-    -> render/reuse presentations and export the playlist
+    -> revalidate sources, outputs, and staged bytes, then atomically commit
 ```
 
 There is no hidden runtime inference. If an item, background, theme slide,
@@ -47,23 +47,30 @@ ProFlow reads environment variables directly and from `.env`:
 ```bash
 PCO_APP_ID=your_app_id
 PCO_SECRET=your_secret
-LIBRARY_DIR=~/Documents/ProPresenter/Libraries/Default
 PROPRESENTER_DIR=~/Documents/ProPresenter
 THEMES_DIR=~/Documents/ProPresenter/Themes
+PLAYLIST_DIR=~/Documents/ProPresenter/Playlists/ProFlow
 PROFLOW_DATA=/absolute/path/to/a/proflow-data-bundle
 ```
 
 Important variables:
 
 - `PCO_APP_ID` and `PCO_SECRET`: Planning Center credentials.
-- `LIBRARY_DIR`: target ProPresenter library. When omitted, ProFlow tries the
-  default ProPresenter library path.
 - `PROPRESENTER_DIR`: optional ProPresenter user-data directory override. This
-  is not the installed application bundle; theme and macro discovery use it.
+  is the active show workspace, not the installed application bundle. On macOS
+  ProFlow also reads ProPresenter's `applicationShowDirectory` preference and
+  rejects a conflicting override.
 - `THEMES_DIR`: optional direct override for the installed Themes directory.
-- `PLAYLIST_DIR`: optional playlist output directory.
-- `GENERATED_PRESENTATIONS_DIR`: optional generated-presentation directory.
+- `PLAYLIST_DIR`: optional playlist output directory. When omitted, playlist
+  packages go to `<PROPRESENTER_DIR>/Playlists/ProFlow`, outside the
+  presentation library.
 - `PROFLOW_DATA`: optional project data root.
+
+The exact registered presentation library is durable project policy at
+`defaults.library` in `proflow.config.json`. ProFlow reads and writes canonical
+presentation names in `<PROPRESENTER_DIR>/Libraries/<library>`. A safe copied
+show should therefore be active during generation and QA; a live Dropbox show
+remains untouched until an approved portable playlist is imported.
 
 ## The Project Data Bundle
 
@@ -76,6 +83,8 @@ $PROFLOW_DATA/
 │   ├── default.png
 │   └── communion.jpg
 └── bibles/
+    ├── NRSVUE.json
+    └── ...
 ```
 
 If `PROFLOW_DATA` is set, it is authoritative even when it is incomplete. If it
@@ -86,17 +95,33 @@ other data from different installations.
 
 This layout is appropriate for reuse because the config stores background paths
 relative to the bundle. Config, backgrounds, and Bibles can move together.
-ProPresenter theme slides and macros are not embedded in this bundle: they are
-dependencies installed on the target workstation.
+ProPresenter theme slides, macros, and cue-group definitions are not embedded
+in this bundle: they are dependencies installed on the target workstation.
 Standardized workstations can share one config directly; heterogeneous
 workstations need the same named assets or separately reviewed machine-specific
-config. Startup and config writes validate those dependencies on the current
-machine.
+config. Startup validates the installed theme, macros, and cue-group catalog on
+the current machine. Config writes validate every dependency the v4 config can
+currently reference: theme slides, macros, backgrounds, and Bible corpora.
 
 The weekly product targets one configured workstation. Exact-name startup
-validation and immutable in-process theme/macro caches are the current
+validation and immutable in-process theme/macro/group catalogs are the current
 reproducibility boundary. Do not add a second registry, database, or asset-lock
 configuration source without a demonstrated multi-workstation requirement.
+
+Independent native exports and an installed library can be re-audited without
+writing to them:
+
+```bash
+just parity-corpus ~/Desktop
+just parity-library ~/Documents/ProPresenter/Libraries/Default
+```
+
+Bible filenames are translation identities, not aliases. Startup parses every
+installed corpus and rejects byte-identical files under different translation
+names. A requested translation whose corpus is not installed requires review;
+ProFlow never substitutes a similarly named translation. The former
+`NRSV.json` was removed because it was byte-identical to the NRSVue corpus and
+therefore could not truthfully represent NRSV.
 
 ## Config v4
 
@@ -111,6 +136,7 @@ configuration looks like this:
     "timezone": "America/New_York"
   },
   "defaults": {
+    "library": "Default",
     "theme": "Example Church Theme",
     "background": "default",
     "days_ahead": 14,
@@ -136,28 +162,48 @@ configuration looks like this:
   "cue_roles": {
     "title": {
       "slide": "Information (Projectors)",
+      "text_slots": { "body": "Text" },
       "enter_macro": "Name Tag/Title"
     },
     "scripture_prayer": {
       "slide": "Scripture (Projectors)",
+      "text_slots": { "body": "Scripture" },
       "enter_macro": "Scripture/Prayer"
     },
     "responsive_scripture_prayer": {
       "slide": "Scripture (Projectors) (Responsive)",
+      "text_slots": { "body": "Scripture" },
       "enter_macro": "Scripture/Prayer",
-      "all_content_colored_macro": "Scripture/Prayer (Highlighted)"
+      "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+      "speaker_colors": {
+        "leader": "#FEDB4F",
+        "audience": "#FFFFFF"
+      }
     }
   },
   "presentation_types": {
     "static_graphic": {
       "kind": "graphic",
       "content_source": "static",
-      "output_strategy": "use_existing"
+      "output_strategy": "preserve_existing"
     },
     "song": {
       "kind": "song",
       "content_source": "song",
-      "output_strategy": "use_existing"
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": {
+              "kind": "arrangement_group",
+              "index": 0,
+              "names": ["Background", "Blank"]
+            },
+            "enter_macro": "Song"
+          }
+        ]
+      }
     },
     "weekly_liturgy": {
       "kind": "liturgy",
@@ -208,9 +254,9 @@ configuration looks like this:
 The complete top-level contract contains:
 
 - `metadata`: descriptive project information.
-- `defaults`: default theme, background ID, lookahead window, expected
-  presentation size, and optional Bible translation for scripture items that
-  do not name one. Without an explicit item translation or
+- `defaults`: exact registered library, default theme, background ID,
+  lookahead window, expected presentation size, and optional Bible translation
+  for scripture items that do not name one. Without an explicit item translation or
   `defaults.bible_version`, scripture requires review.
 - `service_groups`: reusable sets of Planning Center service types.
 - `required_playlist_items`: exact reusable presentations that must occur once
@@ -226,7 +272,8 @@ The complete top-level contract contains:
   broader matches.
 - `people`: known-person and nametag metadata.
 - `overrides`: service-group, service-type, or presentation-type style
-  overrides.
+  overrides. Overlapping rules may set different fields or the same value, but
+  conflicting values for one field are rejected; array order is not policy.
 
 ### What Belongs In Config
 
@@ -243,6 +290,9 @@ Those choices belong in the reviewed preview override, which can select an
 exact file for that build without teaching the base config a historical
 exception. Unknowns and weak matches remain `needs_review`; ProFlow does not
 grow filename rules merely to avoid asking a human once.
+
+Object-valued config maps serialize in sorted key order. Candidate and backup
+diffs therefore reflect policy changes, not randomized map iteration.
 
 The live config therefore uses ordinary scripture generation as its durable
 rule. The former Jonah 4 exact-file exception was removed. A reviewed operator
@@ -286,6 +336,9 @@ Background precedence is:
 project default < presentation type < matching config override < one-off build override
 ```
 
+Matching config overrides must agree when they set the same field. Conflicting
+overlaps are invalid config rather than a hidden "last item wins" rule.
+
 The plan resolves the chosen ID to one relative file path before execution, so
 a second config lookup cannot change the policy decision. Preview binds the
 canonical image identity and its bytes. Rendering derives image metadata from
@@ -297,21 +350,38 @@ Background IDs are lowercase ASCII identifiers and may also contain digits,
 `_`, and `-`. Paths must be normal relative paths with a `.jpg`, `.jpeg`,
 `.png`, `.tif`, or `.tiff` extension.
 
+The project bundle registers the approved lyrics/default and sermon images by
+stable IDs. Presentation policies choose those IDs; weekly plans never contain
+workstation-specific source paths.
+
 At startup and execution, a configured image must:
 
 - remain inside the canonical data root, including after symlink resolution;
 - be a regular, non-empty file;
-- have an image signature matching its extension.
+- fully decode as PNG, JPEG, or TIFF using the codec selected by its extension;
+  and
+- declare nonzero natural dimensions.
 
 A missing, empty, escaped, or mislabeled image is an error. ProFlow does not
 fall back to a similarly named file.
 
-When a reviewed plan uses a managed background, MCP and the direct build CLI
-default to a portable playlist package so the exact reviewed image bytes are
-included. `--library-local` is an explicit diagnostic choice for a package
-that depends on files already installed at their absolute local paths. This is
-why merely pointing at an image in config is not sufficient for a package that
-must move between workstations.
+MCP and the direct build CLI always default to a portable playlist package.
+Portable output contains the exact reviewed presentations and every local media
+dependency they still reference. `--library-local` is an explicit diagnostic
+choice for a same-workstation package containing only the playlist document and
+links to presentations already installed under the reviewed ProPresenter root.
+
+The normal release flow is: build and inspect canonical files in a safe copied
+show, then switch ProPresenter to the live show and import the approved portable
+playlist using its overwrite option. The package embeds those exact reviewed
+`.pro` bytes under their canonical filenames, so the import is the deliberate
+promotion step. `--library-local` is only for viewing a playlist against files
+already written into the currently active show.
+
+Portable review also inspects media inherited from every selected theme slide.
+Those files are canonicalized and their bytes are bound to the immutable
+preview revision before rendering; a missing, relative, or changed theme-media
+reference fails during preview instead of producing a late package surprise.
 
 ## Choosing Slides And Macros
 
@@ -320,22 +390,66 @@ A `cue_role` is the one reusable display contract:
 ```json
 "scripture_prayer": {
   "slide": "Scripture (Projectors)",
+  "text_slots": { "body": "Scripture" },
   "enter_macro": "Scripture/Prayer",
-  "all_content_colored_macro": "Scripture/Prayer (Highlighted)"
+  "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+  "speaker_colors": {
+    "leader": "#FEDB4F",
+    "audience": "#FFFFFF"
+  }
 }
 ```
 
 - `slide` is the exact theme-slide name used to render that region.
+- `text_slots` maps semantic fields to exact names of native text graphics.
+  The standard weekly composers write `body`; lower-level presentation specs
+  may bind any declared fields.
 - `enter_macro` is an optional exact installed macro name and runs when the
   operator enters the region.
-- `all_content_colored_macro` is an optional alternate selected when every
-  generated content segment is colored. It requires `enter_macro`.
+- `leader_enter_macro` is the exact alternate macro used when the first
+  semantic text run on a generated cue is leader/liturgist content. Audience-
+  first cues use `enter_macro`. It requires `enter_macro` and
+  `speaker_colors`.
+- `speaker_colors` records the editor colors for leader and audience text.
+  Macro choice comes from semantic speaker roles, never by comparing RGB
+  values. The production policy uses yellow for a leader and white for the
+  congregation. The two configured colors must differ so ProPresenter can
+  preserve the mixed-style distinction used by its Looks/themes behavior.
 
-A configured role slide must contain exactly one text-bearing graphics element
-and no embedded theme actions. Multiple text targets are ambiguous, while
-silently inheriting a theme action would make macro and media behavior invisible
-in config. Both conditions fail validation; cue actions must be named explicitly
-through the role and background contracts.
+Description parsing assigns those roles before layout: `LEADER` and ordinary
+leader-read prose are leader content; `ALL`, `PEOPLE`, and `UNISON` are audience
+content. Responsive blocks stay together with one blank line between responses
+when capacity allows. A catechism question and answer may share one content cue
+when both fit; otherwise the question is kept separate and the answer is packed
+with the normal text-flow policy. Fragmentation preserves speaker identity, so
+later cue macros remain deterministic even when one source paragraph spans
+several slides.
+
+A role without `text_slots` is the concise single-field form: its slide must
+have exactly one meaningful text destination. Empty unnamed helper elements are
+ignored, but two plausible destinations are ambiguous and fail. A role with
+`text_slots` can use a multi-field template safely because every semantic field
+targets one unique, exact native element name; element order and UUIDs are not
+used. The configured slide must also have no embedded theme actions. Cue actions
+remain explicit through the macro and background contracts.
+
+For example, a custom nametag template can expose independently named fields:
+
+```json
+"speaker_nametag": {
+  "slide": "Name Tag",
+  "text_slots": {
+    "body": "Speaker Name",
+    "role": "Speaker Role"
+  }
+}
+```
+
+The template must actually name those graphics elements in ProPresenter. ProFlow
+will not guess that element 2 means a person's name. The built-in title/nametag
+composer replaces `body`; an additional field such as `role` remains
+template-preserved until a source compiler explicitly supplies it through the
+same `PresentationSpec` boundary.
 
 A presentation type then chooses how roles map to cues.
 
@@ -363,11 +477,13 @@ Split display:
 
 The title cue uses the `title` role; subsequent content cues use the `content`
 role. A macro is attached to each cue where its actual rendered role begins.
-That is normally one title and one content entry; a combined scripture reading
-gets a fresh title/content transition for each passage. If rendering produces
-no title cue, no title macro is attached and the content macro starts on cue
-one. Macros represent region-entry state transitions, so they are not copied
-onto every slide in a region.
+That is normally one title and one content entry. Responsive content may add a
+new transition when a later slide changes between leader-first and audience-
+first content. A combined scripture reading gets a fresh title/content
+transition for each passage. If rendering produces no title cue, no title
+macro is attached and the content macro starts on cue one. Macros represent
+region-entry state transitions, so they are not copied onto every slide in a
+region.
 
 For newly rendered or edited presentations, the background is attached to the
 first operator-visible cue and macros mark the first cue entering each role.
@@ -382,32 +498,81 @@ semantics—not historical edit order—remain the stable contract.
 `defaults.presentation_size` is the project output invariant, normally
 1920×1080. Cue-role theme slides are checked against it at startup, every
 generated presentation is checked after rendering, and every selected existing
-presentation is audited during preview. A legacy 1280×720 file is not silently
-resized because changing only its slide bounds does not reproduce
-ProPresenter's UI behavior. Preview instead asks the operator to set the
-expected output first and then reapply the theme, in that order, before the
-file can be approved again.
+presentation is audited during preview. A uniform legacy canvas with the same
+aspect ratio is normalized by scaling slide bounds, element geometry, text
+metrics, and RTF font sizes together. Mixed, missing, invalid, or different-
+aspect-ratio canvases stop for review because they require layout judgment.
 
-`arrangement` is only valid for `use_existing`: it selects a named arrangement
-from a read-only library presentation when that file is placed in the playlist.
+One-off existing-file overrides cross the same boundary: their paths become
+canonical absolute `.pro` identities, their bytes must have native presentation
+identity, and a requested arrangement must match exactly one native
+arrangement. These checks happen before a preview revision is issued.
+
+`arrangement` is valid for operations with an existing native source.
+`preserve_existing` links the reviewed native source unchanged.
+`restyle_existing` captures the source bytes in the reviewed transaction,
+preserves its document identity, and applies a checked combination of three
+independent transforms: an explicit `background`, optional
+`macro_transitions`, and optional `operator_cue_limit`. At least one must be
+configured. Omitting one preserves that native property; a default background
+is never inherited implicitly at this boundary. This lets a graphic enforce
+its `Graphics` macro without replacing media, a baptism replace its background
+without destroying native speaker transitions, and a greeting retain only its
+first operator cue. A unique native `Default` is selected for songs when
+Planning Center does not supply a usable arrangement; ambiguity remains a
+review item.
 For songs, a presentation-type setting or matching service override wins;
-otherwise ProFlow uses the nonempty arrangement supplied by Planning Center.
-If none is supplied, the playlist item carries no selected arrangement. Once a
-song file is confidently matched, classification requires an exact,
-case-insensitive, unique native arrangement name with a valid UUID and retains
-the native casing. Missing, duplicate, or incomplete metadata requires human
-review and lists the available names instead of silently selecting a different
-arrangement. Because the existing file is not restyled, its arrangement does
-not participate in generated background or macro placement.
+otherwise ProFlow first uses an exact, case-insensitive Planning Center
+arrangement with complete native identity. If that request is absent or
+unavailable, one complete native `Default` is the deterministic fallback; a
+song with no native arrangements carries no selection. Explicitly configured,
+duplicate, ambiguous, or incomplete arrangements require human review and list
+the available names. Restyling does not regenerate song text or alternate
+arrangements. Cue trimming prunes dangling group and arrangement references
+atomically. Background and macro transforms otherwise leave cue/group
+structure intact. The reviewed arrangement is selected, and enforced macro
+actions replace macro actions only on the configured region entries in that
+selected operator traversal.
+
+`macro_transitions.regions` is an ordered, exact policy for existing files. Each
+region names the first cue where an installed macro must take effect:
+
+- `{"kind":"operator_cue","index":0}` addresses a cue by its zero-based
+  operator-visible position. Use this for a static presentation whose cue order
+  is the stable contract. When `operator_cue_limit` is configured, every
+  operator-cue index must be smaller than that limit because cue pruning runs
+  before macro enforcement.
+- `{"kind":"arrangement_group","index":1,"names":["Verse","Verse 1"]}`
+  addresses the first cue of the second selected-arrangement group occurrence.
+  Its native group name must exactly match one configured name. Use this for
+  songs, hymns, and other arrangement-driven presentations.
+
+The ordered regions express transitions, not per-slide decoration. A
+contemporary song therefore has one `Song` transition on its initial
+`Background` or `Blank` group. A hymn has `Name Tag/Title` on its initial
+`Background` or `Title` group and `Song` on its first `Verse` group. A mismatch,
+missing cue, repeated target, or unavailable installed macro stops for review;
+there is no visible-text or filename inference in the presentation rewrite.
 
 ## Scripture Packing And Labels
 
 Scripture rendering keeps the source verse number beside every text fragment.
-It greedily fills each slide to the configured or template-derived line budget,
-preferring punctuation boundaries (`; , . ? ! : —`) on the last usable visual
-line and falling back to the latest word boundary when a sentence has no useful
-break. Every produced slide satisfies the same estimated geometry bound used to
-pack it; source character order and verse provenance are regression-tested.
+A deterministic global partitioner evaluates every fitting boundary, caps each
+slide at seven estimated lines (or a lower configured/template limit), and
+prioritizes sentence, clause, and verse boundaries over a mid-sentence word
+break. It rejects tiny tails, favors nonincreasing front-loaded word counts,
+and may use an extra slide when that avoids an unnatural split. Every produced
+slide satisfies the same estimated geometry bound used to pack it; source
+character order and verse provenance are regression-tested.
+
+A single terminal partial reference such as `Exodus 16:1-4a` may use the
+Planning Center description to prove its exact endpoint. ProFlow compares the
+normalized numbered description against the selected local translation,
+accepts only one strict prefix that reaches the final requested verse, and then
+truncates the local verse at that matched token boundary. Missing text, changed
+wording, an earlier cutoff, the complete final verse, or non-prefix suffixes
+remain human review. The same predicate runs during review and again against
+captured Bible bytes during rendering.
 
 Only scripture content cues receive native slide-action labels. Labels include
 book, chapter, and the exact verses represented on that slide, for example
@@ -438,28 +603,60 @@ the generated-file boundary; filenames are not a second configuration system.
   edit target. A true one-off generated item uses its normalized Planning
   Center title. Normalization collisions require review rather than an invented
   `(2)` suffix.
+- Default playlist names use `<Month> <day>, <year> - <service>`. Service times
+  are compacted without punctuation: `9:00am contemporary` becomes
+  `July 12, 2026 - 9am Contemporary`, and `10:30am traditional` becomes
+  `July 12, 2026 - 1030am Traditional`.
 
 Rendered files use a small hybrid boundary. Installed theme slides supply the
 visual slide—geometry, text box, font, color, and layout. ProFlow constructs the
 fresh native Presentation/Cue/Action/Group protobuf envelope, replaces the text,
 and adds explicit configured macros and backgrounds. Checked-in files under
-`data/templates` are test fixtures only. Songs and other `use_existing` assets
-are not regenerated or restyled; their approved native bytes, groups, and
-arrangements are preserved.
+`tests/fixtures/propresenter/native/templates` are test fixtures only. Existing-
+source assets retain their approved native structure except for the explicit
+checked transforms selected by `restyle_existing`. Song restyling preserves
+document identity, lyrics, groups, and alternate arrangements while selecting
+the reviewed arrangement and applying only its configured background, macro,
+or cue operations.
+
+Internally, content compiles to a renderer-independent `PresentationSpec`: a
+nonempty sequence of groups and cues, where each cue names a semantic role,
+text-field bindings, and an optional label. Immutable render assets resolve each
+role to one reviewed theme slide and its named fields. The pure renderer then
+creates the native envelope and reports the actual role transitions used for
+macro placement. This is the extensibility point for new presentation styles;
+new source compilers produce specs instead of adding another protobuf-building
+path.
+
+The built-in weekly source compilers cover description/liturgy, title/nametag,
+and scripture content. The specification and renderer already support static
+cues, named groups, arbitrary semantic fields, multiple cue roles, and labels;
+adding another content family means compiling it into that same checked model,
+not adding another native serialization path.
 
 ## Song Groups And Macro Definitions
 
-Existing song presentations remain byte-preserved, including their cue groups,
-repeated arrangement group order, and macro actions. ProFlow does not currently
-create or rewrite song groups: the unused generic repair routine lacks the
-installed group's color, hotkey, and application-group binding and is therefore
-not part of the production workflow.
+Existing song presentations retain their cue groups and repeated arrangement
+group order. When a `restyle_existing` policy enforces macro transitions, it
+canonicalizes macro actions only at configured region boundaries and removes
+stale macro actions from the selected operator traversal; unselected
+arrangement-only cues remain untouched. For new named groups,
+ProFlow loads the workstation's native `Configuration/Groups` catalog and
+copies the exact installed color, hot key, application-group UUID, and name into
+a fresh presentation-local group. A named group absent from that exact catalog
+is an error; the renderer never emits a plausible-looking group with incomplete
+metadata. `catalog_assets` reports the installed names.
+It also reports each theme slide's exact named text slots, canvas size, default
+text-slot candidate count, embedded-action count, and any issue that prevents
+safe generation, so onboarding does not require protobuf inspection or guesses.
 
-Creating songs safely needs one deliberately reviewed native fixture containing
-every group type the church wants plus two arrangements with repeated groups.
-At that point a small installed-group catalog can copy exact local metadata and
-require explicit section assignments; unknown section names should require
-review rather than be guessed from lyrics.
+Automatic song creation still needs a reviewed source compiler that turns the
+church's Planning Center lyric notation into explicit section assignments and
+arrangement order. The right next corpus example is one song with every section
+type the church uses and at least two arrangements containing repeated groups.
+That proves the source-to-spec mapping; native group metadata itself already has
+one owner in the installed catalog. Unknown section names remain review items
+instead of being guessed from lyrics.
 
 Macro definitions remain owned by ProPresenter. Config references exact
 installed names, and presentations contain only native macro references. The
@@ -471,14 +668,15 @@ operator can inspect behavior without ProFlow duplicating macro authoring.
 
 | Strategy | Presentation behavior | Style contract |
 |---|---|---|
-| `use_existing` | Reuse a library presentation | Existing visuals are read-only. `display`, `background`, and `max_lines_per_slide` are invalid; an arrangement may be selected. |
+| `preserve_existing` | Reuse an explicitly exempt native presentation unchanged | Existing content is read-only. `display`, `background`, `macro_transitions`, `operator_cue_limit`, and line limits are invalid; an arrangement may be selected. |
+| `restyle_existing` | Atomically apply one checked native transform in the staging library | At least one of explicit `background`, `macro_transitions`, or `operator_cue_limit` is required; omitted dimensions are preserved. `display` and line limits are invalid; an arrangement may be selected. |
 | `edit_in_place` | Rebuild weekly content into an existing target | `display` is required, so rendering always uses an explicit installed-theme cue role. Background and line limit may be set. Arrangements are invalid. |
 | `generate_new` | Create a new presentation | `display` is required. Background and line limit may be set. Arrangements are invalid. |
 | `skip` | Produce no output | No rendering occurs. |
 | `needs_review` | Stop automatic resolution | The operator must choose an explicit outcome. |
 
-This separation is intentional: a `use_existing` song cannot appear to accept
-a macro or background that the runtime would ignore.
+This separation is intentional: an explicit `preserve_existing` exemption
+cannot appear to accept a macro or background that the runtime would ignore.
 
 ## Fail-Fast Config And Asset Validation
 
@@ -492,9 +690,10 @@ would be ambiguous to humans and across filesystems.
 
 The MCP server then loads one immutable runtime snapshot and verifies every
 configured cue-role slide, macro, and background against the local
-ProPresenter/data assets. If activation writes a new live config, restart the
-server so config, theme cache, macro cache, and file index all come from the same
-snapshot.
+ProPresenter/data assets. A successfully constructed runtime always owns a
+complete library index; there is no later "index not initialized" state. If
+activation writes a new live config, restart the server so config, theme cache,
+macro cache, group catalog, and file index all come from the same snapshot.
 
 ## MCP Server
 
@@ -548,7 +747,8 @@ operator surface.
 2. Run `catalog_assets`. If the starter has no theme yet, pass the exact intended
    `theme_name`; the tool loads that theme only for this discovery call and does
    not mutate the running snapshot. Review its exact slide names, installed
-   macros, configured backgrounds, and library files.
+   text-slot/canvas/action facts, macros and their actions, cue groups,
+   configured backgrounds, and library files.
 3. Run `fetch_plan` for representative services and inspect the real titles,
    categories, scripture metadata, speakers, and service-type names.
 4. Author one complete v4 config from those facts. Give each reusable image a
@@ -574,21 +774,30 @@ operator surface.
 
 `preview_playlist` resolves the plan title, date, and service type from Planning
 Center; an optional caller-supplied `service_name` is only an exact assertion
-and a mismatch is rejected. `build_service` atomically consumes a matching
-revision before it performs build side effects. A revision is therefore
-one-time even when the build fails: run `preview_playlist` again before every
-retry. Missing, stale, and mismatched revisions are rejected without consuming
-the current preview. The revision privately owns the final playlist identity,
-effective skips/overrides, package mode, media set, classified plans, and source
-snapshot; `build_service` cannot add replacements afterward. Approved
-presentation, Bible, background, and portable-media bytes are carried into
-rendering and packaging. Every presentation target and the final playlist are
-also reviewed as exactly present-with-bytes or absent; a file that appears,
-disappears, or changes before staging is not overwritten. Sources and targets
-are checked again before commit, so drift requires a new preview. Use the stable
-`output_key` from preview results for skips and overrides. Keys are derived from
+and a mismatch is rejected. A fully resolved preview renders every presentation,
+constructs the playlist package, prepares the future library-catalog update,
+and seals the exact staged bytes before it returns a revision. Source payloads
+exist only during this preparation; the revision retains their hashes, the
+classified plans, final playlist identity, package policy, and sealed native
+artifacts. An unresolved preview retains only diagnostic plans and cannot be
+executed.
+
+`build_service` atomically consumes a matching revision before committing it. A
+revision is therefore one-time even when commit fails: run `preview_playlist`
+again before every retry. Missing, stale, and mismatched revisions are rejected
+without consuming the current preview. Immediately before commit, ProFlow
+revalidates source hashes, the reviewed present/absent state of every output,
+and the hashes of all staged artifacts. A file that appears, disappears, or
+changes is not overwritten. Preview also rejects duplicate physical write
+targets, symlink outputs, and any cross-entry source/output overlap after
+one-off overrides have been applied. Use the stable `output_key` from preview
+results for skips and overrides. Keys are derived from
 the Planning Center item ID plus the expansion step, never its mutable service
 position.
+
+Planning Center item order comes from each item's required `attributes.sequence`,
+not HTTP response or pagination order. Missing, invalid, or duplicate sequences
+reject the source plan instead of producing a plausibly ordered playlist.
 
 The filesystem does not offer a portable compare-and-rename primitive. ProFlow
 rechecks each target immediately before replacement and rolls back its own
@@ -618,16 +827,24 @@ Decision files use registered background IDs, not categories or file paths:
   "overrides": [
     {
       "output_key": "pco:12346:main",
-      "background": "communion"
+      "action": {
+        "kind": "set_background",
+        "background": "communion"
+      }
     },
     {
       "output_key": "pco:12347:main",
-      "arrangement": "Christmas Eve"
+      "action": {
+        "kind": "select_arrangement",
+        "arrangement": "Christmas Eve"
+      }
     },
     {
       "output_key": "pco:12348:main",
-      "action": "use_existing",
-      "file_path": "/reviewed/library/Jonah 4.pro",
+      "action": {
+        "kind": "use_existing",
+        "file_path": "/reviewed/library/Jonah 4.pro"
+      },
       "playlist_name": "Jonah 4",
       "slide_type": "scripture"
     }
@@ -643,34 +860,50 @@ execution then validates the resolved file with the same rules as MCP builds.
 
 ## Architecture
 
-The code follows one directional boundary:
+The code follows compiler-like, one-directional boundaries:
 
 ```text
-Planning Center IO
-    -> project_config + workflow classification
-    -> resolved plan decisions and source paths
-    -> ProPresenter render/reuse
-    -> validation + playlist/package export
+RawProjectConfig -> validate/compile ProjectConfig ┐
+Planning Center JSON -> strict domain normalization ├-> classify semantic actions
+installed assets -> immutable exact-name catalogs  ┘
+    -> bind one reviewed request/source/output snapshot
+    -> compile PresentationSpec or reuse approved native bytes
+    -> render/package -> validate -> seal exact native artifacts
+    -> operator approval -> revalidate -> transactional commit
 ```
 
-- `src/project_config.rs` owns the single v4 contract and semantic validation.
-- `src/workflow/` owns classification, preview state, and execution.
+- `src/project_config/` owns the v4 wire schema and its immutable checked
+  runtime form; `src/project_config.rs` is only its public facade. Storage
+  deserializes editable `RawProjectConfig`, validation compiles it into
+  `ProjectConfig`, and workflow code accepts only the latter.
+- `src/workflow/` owns classification, semantic actions, reviewed state,
+  presentation-spec compilation, and execution.
 - `src/propresenter/` owns ProPresenter parsing, rendering, arrangements,
-  macros, backgrounds, and serialization.
+  checked text flow, macros, backgrounds, and serialization.
 - `src/setup/` reports installed and configured asset facts; it does not analyze
   plans or author hidden runtime behavior.
 - `src/mcp/` is a thin operator adapter over config and workflow.
-- `src/planning_center/` owns Planning Center API behavior.
+- `src/planning_center/` separates HTTP/retry/pagination behavior from strict
+  JSON-to-domain normalization. Missing identities, titles, dates, or declared
+  song relationships are errors rather than invented placeholder values.
 
 The important state has one owner: the project config names reusable policy and
-assets, the reviewed plan freezes classification decisions, source bytes,
-canonical backgrounds, portable-media bytes, and present/absent output state,
-and the executor owns file side effects. Rendering and packaging consume those
-reviewed bytes directly. Host layers do not maintain a shadow copy of runtime
-state.
+assets; source payloads belong to preview preparation and become a hash-only
+manifest afterward; the reviewed filesystem transaction owns both original
+output state and sealed staged artifacts; and the executor alone commits file
+side effects. Rendering and packaging consume captured source bytes directly
+before approval. Host layers do not maintain a shadow copy of runtime state.
+
+Filesystem discovery also occurs once. `BuildLocations` resolves the project
+bundle, library, outputs, theme directory, macro and cue-group documents, and
+ProPresenter root at process startup. `RenderAssetSnapshot` then binds those
+locations, the compiled project config, and the exact loaded theme/macro
+catalogs into one value. Middle phases receive that checked snapshot and never
+fall back to the current directory, reread environment variables, or combine
+assets loaded for a different config.
 
 Native producer metadata has one source as well. At startup, ProFlow reads the
-current `Playlists/Library` document associated with `LIBRARY_DIR`. New playlist
+current `Playlists/Library` document under the active ProPresenter show. New playlist
 documents and newly saved presentations receive that current application and
 platform metadata; an older theme file is never treated as the producer.
 
@@ -694,10 +927,17 @@ valid raw UTF-8 bytes before falling back to ZIP's legacy filename decoding.
 
 Repeated playlist items that reference the same source share one embedded
 presentation member, matching native packages. Selected arrangements carry both
-their UUID and exact native display name. Portable media discovery traverses
-cue actions, prop slides, nested playback-marker actions, chord charts, and both
-legacy and v2 timeline actions; the reviewed workflow packages captured bytes,
-not a second read of live media paths.
+their UUID and exact native display name. Portable dependency discovery uses one
+visitor across cue actions, presentation and prop slides, nested playback-marker
+actions, chord charts, graphics and text-run media fills, data-link files,
+external-presentation actions, media file properties, and both legacy and v2
+timeline actions. Intentional remote web/RSS content is not mistaken for a local
+package asset. The reviewed workflow packages captured bytes, not a second read
+of live media paths. Its media set is derived from the final embedded
+presentation bytes, so an entry background removed by restyling is not
+exported. Shared final media is embedded once, and explicitly requested media
+that no final presentation uses is rejected instead of becoming unexplained
+package state.
 
 Nested playlist exports use the same `.proplaylist` package format as a single
 playlist. `PlaylistSet` owns one or more checked `NamedPlaylist` children and a
@@ -709,8 +949,9 @@ to 26 embedded `.pro` files.
 The reconstructed April playlist fixtures are labelled as ProFlow
 materializations, not independent native exports. They remain diagnostic and
 expose legacy defects such as incomplete arrangement metadata and pre-native ZIP
-ordering; they are not counted as parity proof. `data/test.proplaylist` is the
-checked-in independent native package used to prove reconstruction compatibility,
+ordering; they are not counted as parity proof. The checked-in
+`tests/fixtures/propresenter/native/corpus/playlists/native-template-library.proplaylist`
+package is the independent native export used to prove reconstruction compatibility,
 and the parity smoke harness must reconstruct it successfully.
 Portable media packaging uses the canonical absolute source path observed in
 native exports and rejects unresolved dependencies. Relocatable import behavior
@@ -736,6 +977,7 @@ just ci
 just deep
 just parity
 just parity-corpus ~/Desktop
+just parity-library ~/Documents/ProPresenter/Libraries/Default
 just pco-smoke
 ```
 
@@ -744,7 +986,9 @@ Use the narrowest relevant command while debugging, then rerun the enclosing
 focused `just parity` gate covers byte-exact codecs and independent native
 package reconstruction. `just parity-corpus <directory>` additionally audits a
 local, read-only directory of independent exports; it is intentionally not part
-of `just deep` because that corpus is machine-specific. `just pco-smoke` is the
+of `just deep` because that corpus is machine-specific. `just parity-library`
+does the same for an installed presentation library and raw playlist document.
+`just pco-smoke` is the
 explicit live-network gate: it runs the Planning Center integration tests
 serially and requires valid credentials, while the deterministic gates only
 compile those tests.

@@ -90,7 +90,7 @@ pub(crate) fn has_native_document_identity(presentation: &rv_data::Presentation)
             .is_some_and(|uuid| !uuid.string.trim().is_empty())
 }
 
-/// Errors that can occur when reading `ProPresenter` files
+/// Errors that can occur when reading or decoding `ProPresenter` files.
 #[derive(Error, Debug)]
 pub enum ProPresenterError {
     /// The specified file was not found
@@ -113,6 +113,28 @@ pub enum ProPresenterError {
         /// Detected on-disk format.
         format: PresentationFileFormat,
     },
+}
+
+/// Decode bytes only when they carry the identity required of a native
+/// `ProPresenter` presentation.
+///
+/// Protobuf decoding alone is not a format check: unrelated or nearly-empty
+/// messages can decode successfully because unknown and absent fields are
+/// legal. Every in-memory byte boundary should use this function rather than
+/// calling `prost::Message::decode` directly.
+pub(crate) fn decode_presentation_bytes(
+    data: &[u8],
+    source_label: &str,
+) -> Result<rv_data::Presentation, ProPresenterError> {
+    let format = detect_presentation_file_format(data);
+    if format != PresentationFileFormat::NativePresentation {
+        return Err(ProPresenterError::UnsupportedFormat {
+            path: source_label.to_string(),
+            format,
+        });
+    }
+
+    Ok(rv_data::Presentation::decode(data)?)
 }
 
 /// Read a `ProPresenter` file and return the deserialized presentation
@@ -152,18 +174,7 @@ pub fn read_presentation_file(
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let format = detect_presentation_file_format(&buffer);
-    if format != PresentationFileFormat::NativePresentation {
-        return Err(ProPresenterError::UnsupportedFormat {
-            path: path.display().to_string(),
-            format,
-        });
-    }
-
-    // The format gate above proves this is a decodable, identified document.
-    let presentation = rv_data::Presentation::decode(&buffer[..])?;
-
-    Ok(presentation)
+    decode_presentation_bytes(&buffer, &path.display().to_string())
 }
 
 #[cfg(test)]
@@ -172,14 +183,11 @@ mod tests {
 
     use super::*;
     use crate::propresenter::generated::rv_data::action;
-    use std::io::Write;
     use std::path::PathBuf;
 
     fn get_example_path(filename: &str) -> PathBuf {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("data");
-        path.push("examples");
-        path.push("propresenter");
+        path.push("tests/fixtures/propresenter/native/examples");
         path.push(filename);
         path
     }
@@ -274,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_read_amazing_grace() {
-        let path = get_example_path("[Hymn] Amazing Grace.pro");
+        let path = get_example_path("hymn-amazing-grace.pro");
         let result = read_presentation_file(&path);
 
         match result {
@@ -368,16 +376,11 @@ mod tests {
 
     #[test]
     fn test_read_simple_presentation() {
-        let path = get_example_path("Tom Nametag.pro");
+        let path = get_example_path("title-nametag.pro");
         let result = read_presentation_file(&path);
 
         assert!(result.is_ok(), "Failed to read presentation file");
         let presentation = result.unwrap();
-
-        // Save the raw presentation struct to a file for analysis
-        if let Ok(mut file) = File::create("test_output_tom_nametag.txt") {
-            writeln!(file, "{presentation:#?}").expect("Failed to write presentation debug output");
-        }
 
         // Basic presentation properties
         assert_eq!(presentation.name, "Tom Nametag");
@@ -496,17 +499,11 @@ mod tests {
 
     #[test]
     fn test_read_bible_verse() {
-        let path = get_example_path("Titus 2v11-13 (NRSVue).pro");
+        let path = get_example_path("scripture-titus-2v11-13-nrsvue.pro");
         let result = read_presentation_file(&path);
 
         match result {
             Ok(presentation) => {
-                // Save the raw presentation struct to a file for analysis
-                if let Ok(mut file) = File::create("test_output_bible_verse.txt") {
-                    writeln!(file, "{presentation:#?}")
-                        .expect("Failed to write presentation debug output");
-                }
-
                 // Basic presentation properties
                 assert!(
                     presentation.name.contains("Titus"),

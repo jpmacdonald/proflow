@@ -120,6 +120,12 @@ parity-corpus corpus_dir:
     PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_exported_playlist_documents_round_trip_byte_exactly -- --ignored --exact --nocapture
     PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test --test propresenter_native_export native_export_corpus_matches_evidenced_archive_and_media_shape -- --ignored --exact --nocapture
 
+# Audit a workstation library and its raw playlist document in place. The
+# tests are read-only and deliberately stay outside deterministic CI.
+parity-library library_dir:
+    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_native_presentations_round_trip_byte_exactly -- --ignored --exact --nocapture
+    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_playlist_document_round_trips_byte_exactly -- --ignored --exact --nocapture
+
 # Fast local gate for active editing.
 local: fmt check clippy test
 

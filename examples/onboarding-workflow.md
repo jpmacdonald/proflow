@@ -6,7 +6,11 @@ This is the intended setup loop for a new church or a fresh install.
 2. Run `catalog_assets` to inspect exact theme-slide names, installed macros, configured backgrounds, and library files. If the starter config has no theme, pass the intended exact `theme_name`; this loads it only for that discovery call and does not change runtime state.
 3. Run `fetch_plan` for representative services and inspect their real titles, categories, scripture metadata, speakers, and service-type names.
 4. Copy `starter-config.json` and author one complete v4 config from those facts.
-5. Register each reusable image under `backgrounds` and each semantic slide/macro pair under `cue_roles`. Use `arrangement` only on `use_existing` presentations; rendered and edited presentations do not accept it.
+5. Register each approved reusable image under `backgrounds` and each semantic
+   slide/macro pair under `cue_roles`. Map `text_slots.body` to the exact named
+   native text element when a theme slide has multiple possible fields. Use
+   `arrangement` only on `preserve_existing` or `restyle_existing`
+   presentations; rendered and edited presentations do not accept it.
 6. Write a candidate with `write_project_config` and `activate: false`. The tool reloads the configured theme and installed macros and validates every cue-role slide, macro, and background before any file is written.
 7. Review the complete candidate and activate it with `write_project_config` and `activate: true`.
 8. Restart the MCP server so config and validated ProPresenter asset-name caches share one runtime snapshot.

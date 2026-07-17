@@ -2,13 +2,13 @@
 //!
 //! Usage: `cargo run --bin dump_plans [-- --days 60] [--past]`
 
-#![allow(clippy::expect_used, clippy::uninlined_format_args)]
+#![allow(clippy::uninlined_format_args)]
 
 use proflow::config::Config;
 use proflow::planning_center::api::PlanningCenterClient;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let days: i64 = args
         .iter()
@@ -18,19 +18,13 @@ async fn main() {
         .unwrap_or(60);
     let past = args.iter().any(|arg| arg == "--past");
 
-    let config = Config::load().expect("Failed to load config");
-    let client = PlanningCenterClient::new(&config);
+    let config = Config::load()?;
+    let client = PlanningCenterClient::new(&config)?;
 
     let (services, plans) = if past {
-        client
-            .get_recent_services(days)
-            .await
-            .expect("Failed to fetch recent services")
+        client.get_recent_services(days).await?
     } else {
-        client
-            .get_upcoming_services(days)
-            .await
-            .expect("Failed to fetch upcoming services")
+        client.get_upcoming_services(days).await?
     };
 
     println!("=== Services ({}) ===", services.len());
@@ -96,4 +90,6 @@ async fn main() {
         }
         println!();
     }
+
+    Ok(())
 }

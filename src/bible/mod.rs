@@ -1,12 +1,16 @@
 //! Bible verse lookup and scripture reference parsing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+mod excerpt;
+
+pub use excerpt::{reconcile_prefix_excerpt, ScriptureExcerptError};
 
 /// Supported Bible versions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -133,6 +137,74 @@ pub struct ScriptureRef {
 
 /// Bible data structure: Book -> Chapter -> Verse -> Text
 type BibleData = HashMap<String, HashMap<String, HashMap<String, String>>>;
+
+/// Failure to validate the translation corpora in one project data bundle.
+#[derive(Debug, thiserror::Error)]
+pub enum BibleCorpusError {
+    /// A corpus file could not be read.
+    #[error("failed to read {version} corpus at {}: {source}", path.display())]
+    Read {
+        /// Translation assigned to the file.
+        version: &'static str,
+        /// Exact corpus path.
+        path: PathBuf,
+        /// Filesystem failure.
+        source: std::io::Error,
+    },
+    /// A corpus file is not valid Bible JSON.
+    #[error("invalid {version} corpus at {}: {source}", path.display())]
+    Parse {
+        /// Translation assigned to the file.
+        version: &'static str,
+        /// Exact corpus path.
+        path: PathBuf,
+        /// JSON failure.
+        source: serde_json::Error,
+    },
+    /// Two translation labels point at identical source text.
+    #[error("Bible corpora for {first} and {second} are byte-identical; translation identity is ambiguous")]
+    DuplicateTranslation {
+        /// First translation using the bytes.
+        first: &'static str,
+        /// Conflicting translation using the same bytes.
+        second: &'static str,
+    },
+}
+
+/// Validate every installed Bible corpus and reject duplicate translation
+/// identities.
+///
+/// Missing files are allowed because a project may install only the
+/// translations it uses. A requested version is checked separately at the
+/// reviewed-source boundary. Every file that is present must parse and must
+/// not be mislabeled as a second byte-identical translation.
+pub fn validate_bible_corpora(root: &std::path::Path) -> Result<(), BibleCorpusError> {
+    let mut hashes = BTreeMap::<[u8; 32], &'static str>::new();
+    for version in BibleVersion::all() {
+        let path = root.join(version.file_name());
+        if !path.exists() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(|source| BibleCorpusError::Read {
+            version: version.name(),
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_slice::<BibleData>(&bytes).map_err(|source| BibleCorpusError::Parse {
+            version: version.name(),
+            path,
+            source,
+        })?;
+        let hash: [u8; 32] = Sha256::digest(&bytes).into();
+        if let Some(first) = hashes.insert(hash, version.name()) {
+            return Err(BibleCorpusError::DuplicateTranslation {
+                first,
+                second: version.name(),
+            });
+        }
+    }
+    Ok(())
+}
 
 struct CachedBibleData {
     source_sha256: [u8; 32],
@@ -379,16 +451,17 @@ fn strip_heading_suffix(rest: &str) -> &str {
 fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
     // Normalize en-dash/em-dash to ASCII hyphen (PCO often uses typographic dashes)
     let text = text.replace(['\u{2013}', '\u{2014}'], "-");
-    // Handle "v" notation (e.g., "Luke 2v1-20")
-    let text = text.replace('v', ":");
 
     // Find where the chapter:verse starts (look for digits followed by colon)
     let mut parts = text.rsplitn(2, |c: char| c.is_whitespace());
     let verse_part = parts.next()?;
     let book_part = parts.next()?.trim();
 
-    // Parse chapter:verse-verse pattern
-    let (chapter_str, verse_range) = verse_part.split_once(':')?;
+    // Parse chapter:verse-verse or chapter-v-verse notation. Only the final
+    // numeric token owns this delimiter; a `v` inside a book name is content.
+    let (chapter_str, verse_range) = verse_part
+        .split_once(':')
+        .or_else(|| verse_part.split_once('v'))?;
     let chapter: u32 = chapter_str.parse().ok()?;
 
     let (start_verse, end_verse) = if verse_range.contains('-') {
@@ -568,7 +641,7 @@ impl BibleService {
 }
 
 /// A single verse with its number and plain text content.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verse {
     /// 1-based verse number.
     pub number: u32,
@@ -687,6 +760,30 @@ mod tests {
     }
 
     #[test]
+    fn every_canonical_book_name_parses_without_rewriting_its_letters() {
+        let books = BOOK_ALIASES
+            .values()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for book in books {
+            let parsed = parse_scripture_ref(&format!("{book} 1:1"))
+                .unwrap_or_else(|| panic!("canonical book {book:?} must parse"));
+            assert_eq!(parsed.book, book);
+        }
+    }
+
+    #[test]
+    fn verse_letter_notation_is_limited_to_the_reference_token() {
+        let parsed = parse_scripture_ref("Leviticus 2v11-13").expect("v notation");
+
+        assert_eq!(parsed.book, "Leviticus");
+        assert_eq!(parsed.chapter, 2);
+        assert_eq!(parsed.start_verse, 11);
+        assert_eq!(parsed.end_verse, Some(13));
+    }
+
+    #[test]
     fn test_superscript() {
         assert_eq!(to_superscript(15), "¹⁵");
         assert_eq!(to_superscript(1), "¹");
@@ -747,5 +844,44 @@ mod tests {
 
         assert_eq!(first[0].text, "old text");
         assert_eq!(second[0].text, "new text");
+    }
+
+    #[test]
+    fn corpus_validation_rejects_duplicate_translation_labels() {
+        let root = tempfile::tempdir().expect("temporary Bible root");
+        let bytes = bible_source("same mislabeled text");
+        std::fs::write(root.path().join(BibleVersion::NRSVue.file_name()), &bytes)
+            .expect("write first corpus");
+        std::fs::write(root.path().join(BibleVersion::NRSV.file_name()), &bytes)
+            .expect("write duplicate corpus");
+
+        let error = validate_bible_corpora(root.path())
+            .expect_err("duplicate translation bytes must be rejected");
+
+        assert!(matches!(
+            error,
+            BibleCorpusError::DuplicateTranslation {
+                first: "NRSVue",
+                second: "NRSV"
+            }
+        ));
+    }
+
+    #[test]
+    fn corpus_validation_rejects_malformed_installed_data() {
+        let root = tempfile::tempdir().expect("temporary Bible root");
+        std::fs::write(
+            root.path().join(BibleVersion::NRSVue.file_name()),
+            b"not json",
+        )
+        .expect("write malformed corpus");
+
+        assert!(matches!(
+            validate_bible_corpora(root.path()),
+            Err(BibleCorpusError::Parse {
+                version: "NRSVue",
+                ..
+            })
+        ));
     }
 }

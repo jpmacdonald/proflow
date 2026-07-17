@@ -5,6 +5,7 @@
 
 /// API client for Planning Center Online requests
 pub mod api;
+mod normalize;
 /// Data types representing Planning Center resources
 pub mod types;
 

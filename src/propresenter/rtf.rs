@@ -4,9 +4,6 @@
 //! All text generation flows through `StyledSegment` — a block of text with
 //! an optional color override. Plain text is just a segment with `color: None`.
 
-// Allow unwrap for compile-time constant regex patterns in LazyLock blocks
-#![allow(dead_code, clippy::unwrap_used)]
-
 use std::fmt::Write;
 
 /// Superscript digit characters for detection
@@ -44,6 +41,8 @@ pub struct RtfOptions {
     pub cocoa_rtf_version: u32,
     /// Font name (default: Helvetica)
     pub font_name: String,
+    /// RTF font-family category copied from the selected template font.
+    pub font_family: RtfFontFamily,
     /// Font size in points (default: 80)
     pub font_size: u32,
     /// Text color RGB (default: white)
@@ -58,11 +57,62 @@ pub struct RtfOptions {
     pub paragraph_controls: String,
 }
 
+/// Font-family categories encoded by an RTF font-table entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtfFontFamily {
+    /// No declared family.
+    Nil,
+    /// Serif or Roman family.
+    Roman,
+    /// Sans-serif or Swiss family.
+    Swiss,
+    /// Fixed-width family.
+    Modern,
+    /// Script family.
+    Script,
+    /// Decorative family.
+    Decorative,
+    /// Technical or symbol family.
+    Technical,
+    /// Bidirectional family.
+    Bidirectional,
+}
+
+impl RtfFontFamily {
+    const fn control_word(self) -> &'static str {
+        match self {
+            Self::Nil => "fnil",
+            Self::Roman => "froman",
+            Self::Swiss => "fswiss",
+            Self::Modern => "fmodern",
+            Self::Script => "fscript",
+            Self::Decorative => "fdecor",
+            Self::Technical => "ftech",
+            Self::Bidirectional => "fbidi",
+        }
+    }
+
+    fn from_control_word(value: &str) -> Option<Self> {
+        match value {
+            "fnil" => Some(Self::Nil),
+            "froman" => Some(Self::Roman),
+            "fswiss" => Some(Self::Swiss),
+            "fmodern" => Some(Self::Modern),
+            "fscript" => Some(Self::Script),
+            "fdecor" => Some(Self::Decorative),
+            "ftech" => Some(Self::Technical),
+            "fbidi" => Some(Self::Bidirectional),
+            _ => None,
+        }
+    }
+}
+
 impl Default for RtfOptions {
     fn default() -> Self {
         Self {
             cocoa_rtf_version: 2821,
             font_name: "Helvetica".to_string(),
+            font_family: RtfFontFamily::Swiss,
             font_size: 80,
             color: (255, 255, 255), // White
             kerning: 5,
@@ -83,7 +133,7 @@ impl Default for RtfOptions {
 /// This is the universal primitive for slide text. Every slide is built
 /// from segments. Segments with `color: None` use the template's default.
 /// Multiple segments on the same slide can have different colors (e.g.,
-/// white for LEADER and yellow for ALL in a responsive reading).
+/// the theme baseline for LEADER and white for ALL in a responsive reading).
 #[derive(Debug, Clone, Default)]
 pub struct StyledSegment {
     /// The text content of this segment.
@@ -149,7 +199,8 @@ pub fn segments_to_rtf(segments: &[StyledSegment], options: &RtfOptions) -> Stri
 
     // Font table
     let font_name = &options.font_name;
-    let _ = write!(rtf, r"{{\fonttbl\f0\fswiss\fcharset0 {font_name};}}");
+    let font_family = options.font_family.control_word();
+    let _ = write!(rtf, r"{{\fonttbl\f0\{font_family}\fcharset0 {font_name};}}");
     rtf.push('\n');
 
     // Color table: ;auto; base(1); base(2); extra(3)...
@@ -308,94 +359,10 @@ fn write_rtf_char(rtf: &mut String, c: char) {
 // RTF extraction / parsing
 // ---------------------------------------------------------------------------
 
-/// Extract RTF options from existing RTF data.
-///
-/// Parses RTF to extract font name, size, and color settings.
-/// Used to match the style of an existing template.
-#[allow(clippy::unnecessary_wraps)] // Returns None for future invalid-input cases
-pub fn extract_rtf_options(rtf_data: &[u8]) -> Option<RtfOptions> {
-    let rtf = String::from_utf8_lossy(rtf_data);
+mod style;
 
-    let mut options = RtfOptions::default();
-
-    if let Some(version) = regex::Regex::new(r"\\cocoartf(\d+)")
-        .ok()
-        .and_then(|re| re.captures(&rtf))
-        .and_then(|captures| captures.get(1))
-        .and_then(|value| value.as_str().parse::<u32>().ok())
-    {
-        options.cocoa_rtf_version = version;
-    }
-
-    if let Some(paragraph_controls) = regex::Regex::new(r"(?m)(\\pard[^\r\n{}]*)")
-        .ok()
-        .and_then(|re| re.captures(&rtf))
-        .and_then(|captures| captures.get(1))
-        .map(|value| value.as_str().trim_end().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        options.paragraph_controls = paragraph_controls;
-    }
-
-    // Extract font name from fonttbl
-    if let Some(font_match) = regex::Regex::new(r"\\f0\\fswiss\\fcharset0 ([^;]+);")
-        .ok()
-        .and_then(|re| re.captures(&rtf))
-    {
-        options.font_name = font_match
-            .get(1)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_default();
-    }
-
-    // Extract font size (half-points)
-    if let Some(size_match) = regex::Regex::new(r"\\fs(\d+)")
-        .ok()
-        .and_then(|re| re.captures(&rtf))
-    {
-        if let Some(size_str) = size_match.get(1) {
-            if let Ok(half_points) = size_str.as_str().parse::<u32>() {
-                options.font_size = half_points / 2;
-            }
-        }
-    }
-
-    // Extract color from colortbl (first non-auto color)
-    if let Some(color_match) = regex::Regex::new(r"\\red(\d+)\\green(\d+)\\blue(\d+)")
-        .ok()
-        .and_then(|re| re.captures(&rtf))
-    {
-        let r = color_match
-            .get(1)
-            .and_then(|m| m.as_str().parse().ok())
-            .unwrap_or(255);
-        let g = color_match
-            .get(2)
-            .and_then(|m| m.as_str().parse().ok())
-            .unwrap_or(255);
-        let b = color_match
-            .get(3)
-            .and_then(|m| m.as_str().parse().ok())
-            .unwrap_or(255);
-        options.color = (r, g, b);
-    }
-
-    // Extract kerning
-    if let Some(kern_match) = regex::Regex::new(r"\\expnd(-?\d+)")
-        .ok()
-        .and_then(|re| re.captures(&rtf))
-    {
-        if let Some(kern_str) = kern_match.get(1) {
-            options.kerning = kern_str.as_str().parse().unwrap_or(5);
-        }
-    }
-
-    // Detect bold/italic — present means on, absent or \b0/\i0 means off
-    options.bold = rtf.contains(r"\b ") || rtf.contains(r"\b\");
-    options.italic = rtf.contains(r"\i ") || rtf.contains(r"\i\");
-
-    Some(options)
-}
+pub use style::extract_rtf_options;
+pub(crate) use style::extract_text_options;
 
 /// Convert RTF data to plain text.
 ///
@@ -764,13 +731,68 @@ mod tests {
 {\colortbl;\red255\green255\blue255;}
 \pard\qc\sl240\slmult1\pardirnatural
 \f0\fs96 Old text}";
-        let options = extract_rtf_options(template).expect("extract native RTF options");
+        let options = extract_rtf_options(template);
 
         let regenerated = segments_to_rtf(&[StyledSegment::unstyled("New text")], &options);
 
         assert!(regenerated.contains("\\cocoartf2709"));
         assert!(regenerated.contains("\\pard\\qc\\sl240\\slmult1\\pardirnatural"));
         assert!(regenerated.contains("New text"));
+    }
+
+    #[test]
+    fn one_line_rtf0_paragraph_controls_do_not_capture_placeholder_text() {
+        let template = br"{\rtf0\ansi\ansicpg1252{\fonttbl\f0\fnil Helvetica;}{\colortbl;\red255\green255\blue255;}\pard\li0\fi0\ri0\qc\sb0\sa0\sl240\slmult1\slleading0\f0\b0\i0\fs160\cf1 Old placeholder}";
+
+        let options = extract_rtf_options(template);
+        let regenerated = segments_to_rtf(&[StyledSegment::unstyled("New text")], &options);
+
+        assert_eq!(
+            options.paragraph_controls,
+            r"\pard\li0\fi0\ri0\qc\sb0\sa0\sl240\slmult1\slleading0"
+        );
+        assert!(!regenerated.contains("Old placeholder"));
+        assert_eq!(rtf_to_text(&regenerated).as_deref(), Some("New text"));
+    }
+
+    fn assert_font_family_round_trip(control: &str, expected: RtfFontFamily) {
+        let template = format!(
+            r"{{\rtf0\ansi{{\fonttbl\f0\{control} Times New Roman;}}{{\colortbl;\red255\green255\blue255;}}\pard\f0\fs80\cf1 Text}}"
+        );
+
+        let options = extract_rtf_options(template.as_bytes());
+        let regenerated = segments_to_rtf(&[StyledSegment::unstyled("Replacement")], &options);
+
+        assert_eq!(options.font_family, expected);
+        assert!(regenerated.contains(&format!(r"\f0\{control}\fcharset0 Times New Roman;")));
+    }
+
+    #[test]
+    fn fnil_font_family_is_preserved() {
+        assert_font_family_round_trip("fnil", RtfFontFamily::Nil);
+    }
+
+    #[test]
+    fn froman_font_family_is_preserved() {
+        assert_font_family_round_trip("froman", RtfFontFamily::Roman);
+    }
+
+    #[test]
+    fn active_run_selects_a_non_first_color_table_entry() {
+        let template = br"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}{\colortbl;\red255\green0\blue0;\red12\green34\blue56;}\pard\f0\fs80\cf2 Visible text}";
+
+        let options = extract_rtf_options(template);
+
+        assert_eq!(options.color, (12, 34, 56));
+    }
+
+    #[test]
+    fn visible_control_word_owns_the_first_run_style() {
+        let template = br"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}{\colortbl;\red12\green34\blue56;\red200\green210\blue220;}\pard\f0\fs80\cf1\emdash\cf2 Later text}";
+
+        let options = extract_rtf_options(template);
+
+        assert_eq!(options.color, (12, 34, 56));
     }
 
     #[test]

@@ -6,6 +6,7 @@
     "notes": "MCP-first service build config"
   },
   "defaults": {
+    "library": "Default",
     "theme": "VPC Theme",
     "background": "default",
     "bible_version": "NRSVue",
@@ -15,18 +16,14 @@
     }
   },
   "backgrounds": {
-    "default": "backgrounds/default.png"
+    "default": "backgrounds/default.png",
+    "sermon": "backgrounds/sermon.png"
   },
   "service_groups": {
     "primary": {
       "service_types": [
         "9:00am contemporary",
         "10:30am traditional"
-      ]
-    },
-    "seasonal": {
-      "service_types": [
-        "Christmas Eve"
       ]
     }
   },
@@ -49,30 +46,45 @@
   "cue_roles": {
     "title": {
       "slide": "Information (Projectors)",
+      "text_slots": {
+        "body": "Text"
+      },
       "enter_macro": "Name Tag/Title"
     },
     "scripture_prayer": {
       "slide": "Scripture (Projectors)",
+      "text_slots": {
+        "body": "Scripture"
+      },
       "enter_macro": "Scripture/Prayer"
     },
     "responsive_scripture_prayer": {
       "slide": "Scripture (Projectors) (Responsive)",
+      "text_slots": {
+        "body": "Scripture"
+      },
       "enter_macro": "Scripture/Prayer",
-      "all_content_colored_macro": "Scripture/Prayer (Highlighted)"
+      "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+      "speaker_colors": {
+        "leader": "#FEDB4F",
+        "audience": "#FFFFFF"
+      }
     }
   },
   "presentation_types": {
     "static_graphic": {
       "kind": "graphic",
       "content_source": "static",
-      "output_strategy": "use_existing",
-      "description": "Reusable graphic presentation"
-    },
-    "person_nametag": {
-      "kind": "nametag",
-      "content_source": "static",
-      "output_strategy": "use_existing",
-      "description": "Static speaker nametag"
+      "output_strategy": "restyle_existing",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": { "kind": "operator_cue", "index": 0 },
+            "enter_macro": "Graphics"
+          }
+        ]
+      },
+      "description": "Graphic presentation: preserve native media/backgrounds and enforce Graphics on entry"
     },
     "content_nametag": {
       "kind": "nametag",
@@ -86,24 +98,171 @@
       "max_lines_per_slide": 4,
       "description": "Nametag-style slide with weekly content"
     },
+    "generated_content_nametag": {
+      "kind": "nametag",
+      "content_source": "description",
+      "description_parser": "content_nametag",
+      "output_strategy": "generate_new",
+      "display": {
+        "kind": "single",
+        "role": "title"
+      },
+      "max_lines_per_slide": 4,
+      "description": "One-off nametag-style slide generated from weekly content"
+    },
     "song": {
       "kind": "song",
       "content_source": "song",
-      "output_strategy": "use_existing",
-      "description": "Song or hymn from library; uses the Planning Center arrangement when supplied"
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": {
+              "kind": "arrangement_group",
+              "index": 0,
+              "names": ["Background", "Blank"]
+            },
+            "enter_macro": "Song"
+          }
+        ]
+      },
+      "description": "Contemporary song: blank/background entry runs Song; native lyrics and arrangement remain intact"
     },
-    "liturgical_static": {
+    "hymn": {
+      "kind": "song",
+      "content_source": "song",
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": {
+              "kind": "arrangement_group",
+              "index": 0,
+              "names": ["Background", "Title"]
+            },
+            "enter_macro": "Name Tag/Title"
+          },
+          {
+            "selector": {
+              "kind": "arrangement_group",
+              "index": 1,
+              "names": ["Verse", "Verse 1"]
+            },
+            "enter_macro": "Song"
+          }
+        ]
+      },
+      "description": "Hymn: title entry runs Name Tag/Title, then the first verse entry transitions to Song"
+    },
+    "title_static": {
+      "kind": "nametag",
+      "content_source": "static",
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "operator_cue_limit": 1,
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": { "kind": "operator_cue", "index": 0 },
+            "enter_macro": "Name Tag/Title"
+          }
+        ]
+      },
+      "description": "Single native title cue with the managed background"
+    },
+    "leader_liturgy_static": {
       "kind": "liturgy",
       "content_source": "static",
-      "output_strategy": "use_existing",
-      "description": "Reusable liturgical text"
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": { "kind": "operator_cue", "index": 0 },
+            "enter_macro": "Name Tag/Title"
+          },
+          {
+            "selector": { "kind": "operator_cue", "index": 1 },
+            "enter_macro": "Scripture/Prayer (Highlighted)"
+          }
+        ]
+      },
+      "description": "Native leader-read liturgy: title then highlighted text"
+    },
+    "audience_liturgy_static": {
+      "kind": "liturgy",
+      "content_source": "static",
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": { "kind": "operator_cue", "index": 0 },
+            "enter_macro": "Name Tag/Title"
+          },
+          {
+            "selector": { "kind": "operator_cue", "index": 1 },
+            "enter_macro": "Scripture/Prayer"
+          }
+        ]
+      },
+      "description": "Native audience-read liturgy: title then ordinary Scripture/Prayer"
+    },
+    "preserved_liturgy_static": {
+      "kind": "liturgy",
+      "content_source": "static",
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "description": "Native liturgy with managed background and its existing semantic macro transitions preserved"
+    },
+    "titled_song_static": {
+      "kind": "song",
+      "content_source": "static",
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": { "kind": "operator_cue", "index": 0 },
+            "enter_macro": "Name Tag/Title"
+          },
+          {
+            "selector": { "kind": "operator_cue", "index": 1 },
+            "enter_macro": "Song"
+          }
+        ]
+      },
+      "description": "Arrangementless native song with a title cue followed by lyrics"
     },
     "doxology_with_prayer": {
-      "kind": "liturgy",
+      "kind": "song",
       "content_source": "static",
-      "output_strategy": "use_existing",
+      "output_strategy": "restyle_existing",
+      "background": "default",
       "arrangement": "& Prayer of Dedication",
-      "description": "Doxology followed by the Prayer of Dedication"
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": {
+              "kind": "arrangement_group",
+              "index": 0,
+              "names": ["Group"]
+            },
+            "enter_macro": "Name Tag/Title"
+          },
+          {
+            "selector": {
+              "kind": "arrangement_group",
+              "index": 1,
+              "names": ["Verse"]
+            },
+            "enter_macro": "Song"
+          }
+        ]
+      },
+      "description": "Doxology title and lyrics from the native '& Prayer of Dedication' arrangement; prayer text is intentionally not displayed"
     },
     "liturgical_edited": {
       "kind": "liturgy",
@@ -131,6 +290,19 @@
       "max_lines_per_slide": 8,
       "description": "One-off liturgical text generated from weekly description"
     },
+    "liturgical_audience_generated": {
+      "kind": "liturgy",
+      "content_source": "description",
+      "description_parser": "liturgical_audience",
+      "output_strategy": "generate_new",
+      "display": {
+        "kind": "split",
+        "title": "title",
+        "content": "responsive_scripture_prayer"
+      },
+      "max_lines_per_slide": 8,
+      "description": "Audience-read liturgy generated from weekly description"
+    },
     "scripture": {
       "kind": "scripture",
       "content_source": "scripture",
@@ -140,7 +312,21 @@
         "title": "title",
         "content": "scripture_prayer"
       },
+      "max_lines_per_slide": 7,
       "description": "Scripture slides generated from Bible data"
+    },
+    "sermon_title": {
+      "kind": "nametag",
+      "content_source": "description",
+      "description_parser": "content_nametag",
+      "output_strategy": "generate_new",
+      "display": {
+        "kind": "single",
+        "role": "title"
+      },
+      "background": "sermon",
+      "max_lines_per_slide": 4,
+      "description": "Sermon title generated from the Planning Center item title"
     }
   },
   "people": {
@@ -167,16 +353,13 @@
   },
   "item_rules": [
     {
-      "id": "sermon_manual_only",
+      "id": "sermon_title",
       "match": {
         "title_prefix": [
           "sermon"
         ]
       },
-      "action": {
-        "kind": "skip",
-        "reason": "Sermon slides are added manually after ProFlow builds"
-      }
+      "use_type": "sermon_title"
     },
     {
       "id": "skip_benediction",
@@ -219,17 +402,10 @@
           "#356 come, thou fount of every blessing"
         ]
       },
-      "use_type": "song",
+      "use_type": "hymn",
       "target": {
         "library_file": "[Hymn] Come, Thou Fount of Every Blessing.pro"
       }
-    },
-    {
-      "id": "all_songs",
-      "match": {
-        "category": "song"
-      },
-      "use_type": "song"
     },
     {
       "id": "scripture",
@@ -269,11 +445,10 @@
       "id": "greeting_one_another",
       "match": {
         "title_prefix": [
-          "greeting",
-          "greeting one another"
+          "greeting"
         ]
       },
-      "use_type": "liturgical_static",
+      "use_type": "title_static",
       "target": {
         "library_file": "Greeting.pro"
       }
@@ -296,7 +471,7 @@
         "on_ambiguous": "ask",
         "choices": {
           "him": {
-            "use_type": "liturgical_static",
+            "use_type": "preserved_liturgy_static",
             "file": "Baptism Him.pro",
             "match": {
               "any": [
@@ -315,7 +490,7 @@
             }
           },
           "her": {
-            "use_type": "liturgical_static",
+            "use_type": "preserved_liturgy_static",
             "file": "Baptism Her.pro",
             "match": {
               "any": [
@@ -333,7 +508,7 @@
             }
           },
           "them": {
-            "use_type": "liturgical_static",
+            "use_type": "preserved_liturgy_static",
             "file": "Baptism Them.pro",
             "match": {
               "any": [
@@ -356,7 +531,7 @@
           "#579 gloria patri"
         ]
       },
-      "use_type": "liturgical_static",
+      "use_type": "titled_song_static",
       "target": {
         "library_file": "Gloria Patri.pro"
       }
@@ -369,7 +544,7 @@
           "heidelberg confession q1"
         ]
       },
-      "use_type": "liturgical_static",
+      "use_type": "preserved_liturgy_static",
       "target": {
         "library_file": "Heidleberg Chatechism - Question 1.pro"
       }
@@ -382,7 +557,7 @@
           "apostles creed"
         ]
       },
-      "use_type": "liturgical_static",
+      "use_type": "audience_liturgy_static",
       "target": {
         "library_file": "Apostles Creed.pro"
       }
@@ -444,11 +619,11 @@
       },
       "expand": [
         {
-          "use_type": "person_nametag",
+          "use_type": "title_static",
           "speaker": "resolved"
         },
         {
-          "use_type": "liturgical_static",
+          "use_type": "leader_liturgy_static",
           "target": {
             "library_file": "Prayer and The Lord's Prayer.pro"
           }
@@ -464,7 +639,7 @@
       },
       "expand": [
         {
-          "use_type": "person_nametag",
+          "use_type": "title_static",
           "speaker": "resolved"
         },
         {
@@ -494,7 +669,7 @@
           "affirmation of faith"
         ]
       },
-      "use_type": "liturgical_generated"
+      "use_type": "liturgical_audience_generated"
     },
     {
       "id": "responsive_reading",
@@ -521,7 +696,7 @@
           "unison prayer"
         ]
       },
-      "use_type": "liturgical_generated"
+      "use_type": "liturgical_audience_generated"
     },
     {
       "id": "childrens_message",
@@ -542,7 +717,7 @@
           "moment for mission"
         ]
       },
-      "use_type": "content_nametag"
+      "use_type": "generated_content_nametag"
     },
     {
       "id": "music_prelude",
@@ -601,7 +776,7 @@
           "welcome of new members"
         ]
       },
-      "use_type": "liturgical_static",
+      "use_type": "preserved_liturgy_static",
       "target": {
         "library_file": "New Member Recognition.pro"
       }
@@ -615,7 +790,7 @@
       },
       "expand": [
         {
-          "use_type": "person_nametag",
+          "use_type": "title_static",
           "speaker": "resolved"
         },
         {
@@ -625,6 +800,23 @@
           }
         }
       ]
+    },
+    {
+      "id": "traditional_hymns",
+      "match": {
+        "category": "song",
+        "service_type": ["10:30am traditional"]
+      },
+      "use_type": "hymn",
+      "notes": "Fallback for otherwise-unclassified traditional congregational songs; named exceptions and choir rules must remain above it"
+    },
+    {
+      "id": "all_songs",
+      "match": {
+        "category": "song"
+      },
+      "use_type": "song",
+      "notes": "Final fallback for otherwise-unclassified songs"
     }
   ],
   "overrides": []

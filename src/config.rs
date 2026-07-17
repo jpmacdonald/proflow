@@ -43,9 +43,4 @@ impl Config {
 
         Ok(config)
     }
-
-    /// Check if `Planning Center` is configured
-    pub const fn has_planning_center_credentials(&self) -> bool {
-        !self.pco_app_id.is_empty() && !self.pco_secret.is_empty()
-    }
 }

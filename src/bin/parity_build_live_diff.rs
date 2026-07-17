@@ -12,20 +12,18 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use proflow::bible::BibleService;
 use proflow::config::Config;
-use proflow::paths::{find_data_subdir, project_config_path};
+use proflow::paths::{BuildLocationInputs, BuildLocations};
 use proflow::planning_center::api::PlanningCenterClient;
-use proflow::project_config::{load_project_config, validate_project_config};
+use proflow::project_config::load_project_config;
+use proflow::propresenter::library::LibraryCatalog;
 use proflow::propresenter::live::{materialize_live_playlist, LivePlaylistMaterializeReport};
-use proflow::propresenter::macros::MacroCache;
 use proflow::propresenter::package::{
     compare_playlist_items_aligned, compare_playlist_packages, embedded_presentation_structures,
     infer_package_mode, presentation_items, read_playlist_package, EmbeddedPresentationStructure,
     PlaylistItemAlignedDiff, PlaylistItemSummary, PlaylistPackageComparison, PlaylistPackageMode,
 };
 use proflow::propresenter::playlist::PlaylistMetadata;
-use proflow::propresenter::template::ThemeCache;
-use proflow::utils::file_index::FileIndex;
-use proflow::workflow::execute::{BuildRequest, ServiceBuildExecutor};
+use proflow::workflow::execute::{BuildRequest, RenderAssetSnapshot, ServiceBuildExecutor};
 use proflow::workflow::report::BuildServiceResult;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -111,55 +109,46 @@ async fn run() -> Result<ParityBuildLiveDiffReport> {
     } = prepare_shadow_library(&root, &work_dir)?;
 
     let config = Config::load().context("load environment config")?;
-    if !config.has_planning_center_credentials() {
-        anyhow::bail!("Planning Center credentials are not configured");
-    }
+    let locations = BuildLocations::from_inputs(BuildLocationInputs {
+        project_data_root: BuildLocations::discover_project_data_root()?,
+        presentation_library: generated_library_dir.clone(),
+        playlist_output: playlist_output_dir.clone(),
+        propresenter_root: root.clone(),
+        themes: root.join("Themes"),
+        macros: root.join("Configuration/Macros"),
+    })?;
+    let mappings = load_project_config(locations.project_config())
+        .with_context(|| format!("load {}", locations.project_config().display()))?;
 
-    let mappings_path = project_config_path();
-    let mappings = load_project_config(&mappings_path)
-        .with_context(|| format!("load {}", mappings_path.display()))?;
-    let validation_issues = validate_project_config(&mappings);
-    if !validation_issues.is_empty() {
-        anyhow::bail!(
-            "project config has validation issues: {}",
-            serde_json::to_string_pretty(&validation_issues)
-                .unwrap_or_else(|_| format!("{validation_issues:?}"))
-        );
-    }
-
-    let pco_client = PlanningCenterClient::new(&config);
-    let bible_service = Arc::new(Mutex::new(BibleService::new(find_data_subdir("bibles"))));
-    let file_index = Arc::new(Mutex::new(Some(
-        FileIndex::build(&generated_library_dir)
-            .with_context(|| format!("index shadow library {}", generated_library_dir.display()))?,
+    let pco_client =
+        PlanningCenterClient::new(&config).context("initialize Planning Center HTTP client")?;
+    let bible_service = Arc::new(Mutex::new(BibleService::new(
+        locations.project_data_root().join("bibles"),
     )));
-    let template_cache = ThemeCache::load(mappings.defaults.theme.as_deref())?;
-    let macro_cache = MacroCache::load_default()?;
-    let playlist_metadata = PlaylistMetadata::read_from_library_dir(&root)?;
+    let file_index = Arc::new(Mutex::new(
+        LibraryCatalog::build(&generated_library_dir)
+            .with_context(|| format!("index shadow library {}", generated_library_dir.display()))?,
+    ));
+    let playlist_metadata = PlaylistMetadata::read_from_propresenter_root(&root)?;
+    let render_assets = RenderAssetSnapshot::load(mappings, locations)?;
     let executor = ServiceBuildExecutor::new(
         &pco_client,
         &bible_service,
         &file_index,
-        &template_cache,
-        &macro_cache,
+        &render_assets,
         &playlist_metadata,
-        Some(&playlist_output_dir),
-        Some(&generated_library_dir),
     );
 
     let build = executor
-        .build_service(
-            &BuildRequest {
-                plan_id,
-                service_name: Some(service_name),
-                playlist_name: Some(live_playlist_name.clone()),
-                skip_output_keys: Vec::new(),
-                overrides: Vec::new(),
-                playlist_package_mode: PlaylistPackageMode::LibraryLocal,
-                media_assets: Vec::new(),
-            },
-            &mappings,
-        )
+        .build_service(&BuildRequest {
+            plan_id,
+            service_name: Some(service_name),
+            playlist_name: Some(live_playlist_name.clone()),
+            skip_output_keys: Vec::new(),
+            overrides: Vec::new(),
+            playlist_package_mode: PlaylistPackageMode::LibraryLocal,
+            media_assets: Vec::new(),
+        })
         .await
         .context("build service from PCO plan")?;
 

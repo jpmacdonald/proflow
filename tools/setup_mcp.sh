@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the ProFlow MCP server and configure it for Claude Code.
+# Build the ProFlow MCP server and write a repository-local MCP configuration.
 #
 # Usage:
 #   ./tools/setup_mcp.sh          # build + configure
@@ -58,11 +58,11 @@ check_credentials() {
 
 write_mcp_config() {
     local binary_path="$PROJECT_DIR/target/release/$BINARY_NAME"
-    local library_dir="${LIBRARY_DIR:-}"
+    local propresenter_dir="${PROPRESENTER_DIR:-}"
 
     # Credentials intentionally stay in the process environment or the ignored
     # .env file. Never persist them in a repository-local MCP configuration.
-    python3 - "$MCP_CONFIG" "$binary_path" "$PROJECT_DIR" "$library_dir" <<'PY'
+    python3 - "$MCP_CONFIG" "$binary_path" "$PROJECT_DIR" "$propresenter_dir" <<'PY'
 import json
 import os
 import pathlib
@@ -72,11 +72,11 @@ import tempfile
 target = pathlib.Path(sys.argv[1])
 binary_path = sys.argv[2]
 project_dir = pathlib.Path(sys.argv[3])
-library_dir = sys.argv[4]
+propresenter_dir = sys.argv[4]
 
 environment = {"PROFLOW_DATA": str(project_dir / "data")}
-if library_dir:
-    environment["LIBRARY_DIR"] = library_dir
+if propresenter_dir:
+    environment["PROPRESENTER_DIR"] = propresenter_dir
 
 config = {
     "mcpServers": {
@@ -177,6 +177,6 @@ case "${1:-}" in
         fi
         write_mcp_config
         echo ""
-        info "MCP server configured. Restart Claude Code to pick up the new server."
+    info "MCP server configured. Restart your MCP host to pick up the new server."
         ;;
 esac

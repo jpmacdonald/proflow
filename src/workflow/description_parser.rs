@@ -6,31 +6,133 @@
 
 use serde::Serialize;
 
-use super::classify::strip_speaker;
+use super::classify_matching::strip_speaker;
 use crate::project_config::DescriptionParserKind;
-use crate::propresenter::rtf::StyledSegment;
+use crate::propresenter::text_flow::TextFlowSegment;
+/// Semantic speaker for one parsed text run.
+///
+/// Runtime macros and editor colors are selected from this role. They are
+/// deliberately not inferred from one another.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeakerRole {
+    /// Content with no liturgical speaker semantics, such as a nametag.
+    #[default]
+    Neutral,
+    /// A liturgist, pastor, or other person leading from the stage.
+    Leader,
+    /// Congregational participation (`ALL`, `PEOPLE`, or `UNISON`).
+    Audience,
+}
 
-/// Banana yellow used for congregational responses (ALL/PEOPLE lines).
-const YELLOW: &str = "#FEDB4F";
+/// Packing behavior for parsed description content.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DescriptionFlow {
+    /// Ordinary paragraphs and responsive blocks maximize each slide.
+    #[default]
+    Prose,
+    /// Keep a catechism/affirmation question separate from its answer whenever
+    /// the combined content cannot fit on one slide.
+    QuestionAnswer,
+}
 
 /// A parsed segment of description text with formatting hints.
 #[derive(Debug, Clone, Serialize)]
 pub struct ParsedSegment {
     pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub speaker: SpeakerRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bold: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub italic: Option<bool>,
 }
 
+impl TextFlowSegment for ParsedSegment {
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    fn with_text(&self, text: String) -> Self {
+        let mut fragment = self.clone();
+        fragment.text = text;
+        fragment
+    }
+}
+
 /// Result of parsing a description into slide content.
 #[derive(Debug, Clone, Serialize)]
 pub struct ParsedContent {
-    pub segments: Vec<ParsedSegment>,
+    segments: Vec<ParsedSegment>,
+    flow: DescriptionFlow,
+    #[serde(skip)]
+    question_answer_pairs: Vec<QuestionAnswerPair>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title_text: Option<String>,
+    title_text: Option<String>,
+}
+
+/// Checked segment boundaries for one explicit `Q.`/`A.` pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QuestionAnswerPair {
+    question_start: usize,
+    answer_start: usize,
+    end: usize,
+}
+
+impl QuestionAnswerPair {
+    /// First segment of the question block.
+    pub(crate) const fn question_start(self) -> usize {
+        self.question_start
+    }
+
+    /// First segment carrying the explicit answer marker.
+    pub(crate) const fn answer_start(self) -> usize {
+        self.answer_start
+    }
+
+    /// Exclusive end of this pair, before the next explicit question.
+    pub(crate) const fn end(self) -> usize {
+        self.end
+    }
+}
+
+impl ParsedContent {
+    /// Build parsed content and derive every Q/A boundary from explicit textual
+    /// markers. Callers cannot provide a contradictory flow classification.
+    pub(crate) fn new(segments: Vec<ParsedSegment>, title_text: Option<String>) -> Self {
+        let question_answer_pairs = explicit_question_answer_pairs(&segments);
+        let flow = if question_answer_pairs.is_empty() {
+            DescriptionFlow::Prose
+        } else {
+            DescriptionFlow::QuestionAnswer
+        };
+        Self {
+            segments,
+            flow,
+            question_answer_pairs,
+            title_text,
+        }
+    }
+
+    /// Return parsed text segments in source order.
+    pub fn segments(&self) -> &[ParsedSegment] {
+        &self.segments
+    }
+
+    /// Return the flow derived from explicit markers in the segments.
+    pub const fn flow(&self) -> DescriptionFlow {
+        self.flow
+    }
+
+    /// Return the checked explicit Q/A pairs used by the slide planner.
+    pub(crate) fn question_answer_pairs(&self) -> &[QuestionAnswerPair] {
+        &self.question_answer_pairs
+    }
+
+    /// Return the optional leading title text.
+    pub fn title_text(&self) -> Option<&str> {
+        self.title_text.as_deref()
+    }
 }
 
 /// Description content that cannot safely become operator-visible text.
@@ -70,7 +172,12 @@ pub fn parse_description(
     }
 
     let parsed = match parser {
-        DescriptionParserKind::Liturgical => parse_liturgical(description, item_title),
+        DescriptionParserKind::Liturgical => {
+            parse_liturgical(description, item_title, SpeakerRole::Leader)
+        }
+        DescriptionParserKind::LiturgicalAudience => {
+            parse_liturgical(description, item_title, SpeakerRole::Audience)
+        }
         DescriptionParserKind::ContentNametag => {
             Some(parse_content_nametag(description, item_title))
         }
@@ -113,7 +220,11 @@ fn is_unresolved_placeholder(text: &str) -> bool {
 // Liturgical parsing
 // ---------------------------------------------------------------------------
 
-fn parse_liturgical(description: &str, item_title: &str) -> Option<ParsedContent> {
+fn parse_liturgical(
+    description: &str,
+    item_title: &str,
+    default_speaker: SpeakerRole,
+) -> Option<ParsedContent> {
     let title_text = strip_speaker(item_title);
 
     // Strategy 1: responsive reading (Leader:/People: prefixes) — takes priority
@@ -125,42 +236,24 @@ fn parse_liturgical(description: &str, item_title: &str) -> Option<ParsedContent
 
     // Strategy 2: marker-based parsing ([SLIDE], [SLIDE/ALL], [no slide])
     if has_slide_markers(description) {
-        return parse_markers(description, &title_text);
+        return parse_markers(description, &title_text, default_speaker);
     }
 
-    // Strategy 3: plain text — all lines become default-colored segments
-    let lines: Vec<&str> = description
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    if lines.is_empty() {
+    // Strategy 3: plain text. Source newlines are soft wraps; only an empty
+    // line or a semantic Q./A. transition starts another paragraph.
+    let segments = parse_plain_liturgical(description, default_speaker);
+    if segments.is_empty() {
         return None;
     }
 
-    let segments = lines
-        .iter()
-        .map(|line| ParsedSegment {
-            text: (*line).to_string(),
-            color: None,
-            bold: None,
-            italic: None,
-        })
-        .collect();
-
-    Some(ParsedContent {
-        segments,
-        title_text: Some(title_text),
-    })
+    Some(ParsedContent::new(segments, Some(title_text)))
 }
 
-/// Check for [SLIDE], [SLIDE/ALL], or [no slide] markers.
+/// Check for slide-state markers used in Planning Center descriptions.
 fn has_slide_markers(description: &str) -> bool {
-    let upper = description.to_uppercase();
-    upper.contains("[SLIDE]")
-        || upper.contains("[SLIDE/ALL]")
-        || upper.contains("[NO SLIDE]")
-        || upper.contains("NO SLIDE]")
+    description.lines().any(|line| {
+        slide_marker(line).is_some() || is_non_slide_marker(line) || is_silent_marker(line)
+    })
 }
 
 /// Responsive reading leader prefixes (case-insensitive, with or without colon).
@@ -195,65 +288,189 @@ fn has_responsive_pattern(description: &str) -> bool {
 
 /// Parse marker-based descriptions.
 ///
-/// Scans for `[SLIDE/ALL]` and `[SLIDE]` markers. Content inside square brackets
-/// after `[SLIDE/ALL]` is extracted as yellow. Content after `[SLIDE]` uses
-/// default color. Lines with `[no slide]` or similar are skipped.
-fn parse_markers(description: &str, title_text: &str) -> Option<ParsedContent> {
+/// Scans for slide-state markers. A marker changes the state for its line and
+/// subsequent unmarked lines, matching Planning Center descriptions such as
+/// `[SLIDE just for the part below]` followed by the actual display text.
+fn parse_markers(
+    description: &str,
+    title_text: &str,
+    default_speaker: SpeakerRole,
+) -> Option<ParsedContent> {
+    #[derive(Clone, Copy)]
+    enum MarkerState {
+        Hidden,
+        Slide,
+        SlideAll,
+    }
+
     let mut segments: Vec<ParsedSegment> = Vec::new();
+    let mut state = MarkerState::Hidden;
+    let mut voice = None;
+    let mut starts_block = false;
 
     for line in description.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            continue;
-        }
-
-        let upper = trimmed.to_uppercase();
-
-        // Skip non-slide lines
-        if upper.contains("NO SLIDE]") || upper.contains("[SILENT") {
-            continue;
-        }
-
-        if upper.contains("[SLIDE/ALL]") {
-            let content = extract_bracketed_content(trimmed)
-                .or_else(|| extract_after_marker(trimmed, "[SLIDE/ALL]"));
-            if let Some(text) = content {
-                segments.push(ParsedSegment {
-                    text,
-                    color: Some(YELLOW.to_string()),
-                    bold: None,
-                    italic: None,
-                });
+            if !matches!(state, MarkerState::Hidden) {
+                push_separator(&mut segments);
+                starts_block = true;
             }
-        } else if upper.contains("[SLIDE]") {
-            let content = extract_bracketed_content(trimmed)
-                .or_else(|| extract_after_marker(trimmed, "[SLIDE]"));
-            if let Some(text) = content {
-                segments.push(ParsedSegment {
-                    text,
-                    color: None,
-                    bold: None,
-                    italic: None,
-                });
+            continue;
+        }
+
+        if is_non_slide_marker(trimmed) || is_silent_marker(trimmed) {
+            state = MarkerState::Hidden;
+            voice = None;
+            starts_block = false;
+            continue;
+        }
+
+        if let Some(marker) = slide_marker(trimmed) {
+            state = if marker.all {
+                MarkerState::SlideAll
+            } else {
+                MarkerState::Slide
+            };
+            voice = Some(if marker.all {
+                SpeakerRole::Audience
+            } else {
+                default_speaker
+            });
+            starts_block = true;
+            if let Some(text) = extract_after_slide_marker(trimmed, marker.end) {
+                push_liturgical_line(&mut segments, text, &mut voice, true);
+                starts_block = false;
+            }
+            continue;
+        }
+
+        match state {
+            MarkerState::Hidden => {}
+            MarkerState::Slide => {
+                push_liturgical_line(&mut segments, trimmed.to_string(), &mut voice, starts_block);
+                starts_block = false;
+            }
+            MarkerState::SlideAll => {
+                voice = Some(SpeakerRole::Audience);
+                push_liturgical_line(&mut segments, trimmed.to_string(), &mut voice, starts_block);
+                starts_block = false;
             }
         }
     }
+
+    trim_trailing_separators(&mut segments);
 
     if segments.is_empty() {
         return None;
     }
 
-    Some(ParsedContent {
-        segments,
-        title_text: Some(title_text.to_string()),
+    Some(ParsedContent::new(segments, Some(title_text.to_string())))
+}
+
+#[derive(Clone, Copy)]
+struct SlideMarker {
+    end: usize,
+    all: bool,
+}
+
+fn slide_marker(line: &str) -> Option<SlideMarker> {
+    let upper = line.to_ascii_uppercase();
+    let start = upper.find("[SLIDE")?;
+    let end = upper[start..].find(']')? + start + 1;
+    let marker = upper[start + 1..end - 1].trim();
+    let suffix = marker.strip_prefix("SLIDE")?;
+    if !suffix.is_empty() && !suffix.starts_with('/') && !suffix.starts_with(char::is_whitespace) {
+        return None;
+    }
+
+    let compact_suffix: String = suffix
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    Some(SlideMarker {
+        end,
+        all: compact_suffix.starts_with("/ALL"),
     })
+}
+
+fn is_non_slide_marker(line: &str) -> bool {
+    let upper = line.to_ascii_uppercase();
+    upper.contains("NO SLIDE]") || upper.contains("(NO SLIDE)")
+}
+
+fn is_silent_marker(line: &str) -> bool {
+    line.to_ascii_uppercase().contains("[SILENT")
+}
+
+fn extract_after_slide_marker(line: &str, marker_end: usize) -> Option<String> {
+    let rest = line[marker_end..]
+        .trim()
+        .trim_start_matches(['-', ':'])
+        .trim();
+    if rest.is_empty() {
+        return None;
+    }
+
+    let unwrapped = rest
+        .strip_prefix('[')
+        .and_then(|content| content.strip_suffix(']'))
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .unwrap_or(rest);
+    Some(unwrapped.to_string())
+}
+
+fn catechism_voice(text: &str) -> Option<SpeakerRole> {
+    let normalized = text.trim_start().to_ascii_lowercase();
+    if normalized.starts_with("q.") || normalized.starts_with("q:") {
+        Some(SpeakerRole::Leader)
+    } else if normalized.starts_with("a.") || normalized.starts_with("a:") {
+        Some(SpeakerRole::Audience)
+    } else {
+        None
+    }
+}
+
+fn push_liturgical_line(
+    segments: &mut Vec<ParsedSegment>,
+    text: String,
+    voice: &mut Option<SpeakerRole>,
+    starts_block: bool,
+) {
+    let explicit_voice = catechism_voice(&text);
+    if let Some(explicit_voice) = explicit_voice {
+        *voice = Some(explicit_voice);
+    }
+    push_prose_line(
+        segments,
+        text,
+        voice.unwrap_or(SpeakerRole::Leader),
+        starts_block || explicit_voice.is_some(),
+    );
+}
+
+fn parse_plain_liturgical(description: &str, default_speaker: SpeakerRole) -> Vec<ParsedSegment> {
+    let mut segments = Vec::new();
+    let mut voice = Some(default_speaker);
+
+    for line in description.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            push_separator(&mut segments);
+            continue;
+        }
+        push_liturgical_line(&mut segments, trimmed.to_string(), &mut voice, false);
+    }
+
+    trim_trailing_separators(&mut segments);
+    segments
 }
 
 /// Parse responsive reading descriptions (`Leader:`/`People:` format).
 ///
 /// Keeps `LEADER:`/`ALL:`/`PEOPLE:` cue prefixes in the output text.
-/// Groups content by blank-line-separated sections — each section becomes
-/// one slide (one `ParsedSegment` per cued line within the section).
+/// Source hard wraps stay inside their speaker block; speaker transitions and
+/// explicit blank lines remain separate paragraphs for the slide packer.
 /// Metadata lines (containing `[SLIDE]`, `Liturgist:`, etc.) are filtered out.
 fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent> {
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -263,7 +480,9 @@ fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent
     }
 
     let mut segments: Vec<ParsedSegment> = Vec::new();
-    let mut current_color: Option<String> = None;
+    // Display text before the first explicit response marker is led from the
+    // stage. Audience semantics must always be explicit.
+    let mut current_speaker = SpeakerRole::Leader;
     let mut previous_kind: Option<ResponsiveLineKind> = None;
 
     for line in description.lines() {
@@ -286,48 +505,27 @@ fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent
 
         if starts_with_any(&lower, LEADER_PREFIXES) {
             push_response_separator(&mut segments, previous_kind.is_some());
-            current_color = None;
-            segments.push(ParsedSegment {
-                text: trimmed.to_string(),
-                color: current_color.clone(),
-                bold: None,
-                italic: None,
-            });
+            current_speaker = SpeakerRole::Leader;
+            push_prose_line(&mut segments, trimmed.to_string(), current_speaker, true);
             previous_kind = Some(ResponsiveLineKind::Leader);
         } else if starts_with_any(&lower, CONGREGATION_PREFIXES) {
             push_response_separator(&mut segments, previous_kind.is_some());
-            current_color = Some(YELLOW.to_string());
-            segments.push(ParsedSegment {
-                text: trimmed.to_string(),
-                color: current_color.clone(),
-                bold: None,
-                italic: None,
-            });
+            current_speaker = SpeakerRole::Audience;
+            push_prose_line(&mut segments, trimmed.to_string(), current_speaker, true);
             previous_kind = Some(ResponsiveLineKind::Congregation);
         } else {
-            // Continuation line — inherit previous color
-            segments.push(ParsedSegment {
-                text: trimmed.to_string(),
-                color: current_color.clone(),
-                bold: None,
-                italic: None,
-            });
+            // A source hard wrap inherits the current speaker and paragraph.
+            push_prose_line(&mut segments, trimmed.to_string(), current_speaker, false);
         }
     }
 
-    // Trim trailing empty separators
-    while segments.last().is_some_and(|s| s.text.is_empty()) {
-        segments.pop();
-    }
+    trim_trailing_separators(&mut segments);
 
     if segments.is_empty() {
         return None;
     }
 
-    Some(ParsedContent {
-        segments,
-        title_text: Some(title_text.to_string()),
-    })
+    Some(ParsedContent::new(segments, Some(title_text.to_string())))
 }
 
 fn push_response_separator(segments: &mut Vec<ParsedSegment>, previous_kind_exists: bool) {
@@ -342,10 +540,44 @@ fn push_separator(segments: &mut Vec<ParsedSegment>) {
     }
     segments.push(ParsedSegment {
         text: String::new(),
-        color: None,
+        speaker: SpeakerRole::Neutral,
         bold: None,
         italic: None,
     });
+}
+
+fn push_prose_line(
+    segments: &mut Vec<ParsedSegment>,
+    text: String,
+    speaker: SpeakerRole,
+    starts_block: bool,
+) {
+    if !starts_block {
+        if let Some(paragraph) = segments
+            .last_mut()
+            .filter(|segment| !segment.text.is_empty() && segment.speaker == speaker)
+        {
+            paragraph.text.push(' ');
+            paragraph.text.push_str(&text);
+            return;
+        }
+    }
+
+    segments.push(ParsedSegment {
+        text,
+        speaker,
+        bold: None,
+        italic: None,
+    });
+}
+
+fn trim_trailing_separators(segments: &mut Vec<ParsedSegment>) {
+    while segments
+        .last()
+        .is_some_and(|segment| segment.text.is_empty())
+    {
+        segments.pop();
+    }
 }
 
 /// Check if a line starts with any of the given prefixes.
@@ -355,9 +587,8 @@ fn starts_with_any(lower: &str, prefixes: &[&str]) -> bool {
 
 /// Detect metadata/instruction lines that should not become slide content.
 fn is_metadata_line(line: &str) -> bool {
-    let upper = line.to_uppercase();
     // Lines with [SLIDE], [NO SLIDE], etc. are PCO cues
-    if upper.contains("[SLIDE]") || upper.contains("[NO SLIDE]") || upper.contains("[SILENT") {
+    if slide_marker(line).is_some() || is_non_slide_marker(line) || is_silent_marker(line) {
         return true;
     }
     // "Liturgist:" instruction lines (not the same as "Leader:")
@@ -388,10 +619,16 @@ fn parse_content_nametag(description: &str, item_title: &str) -> ParsedContent {
     };
 
     let mut segments: Vec<ParsedSegment> = Vec::new();
+    let display_lines = description
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('*'))
+        .collect::<Vec<_>>();
+    let display_description = display_lines.join(" ");
 
     // Parse description for composer/performer info.
     // Format: "Performer, Instrument / Composer / Arranger"
-    let raw_parts: Vec<String> = description
+    let raw_parts: Vec<String> = display_description
         .split('/')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -401,7 +638,7 @@ fn parse_content_nametag(description: &str, item_title: &str) -> ParsedContent {
         // Standard nametag: piece title from the item title, details from description
         segments.push(ParsedSegment {
             text: piece_title,
-            color: None,
+            speaker: SpeakerRole::Neutral,
             bold: None,
             italic: None,
         });
@@ -411,7 +648,7 @@ fn parse_content_nametag(description: &str, item_title: &str) -> ParsedContent {
             if !others.is_empty() {
                 segments.push(ParsedSegment {
                     text: others.join(" / "),
-                    color: None,
+                    speaker: SpeakerRole::Neutral,
                     bold: None,
                     italic: None,
                 });
@@ -419,7 +656,7 @@ fn parse_content_nametag(description: &str, item_title: &str) -> ParsedContent {
             if let Some(performer) = performer {
                 segments.push(ParsedSegment {
                     text: performer,
-                    color: None,
+                    speaker: SpeakerRole::Neutral,
                     bold: None,
                     italic: None,
                 });
@@ -427,25 +664,19 @@ fn parse_content_nametag(description: &str, item_title: &str) -> ParsedContent {
         }
     } else {
         // No colon in title — use description lines as content directly
-        let desc_lines: Vec<&str> = description
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect();
-
-        if desc_lines.is_empty() {
+        if display_lines.is_empty() {
             // Last resort: use stripped title
             segments.push(ParsedSegment {
                 text: strip_speaker(item_title),
-                color: None,
+                speaker: SpeakerRole::Neutral,
                 bold: None,
                 italic: None,
             });
         } else {
-            for line in desc_lines {
+            for line in display_lines {
                 segments.push(ParsedSegment {
                     text: line.to_string(),
-                    color: None,
+                    speaker: SpeakerRole::Neutral,
                     bold: None,
                     italic: None,
                 });
@@ -453,10 +684,40 @@ fn parse_content_nametag(description: &str, item_title: &str) -> ParsedContent {
         }
     }
 
-    ParsedContent {
-        segments,
-        title_text: None,
+    ParsedContent::new(segments, None)
+}
+
+fn explicit_question_answer_pairs(segments: &[ParsedSegment]) -> Vec<QuestionAnswerPair> {
+    let questions = segments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, segment)| {
+            (catechism_voice(&segment.text) == Some(SpeakerRole::Leader)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let mut pairs = Vec::new();
+    for (position, &question_start) in questions.iter().enumerate() {
+        let end = questions
+            .get(position + 1)
+            .copied()
+            .unwrap_or(segments.len());
+        let Some(search_start) = question_start.checked_add(1) else {
+            continue;
+        };
+        let answer_start = (search_start..end).find(|&index| {
+            segments.get(index).is_some_and(|segment| {
+                catechism_voice(&segment.text) == Some(SpeakerRole::Audience)
+            })
+        });
+        if let Some(answer_start) = answer_start {
+            pairs.push(QuestionAnswerPair {
+                question_start,
+                answer_start,
+                end,
+            });
+        }
     }
+    pairs
 }
 
 /// Split parts into performer (first entry with comma) and everything else.
@@ -477,320 +738,5 @@ fn split_performer_and_others(parts: &[String]) -> (Option<String>, Vec<String>)
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Extract content from inside square brackets in a line.
-///
-/// For a line like `[SLIDE/ALL] - [Precious Lord, the cross...]`, extracts
-/// "Precious Lord, the cross...".
-fn extract_bracketed_content(line: &str) -> Option<String> {
-    // Find the last set of square brackets (skip the marker itself)
-    let upper = line.to_uppercase();
-    let marker_end = upper
-        .find("[SLIDE/ALL]")
-        .map(|i| i + "[SLIDE/ALL]".len())
-        .or_else(|| upper.find("[SLIDE]").map(|i| i + "[SLIDE]".len()))?;
-
-    let rest = &line[marker_end..];
-
-    // Look for [content] in the rest
-    if let Some(start) = rest.find('[') {
-        if let Some(end) = rest[start..].find(']') {
-            let content = rest[start + 1..start + end].trim();
-            if !content.is_empty() {
-                return Some(content.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-/// Extract text after a marker like "[SLIDE]", stripping the marker and
-/// any leading separator.
-fn extract_after_marker(line: &str, marker: &str) -> Option<String> {
-    let upper = line.to_uppercase();
-    let pos = upper.find(&marker.to_uppercase())?;
-    let rest = line[pos + marker.len()..].trim();
-    let rest = rest.trim_start_matches('-').trim_start_matches(':').trim();
-    if rest.is_empty() {
-        return None;
-    }
-    Some(rest.to_string())
-}
-
-/// Convert `ParsedContent` segments into `StyledSegment` for RTF generation.
-pub fn to_styled_segments(parsed: &ParsedContent) -> Vec<StyledSegment> {
-    parsed
-        .segments
-        .iter()
-        .map(|seg| StyledSegment {
-            text: seg.text.clone(),
-            color: seg.color.as_deref().and_then(parse_hex_color),
-            bold: seg.bold,
-            italic: seg.italic,
-        })
-        .collect()
-}
-
-/// Parse a hex color string like "#FEDB4F" into RGB tuple.
-fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
-    let hex = s.strip_prefix('#').unwrap_or(s);
-    if hex.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some((r, g, b))
-}
-
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
-
-    use super::*;
-
-    #[test]
-    fn test_responsive_reading() {
-        let desc = "Leader: The Lord is my shepherd;\nPeople: I shall not want.\nLeader: He makes me lie down in green pastures.\nAll: He restores my soul.";
-        let result = parse_description(
-            desc,
-            "Call to Worship (Robert)",
-            DescriptionParserKind::Liturgical,
-        )
-        .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        assert_eq!(content.title_text.as_deref(), Some("Call to Worship"));
-        assert_eq!(content.segments.len(), 7);
-        // Leader lines keep prefix and have no color (white/default)
-        assert!(content.segments[0].text.starts_with("Leader:"));
-        assert!(content.segments[0].color.is_none());
-        // People/All lines keep prefix and are yellow
-        assert!(content.segments[1].text.is_empty());
-        assert!(content.segments[2].text.starts_with("People:"));
-        assert_eq!(content.segments[2].color.as_deref(), Some("#FEDB4F"));
-        assert!(content.segments[3].text.is_empty());
-        assert!(content.segments[6].text.starts_with("All:"));
-        assert_eq!(content.segments[6].color.as_deref(), Some("#FEDB4F"));
-    }
-
-    #[test]
-    fn test_marker_parsing() {
-        let desc = "[CONFESSION no slide] - If we say that we have no sin...\n[SLIDE/ALL] - [Precious Lord, the cross is ever before us...]\n[SILENT CONFESSION]\n[ASSURANCE no slide] - Rejoice!";
-        let result = parse_description(
-            desc,
-            "Prayer of Confession (Hope)",
-            DescriptionParserKind::Liturgical,
-        )
-        .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        assert_eq!(content.segments.len(), 1);
-        assert!(content.segments[0].text.contains("Precious Lord"));
-        assert_eq!(content.segments[0].color.as_deref(), Some("#FEDB4F"));
-    }
-
-    #[test]
-    fn unresolved_editorial_placeholders_are_typed_errors() {
-        for (description, title, parser, expected) in [
-            (
-                "[CONFESSION no slide] - introduction\n[SLIDE/ALL] - [insert prayer]\n[SILENT CONFESSION]",
-                "Prayer of Confession",
-                DescriptionParserKind::Liturgical,
-                "insert prayer",
-            ),
-            (
-                "[ADD TITLE]",
-                "Weekly Liturgy",
-                DescriptionParserKind::Liturgical,
-                "ADD TITLE",
-            ),
-            (
-                "[INSERT TRANSLATION]",
-                "Weekly Liturgy",
-                DescriptionParserKind::Liturgical,
-                "INSERT TRANSLATION",
-            ),
-            (
-                "[SLIDE] ___",
-                "Weekly Liturgy",
-                DescriptionParserKind::Liturgical,
-                "___",
-            ),
-            (
-                "Robert, Speaker",
-                "Offertory [ADD TITLE, COMPOSER LAST NAME]",
-                DescriptionParserKind::ContentNametag,
-                "Offertory [ADD TITLE, COMPOSER LAST NAME]",
-            ),
-        ] {
-            let error = parse_description(description, title, parser)
-                .expect_err("placeholder must not become parsed content");
-            assert_eq!(
-                error,
-                DescriptionParseError::UnresolvedPlaceholder(expected.to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn test_content_nametag() {
-        let desc = "Marilyn Shenenberger, Organ / Darwin Wolford / Eugene Butler";
-        let result = parse_description(
-            desc,
-            "Organ Prelude: Meditation with Aria",
-            DescriptionParserKind::ContentNametag,
-        )
-        .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        assert_eq!(content.segments[0].text, "Meditation with Aria");
-        assert!(content.title_text.is_none());
-    }
-
-    #[test]
-    fn test_to_styled_segments() {
-        let parsed = ParsedContent {
-            segments: vec![
-                ParsedSegment {
-                    text: "Hello".to_string(),
-                    color: None,
-                    bold: None,
-                    italic: None,
-                },
-                ParsedSegment {
-                    text: "World".to_string(),
-                    color: Some("#FEDB4F".to_string()),
-                    bold: Some(true),
-                    italic: None,
-                },
-            ],
-            title_text: None,
-        };
-        let styled = to_styled_segments(&parsed);
-        assert_eq!(styled.len(), 2);
-        assert!(styled[0].color.is_none());
-        assert_eq!(styled[1].color, Some((254, 219, 79)));
-        assert_eq!(styled[1].bold, Some(true));
-    }
-
-    #[test]
-    fn test_no_content_returns_none() {
-        let result = parse_description("", "Empty Item", DescriptionParserKind::Liturgical)
-            .expect("empty description should not be invalid");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_plain_text_fallback() {
-        let desc = "Grace and peace to you.\nIn Christ we are made whole.";
-        let result = parse_description(
-            desc,
-            "Affirmation of Faith",
-            DescriptionParserKind::Liturgical,
-        )
-        .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        assert_eq!(content.segments.len(), 2);
-        // Plain text has no color override
-        assert!(content.segments[0].color.is_none());
-    }
-
-    #[test]
-    fn test_short_prefix_no_false_positive() {
-        // "l:" and "p:" should NOT trigger responsive reading detection
-        let desc = "See the full color: blue.\nVisit url: example.com\nAll: together now.";
-        // Has "all:" but no "leader:" — should NOT be responsive
-        assert!(!has_responsive_pattern(desc));
-    }
-
-    #[test]
-    fn test_slide_all_without_brackets() {
-        let desc = "[SLIDE/ALL] Hear our prayer, O Lord.";
-        let result = parse_description(desc, "Prayer (Hope)", DescriptionParserKind::Liturgical)
-            .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        assert_eq!(content.segments.len(), 1);
-        assert!(content.segments[0].text.contains("Hear our prayer"));
-        assert_eq!(content.segments[0].color.as_deref(), Some("#FEDB4F"));
-    }
-
-    #[test]
-    fn test_content_nametag_no_colon() {
-        let desc = "Special offering for missions";
-        let result = parse_description(
-            desc,
-            "Giving of Tithes and Offerings",
-            DescriptionParserKind::ContentNametag,
-        )
-        .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        // Should use description content, not the full title
-        assert_eq!(content.segments[0].text, "Special offering for missions");
-    }
-
-    #[test]
-    fn test_responsive_without_colon() {
-        // "Leader " (space, no colon) should also work
-        let desc = "Leader The Lord is good.\nPeople We give thanks.";
-        let result = parse_description(
-            desc,
-            "Responsive Reading",
-            DescriptionParserKind::Liturgical,
-        )
-        .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        assert_eq!(content.segments.len(), 3);
-        // Prefixes kept in text
-        assert!(content.segments[0].text.starts_with("Leader"));
-        assert!(content.segments[0].color.is_none());
-        assert!(content.segments[1].text.is_empty());
-        assert!(content.segments[2].text.starts_with("People"));
-        assert_eq!(content.segments[2].color.as_deref(), Some("#FEDB4F"));
-    }
-
-    #[test]
-    fn test_responsive_filters_metadata() {
-        let desc = "Liturgist: Bill Ichord; Scripture/Liturgy [SLIDE]\nLEADER: The Lord reigns.\nALL: Let the earth rejoice.";
-        let result = parse_description(desc, "Call to Worship", DescriptionParserKind::Liturgical)
-            .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        // Metadata line filtered out, only LEADER and ALL remain
-        assert_eq!(content.segments.len(), 3);
-        assert!(content.segments[0].text.starts_with("LEADER:"));
-        assert!(content.segments[1].text.is_empty());
-        assert!(content.segments[2].text.starts_with("ALL:"));
-    }
-
-    #[test]
-    fn test_responsive_blank_line_separators() {
-        let desc = "LEADER: First section.\nALL: Response one.\n\nLEADER: Second section.\nALL: Response two.";
-        let result = parse_description(desc, "Call to Worship", DescriptionParserKind::Liturgical)
-            .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        // 4 content segments + separators between every response = 7
-        assert_eq!(content.segments.len(), 7);
-        assert!(content.segments[1].text.is_empty());
-        assert!(content.segments[3].text.is_empty());
-        assert!(content.segments[5].text.is_empty());
-    }
-
-    #[test]
-    fn test_responsive_inserts_separator_between_response_blocks() {
-        let desc = "LEADER: First section.\nALL: Response one.\nLEADER: Second section.\nALL: Response two.";
-        let result = parse_description(desc, "Call to Worship", DescriptionParserKind::Liturgical)
-            .expect("description should parse");
-        assert!(result.is_some());
-        let content = result.unwrap();
-        assert_eq!(content.segments.len(), 7);
-        assert!(content.segments[1].text.is_empty());
-        assert!(content.segments[3].text.is_empty());
-        assert!(content.segments[4].text.starts_with("LEADER: Second"));
-    }
-}
+mod tests;
