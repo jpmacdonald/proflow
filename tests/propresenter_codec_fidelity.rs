@@ -29,18 +29,10 @@ const NATIVE_PRESENTATION_FIXTURES: &[&str] = &[
 
 const NATIVE_PLAYLIST_PACKAGES: &[&str] = &[
     "tests/fixtures/propresenter/native/corpus/playlists/native-template-library.proplaylist",
+    "tests/fixtures/propresenter/native/corpus/playlists/native-easter-portable-media.proplaylist",
     "tests/fixtures/propresenter/native/corpus/playlists/2026-04-19-1030-traditional.proplaylist",
     "tests/fixtures/propresenter/native/corpus/playlists/2026-04-19-0900-contemporary.proplaylist",
 ];
-
-const NATIVE_PACKAGE_PRESENTATIONS: &[(&str, &[&str])] = &[(
-    "tests/fixtures/propresenter/native/corpus/playlists/native-template-library.proplaylist",
-    &[
-        "__template_info__.pro",
-        "__template_scripture__.pro",
-        "__template_song__.pro",
-    ],
-)];
 
 fn repository_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
@@ -116,6 +108,32 @@ fn read_zip_entry_at(path: &Path, entry_name: &str) -> Vec<u8> {
     bytes
 }
 
+fn read_packaged_presentations(relative_path: &str) -> Vec<(String, Vec<u8>)> {
+    let path = repository_path(relative_path);
+    let file = fs::File::open(&path)
+        .unwrap_or_else(|error| panic!("failed to open {}: {error}", path.display()));
+    let mut archive = zip::ZipArchive::new(file)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+    let mut presentations = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).expect("playlist archive entry");
+        let name = String::from_utf8_lossy(entry.name_raw()).into_owned();
+        if !Path::new(&name)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pro"))
+        {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .unwrap_or_else(|error| panic!("failed to read {name:?}: {error}"));
+        presentations.push((name, bytes));
+    }
+    presentations
+}
+
 #[test]
 fn graphics_point_preserves_explicit_negative_zero_x() {
     const WIRE_POINT: &[u8] = &[
@@ -150,9 +168,13 @@ fn packaged_playlist_documents_round_trip_byte_exactly() {
 
 #[test]
 fn packaged_presentations_round_trip_byte_exactly() {
-    for (package, presentations) in NATIVE_PACKAGE_PRESENTATIONS {
-        for presentation in *presentations {
-            let data = read_zip_entry(package, presentation);
+    for package in NATIVE_PLAYLIST_PACKAGES {
+        let presentations = read_packaged_presentations(package);
+        assert!(
+            !presentations.is_empty(),
+            "{package} contains no presentation fixtures"
+        );
+        for (presentation, data) in presentations {
             assert_exact_bytes::<rv_data::Presentation>(
                 &format!("{package}:{presentation}"),
                 &data,
@@ -320,23 +342,22 @@ fn live_exported_playlist_documents_round_trip_byte_exactly() {
                 continue;
             }
         };
-        if !package.document_round_trip_exact {
-            let encoded = package.document.encode_to_vec();
+        if !package.document_round_trip_is_exact() {
+            let encoded = package.document().encode_to_vec();
             failures.push(format!(
                 "{}: data input={} bytes, output={} bytes, first difference={:?}",
                 path.display(),
-                package.document_data.len(),
+                package.document_data().len(),
                 encoded.len(),
-                first_difference(&package.document_data, &encoded),
+                first_difference(package.document_data(), &encoded),
             ));
         }
         for file in package
-            .embedded_file_details
-            .iter()
+            .embedded_file_details()
             .filter(|file| file.is_presentation)
         {
             presentation_count += 1;
-            let Some(original) = package.embedded_file_data.get(&file.name) else {
+            let Some(original) = package.embedded_file(&file.name) else {
                 failures.push(format!(
                     "{}: missing retained bytes for {}",
                     path.display(),
@@ -344,7 +365,7 @@ fn live_exported_playlist_documents_round_trip_byte_exactly() {
                 ));
                 continue;
             };
-            let presentation = match rv_data::Presentation::decode(original.as_slice()) {
+            let presentation = match rv_data::Presentation::decode(original) {
                 Ok(presentation) => presentation,
                 Err(error) => {
                     failures.push(format!(

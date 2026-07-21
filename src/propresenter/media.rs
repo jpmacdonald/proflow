@@ -5,20 +5,88 @@ use std::path::{Path, PathBuf};
 
 use crate::propresenter::deserialize::{decode_presentation_bytes, ProPresenterError};
 use crate::propresenter::generated::rv_data::{
-    self, action, graphics, media, presentation, presentation_slide, slide, url,
+    self, action, graphics, media, presentation, presentation_slide, slide,
 };
+use crate::propresenter::native_url;
 
-/// A media file reference found inside a presentation.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+/// A checked media file reference found inside a presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaDependency {
+    locator: native_url::NativeFileLocator,
+}
+
+impl serde::Serialize for MediaDependency {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut fields = 1;
+        fields += usize::from(self.stored_absolute_path().is_some());
+        fields += usize::from(self.basename().is_some());
+        let mut dependency = serializer.serialize_struct("MediaDependency", fields)?;
+        dependency.serialize_field("source", self.source())?;
+        if let Some(path) = self.stored_absolute_path() {
+            dependency.serialize_field("path", path)?;
+        }
+        if let Some(basename) = self.basename() {
+            dependency.serialize_field("basename", basename)?;
+        }
+        dependency.end()
+    }
+}
+
+/// Checked filesystem state of a native media dependency.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MediaDependencyResolution {
+    /// The preferred native candidate exists as a regular file.
+    Available(PathBuf),
+    /// The locator is local, but none of its candidates currently exists.
+    Missing(PathBuf),
+    /// The native reference has no safe local candidate.
+    Unresolved,
+}
+
+impl MediaDependency {
     /// Original URL/path string stored in the presentation.
-    pub source: String,
-    /// Filesystem path when the source is a local `file://` URL.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
-    /// Filename portion, decoded when possible.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub basename: Option<String>,
+    #[must_use]
+    pub fn source(&self) -> &str {
+        self.locator.source()
+    }
+
+    /// Stored absolute path retained for diagnostics.
+    ///
+    /// Use [`Self::resolve`] when selecting bytes: the active show-relative
+    /// locator intentionally has precedence over this value.
+    #[must_use]
+    pub fn stored_absolute_path(&self) -> Option<&Path> {
+        self.locator.stored_absolute_path()
+    }
+
+    /// Final decoded path component, when one is available.
+    #[must_use]
+    pub fn basename(&self) -> Option<&str> {
+        self.locator.basename()
+    }
+
+    /// Resolve this dependency without collapsing missing and non-local states.
+    #[must_use]
+    pub fn resolve(&self, show_root: Option<&Path>) -> MediaDependencyResolution {
+        match self.locator.resolve(show_root) {
+            native_url::NativeFileResolution::Available(path) => {
+                MediaDependencyResolution::Available(path)
+            }
+            native_url::NativeFileResolution::Missing(path) => {
+                MediaDependencyResolution::Missing(path)
+            }
+            native_url::NativeFileResolution::Unresolved => MediaDependencyResolution::Unresolved,
+        }
+    }
+
+    const fn has_local_locator(&self) -> bool {
+        self.locator.has_local_candidate()
+    }
 }
 
 /// Decode a `.pro` presentation and return referenced media dependencies.
@@ -68,7 +136,7 @@ pub(crate) fn presentation_slide_media_dependencies(
 fn collect_timeline_dependencies(
     timeline: &presentation::Timeline,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     if let Some(action) = &timeline.audio_action {
         collect_action_dependencies(action, dependencies, seen);
@@ -83,7 +151,7 @@ fn collect_timeline_dependencies(
 fn collect_action_dependencies(
     action: &rv_data::Action,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     match &action.action_type_data {
         Some(action::ActionTypeData::Media(media_type)) => {
@@ -119,7 +187,7 @@ fn collect_action_dependencies(
 fn collect_presentation_slide_dependencies(
     slide: &rv_data::PresentationSlide,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     if let Some(url) = &slide.chord_chart {
         push_url_dependency(url, dependencies, seen);
@@ -141,7 +209,7 @@ fn collect_presentation_slide_dependencies(
 fn collect_slide_dependencies(
     slide: &rv_data::Slide,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     for element in &slide.elements {
         collect_slide_element_dependencies(element, dependencies, seen);
@@ -151,7 +219,7 @@ fn collect_slide_dependencies(
 fn collect_slide_element_dependencies(
     element: &slide::Element,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     if let Some(graphics_element) = &element.element {
         if let Some(fill) = &graphics_element.fill {
@@ -173,27 +241,42 @@ fn collect_slide_element_dependencies(
 fn collect_data_link_dependencies(
     data_link: &slide::element::DataLink,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     use slide::element::data_link::{ticker::SourceType, PropertyType};
 
-    let url = match &data_link.property_type {
-        Some(PropertyType::FileFeed(file_feed)) => file_feed.url.as_ref(),
+    match &data_link.property_type {
+        Some(PropertyType::FileFeed(file_feed)) => {
+            if let Some(url) = &file_feed.url {
+                push_local_url_dependency(url, dependencies, seen);
+            }
+        }
+        Some(PropertyType::RssFeed(feed)) => {
+            if let Some(url) = &feed.url {
+                push_local_url_dependency(url, dependencies, seen);
+            }
+        }
         Some(PropertyType::Ticker(ticker)) => match &ticker.source_type {
-            Some(SourceType::FileType(file)) => file.url.as_ref(),
-            _ => None,
+            Some(SourceType::FileType(file)) => {
+                if let Some(url) = &file.url {
+                    push_local_url_dependency(url, dependencies, seen);
+                }
+            }
+            Some(SourceType::RssType(feed)) => {
+                if let Some(url) = &feed.url {
+                    push_local_url_dependency(url, dependencies, seen);
+                }
+            }
+            Some(SourceType::TextType(_)) | None => {}
         },
-        _ => None,
-    };
-    if let Some(url) = url {
-        push_url_dependency(url, dependencies, seen);
+        _ => {}
     }
 }
 
 fn collect_graphics_fill_dependencies(
     fill: &graphics::Fill,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     if let Some(graphics::fill::FillType::Media(media)) = &fill.fill_type {
         push_media_dependency(media, dependencies, seen);
@@ -203,7 +286,7 @@ fn collect_graphics_fill_dependencies(
 fn collect_text_attribute_dependencies(
     attributes: &graphics::text::Attributes,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     if let Some(graphics::text::attributes::Fill::MediaFill(media_fill)) = &attributes.fill {
         if let Some(media) = &media_fill.media {
@@ -226,7 +309,7 @@ fn collect_text_attribute_dependencies(
 fn push_media_dependency(
     media: &rv_data::Media,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     if let Some(url) = &media.url {
         push_url_dependency(url, dependencies, seen);
@@ -252,10 +335,10 @@ fn push_media_dependency(
 fn push_local_url_dependency(
     url: &rv_data::Url,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     push_dependency(
-        dependency_from_url(url).filter(|dependency| dependency.path.is_some()),
+        dependency_from_url(url).filter(MediaDependency::has_local_locator),
         dependencies,
         seen,
     );
@@ -264,7 +347,7 @@ fn push_local_url_dependency(
 fn push_url_dependency(
     url: &rv_data::Url,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     push_dependency(dependency_from_url(url), dependencies, seen);
 }
@@ -272,92 +355,34 @@ fn push_url_dependency(
 fn push_dependency(
     dependency: Option<MediaDependency>,
     dependencies: &mut Vec<MediaDependency>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<native_url::NativeFileLocator>,
 ) {
     let Some(dependency) = dependency else {
         return;
     };
-    if seen.insert(dependency.source.clone()) {
+    if seen.insert(dependency.locator.clone()) {
         dependencies.push(dependency);
     }
 }
 
 fn dependency_from_url(url: &rv_data::Url) -> Option<MediaDependency> {
-    match &url.storage {
-        Some(url::Storage::AbsoluteString(value) | url::Storage::RelativePath(value)) => {
-            dependency_from_source(value)
-        }
-        None => match &url.relative_file_path {
-            Some(url::RelativeFilePath::Local(local)) => dependency_from_source(&local.path),
-            Some(url::RelativeFilePath::External(external)) => {
-                dependency_from_source(&external.path)
-            }
-            None => None,
-        },
-    }
+    let locator = native_url::NativeFileLocator::from_url(url)?;
+    Some(MediaDependency { locator })
 }
 
+#[cfg(test)]
 fn dependency_from_source(source: &str) -> Option<MediaDependency> {
     if source.trim().is_empty() {
         return None;
     }
-
-    let decoded = decode_file_url_or_path(source);
-    let path = decoded
-        .as_deref()
-        .and_then(|value| value.starts_with('/').then(|| PathBuf::from(value)));
-    let basename = path
-        .as_deref()
-        .and_then(Path::file_name)
-        .and_then(|value| value.to_str())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            decoded
-                .as_deref()
-                .and_then(|value| value.rsplit('/').next())
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        });
-
-    Some(MediaDependency {
-        source: source.to_string(),
-        path,
-        basename,
+    dependency_from_url(&rv_data::Url {
+        storage: Some(
+            crate::propresenter::generated::rv_data::url::Storage::AbsoluteString(
+                source.to_string(),
+            ),
+        ),
+        ..rv_data::Url::default()
     })
-}
-
-fn decode_file_url_or_path(source: &str) -> Option<String> {
-    let path = source.strip_prefix("file://").map_or(source, |value| {
-        value.strip_prefix("localhost").unwrap_or(value)
-    });
-    percent_decode(path)
-}
-
-fn percent_decode(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hi = bytes.get(index + 1).and_then(|byte| hex_value(*byte))?;
-            let lo = bytes.get(index + 2).and_then(|byte| hex_value(*byte))?;
-            decoded.push((hi << 4) | lo);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(decoded).ok()
-}
-
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -366,6 +391,7 @@ mod tests {
 
     use super::*;
     use crate::propresenter::background::make_background_media_action_for_test;
+    use crate::propresenter::generated::rv_data::url;
     use prost::Message;
 
     #[test]
@@ -401,14 +427,22 @@ mod tests {
         .expect("dependency");
 
         assert_eq!(
-            dependency.path.as_deref(),
+            dependency.stored_absolute_path(),
             Some(Path::new(
                 "/Users/jimmy/Media/Home. lyrics slide background.png"
             ))
         );
         assert_eq!(
-            dependency.basename.as_deref(),
+            dependency.basename(),
             Some("Home. lyrics slide background.png")
+        );
+        assert_eq!(
+            serde_json::to_value(&dependency).expect("serialize dependency"),
+            serde_json::json!({
+                "source": "file:///Users/jimmy/Media/Home.%20lyrics%20slide%20background.png",
+                "path": "/Users/jimmy/Media/Home. lyrics slide background.png",
+                "basename": "Home. lyrics slide background.png",
+            })
         );
     }
 
@@ -430,8 +464,8 @@ mod tests {
         let dependencies = presentation_media_dependencies(&presentation);
 
         assert_eq!(dependencies.len(), 1);
-        assert_eq!(dependencies[0].path.as_deref(), Some(media_path));
-        assert_eq!(dependencies[0].basename.as_deref(), Some("default.jpg"));
+        assert_eq!(dependencies[0].stored_absolute_path(), Some(media_path));
+        assert_eq!(dependencies[0].basename(), Some("default.jpg"));
     }
 
     #[test]
@@ -463,7 +497,7 @@ mod tests {
         let dependencies = presentation_media_dependencies(&presentation);
         let paths = dependencies
             .iter()
-            .map(|dependency| dependency.path.as_deref())
+            .map(MediaDependency::stored_absolute_path)
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -509,6 +543,8 @@ mod tests {
                                 )),
                                 file_feed_element(file_url("/show/data/feed.txt")),
                                 ticker_file_element("/show/data/ticker.txt"),
+                                rss_feed_element(file_url("/show/data/feed.xml")),
+                                ticker_rss_element("/show/data/ticker.xml"),
                                 custom_attribute_media_element(media(
                                     "/show/media/custom-attribute.png",
                                 )),
@@ -533,8 +569,8 @@ mod tests {
         };
 
         let paths = presentation_media_dependencies(&presentation)
-            .into_iter()
-            .map(|dependency| dependency.path)
+            .iter()
+            .map(|dependency| dependency.stored_absolute_path().map(Path::to_path_buf))
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -549,11 +585,86 @@ mod tests {
                 "/show/media/fill.png",
                 "/show/data/feed.txt",
                 "/show/data/ticker.txt",
+                "/show/data/feed.xml",
+                "/show/data/ticker.xml",
                 "/show/media/custom-attribute.png",
                 "/show/video/timeline.mov",
             ]
             .map(|path| Some(PathBuf::from(path)))
         );
+    }
+
+    #[test]
+    fn stale_absolute_media_falls_back_to_show_relative_locator() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let relative = Path::new("Media/current.png");
+        let actual = directory.path().join(relative);
+        std::fs::create_dir_all(actual.parent().expect("media parent")).expect("create media");
+        std::fs::write(&actual, b"image").expect("write media");
+        let url = rv_data::Url {
+            storage: Some(url::Storage::AbsoluteString(
+                "file:///stale-machine/Media/current.png".to_string(),
+            )),
+            relative_file_path: Some(url::RelativeFilePath::Local(url::LocalRelativePath {
+                root: url::local_relative_path::Root::Show as i32,
+                path: relative.display().to_string(),
+            })),
+            ..rv_data::Url::default()
+        };
+
+        let dependency = dependency_from_url(&url).expect("dependency");
+
+        assert_eq!(
+            dependency.resolve(Some(directory.path())),
+            MediaDependencyResolution::Available(actual)
+        );
+    }
+
+    #[test]
+    fn active_show_media_wins_when_stale_absolute_media_still_exists() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let show_root = directory.path().join("show");
+        let stale_root = directory.path().join("stale");
+        let relative = Path::new("Media/current.png");
+        let actual = show_root.join(relative);
+        let stale = stale_root.join("current.png");
+        std::fs::create_dir_all(actual.parent().expect("show media parent"))
+            .expect("create show media");
+        std::fs::create_dir_all(&stale_root).expect("create stale media");
+        std::fs::write(&actual, b"current").expect("write current media");
+        std::fs::write(&stale, b"stale").expect("write stale media");
+        let url = rv_data::Url {
+            storage: Some(url::Storage::AbsoluteString(native_url::file_url(
+                &stale.to_string_lossy(),
+            ))),
+            relative_file_path: Some(url::RelativeFilePath::Local(url::LocalRelativePath {
+                root: url::local_relative_path::Root::Show as i32,
+                path: relative.display().to_string(),
+            })),
+            ..rv_data::Url::default()
+        };
+
+        let dependency = dependency_from_url(&url).expect("dependency");
+
+        assert_eq!(dependency.stored_absolute_path(), Some(stale.as_path()));
+        assert_eq!(
+            dependency.resolve(Some(&show_root)),
+            MediaDependencyResolution::Available(actual)
+        );
+    }
+
+    #[test]
+    fn local_missing_and_remote_unresolved_dependencies_remain_distinct() {
+        let local =
+            dependency_from_source("file:///missing/background.png").expect("local dependency");
+        let remote = dependency_from_source("https://example.com/background.png")
+            .expect("remote dependency");
+
+        assert_eq!(
+            local.resolve(None),
+            MediaDependencyResolution::Missing(PathBuf::from("/missing/background.png"))
+        );
+        assert_eq!(remote.resolve(None), MediaDependencyResolution::Unresolved);
     }
 
     #[test]
@@ -585,21 +696,13 @@ mod tests {
 
         let dependencies = presentation_media_dependencies(&presentation);
 
+        assert_eq!(dependencies.len(), 1);
         assert_eq!(
-            dependencies,
-            vec![
-                MediaDependency {
-                    source: "https://example.com/chart.prochord".to_string(),
-                    path: None,
-                    basename: Some("chart.prochord".to_string()),
-                },
-                MediaDependency {
-                    source: "https://example.com/feed.txt".to_string(),
-                    path: None,
-                    basename: Some("feed.txt".to_string()),
-                },
-            ]
+            dependencies[0].source(),
+            "https://example.com/chart.prochord"
         );
+        assert_eq!(dependencies[0].stored_absolute_path(), None);
+        assert_eq!(dependencies[0].basename(), Some("chart.prochord"));
     }
 
     fn media_action(path: &str) -> rv_data::Action {
@@ -720,6 +823,37 @@ mod tests {
                 property_type: Some(PropertyType::Ticker(Ticker {
                     source_type: Some(ticker::SourceType::FileType(ticker::FileType {
                         url: Some(file_url(path)),
+                    })),
+                    ..Ticker::default()
+                })),
+            }],
+            ..slide::Element::default()
+        }
+    }
+
+    fn rss_feed_element(url: rv_data::Url) -> slide::Element {
+        use slide::element::data_link::{PropertyType, RssFeed};
+
+        slide::Element {
+            data_links: vec![slide::element::DataLink {
+                property_type: Some(PropertyType::RssFeed(RssFeed {
+                    url: Some(url),
+                    ..RssFeed::default()
+                })),
+            }],
+            ..slide::Element::default()
+        }
+    }
+
+    fn ticker_rss_element(path: &str) -> slide::Element {
+        use slide::element::data_link::{ticker, PropertyType, Ticker};
+
+        slide::Element {
+            data_links: vec![slide::element::DataLink {
+                property_type: Some(PropertyType::Ticker(Ticker {
+                    source_type: Some(ticker::SourceType::RssType(ticker::RssType {
+                        url: Some(file_url(path)),
+                        ..ticker::RssType::default()
                     })),
                     ..Ticker::default()
                 })),

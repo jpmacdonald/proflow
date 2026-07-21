@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use super::model::{PlaylistItemAlignedDiff, PlaylistItemSummary};
 use crate::propresenter::generated::rv_data::{self, playlist, playlist_item, url};
-use crate::propresenter::inspection::percent_decode_lossy;
+use crate::propresenter::native_url;
 
 struct AlignedPlaylistItem<'a> {
     key: String,
@@ -160,11 +160,9 @@ fn compare_aligned_item(
 /// Normalize an absolute presentation path for semantic comparison.
 #[must_use]
 pub(super) fn normalize_absolute_path_value(value: &str) -> String {
-    let decoded = percent_decode_lossy(value).replace('\\', "/");
-    decoded.find("Libraries/").map_or_else(
-        || decoded.rsplit('/').next().unwrap_or(&decoded).to_string(),
-        |index| decoded[index..].to_string(),
-    )
+    let decoded = native_url::percent_decode_lossy(value).replace('\\', "/");
+    native_url::library_relative_path(&decoded)
+        .unwrap_or_else(|| decoded.rsplit('/').next().unwrap_or(&decoded).to_string())
 }
 
 fn playlist_item_alignment_key(item: &PlaylistItemSummary) -> String {
@@ -187,7 +185,7 @@ fn playlist_item_alignment_key(item: &PlaylistItemSummary) -> String {
 }
 
 fn normalize_playlist_item_key(value: &str) -> String {
-    percent_decode_lossy(value)
+    native_url::percent_decode_lossy(value)
         .replace('\\', "/")
         .trim_start_matches("./")
         .to_ascii_lowercase()

@@ -271,19 +271,58 @@ fn has_responsive_pattern(description: &str) -> bool {
     let mut has_leader = false;
     let mut has_congregation = false;
 
-    for line in description.lines() {
-        let lower = line.trim().to_lowercase();
-        if !has_leader {
-            has_leader = LEADER_PREFIXES.iter().any(|p| lower.starts_with(p));
-        }
-        if !has_congregation {
-            has_congregation = CONGREGATION_PREFIXES.iter().any(|p| lower.starts_with(p));
-        }
-        if has_leader && has_congregation {
-            return true;
+    for source_line in description.lines() {
+        for line in split_inline_responses(source_line) {
+            let lower = line.trim().to_lowercase();
+            if !has_leader {
+                has_leader = LEADER_PREFIXES.iter().any(|p| lower.starts_with(p));
+            }
+            if !has_congregation {
+                has_congregation = CONGREGATION_PREFIXES.iter().any(|p| lower.starts_with(p));
+            }
+            if has_leader && has_congregation {
+                return true;
+            }
         }
     }
     false
+}
+
+/// Split compact Planning Center response lines such as
+/// `Leader: ... People: ...` at their explicit speaker transitions.
+fn split_inline_responses(line: &str) -> Vec<&str> {
+    const INLINE_PREFIXES: &[&str] = &["leader:", "people:", "all:", "unison:"];
+    let mut starts = Vec::new();
+    for (index, _) in line.char_indices() {
+        let preceded_by_space = index == 0
+            || line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace);
+        if preceded_by_space
+            && INLINE_PREFIXES.iter().any(|prefix| {
+                line[index..]
+                    .get(..prefix.len())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+            })
+        {
+            starts.push(index);
+        }
+    }
+    if starts.len() <= 1 {
+        return vec![line];
+    }
+    if starts[0] != 0 {
+        starts.insert(0, 0);
+    }
+    starts.push(line.len());
+    starts
+        .windows(2)
+        .filter_map(|bounds| {
+            let value = line[bounds[0]..bounds[1]].trim();
+            (!value.is_empty()).then_some(value)
+        })
+        .collect()
 }
 
 /// Parse marker-based descriptions.
@@ -485,37 +524,41 @@ fn parse_responsive(description: &str, title_text: &str) -> Option<ParsedContent
     let mut current_speaker = SpeakerRole::Leader;
     let mut previous_kind: Option<ResponsiveLineKind> = None;
 
-    for line in description.lines() {
-        let trimmed = line.trim();
+    for source_line in description.lines() {
+        let source_trimmed = source_line.trim();
 
         // Blank lines request a separator between response blocks. The packer
         // decides whether that separator fits on the current slide.
-        if trimmed.is_empty() {
+        if source_trimmed.is_empty() {
             push_separator(&mut segments);
             previous_kind = None;
             continue;
         }
 
-        // Skip metadata/instruction lines
-        if is_metadata_line(trimmed) {
-            continue;
-        }
+        for line in split_inline_responses(source_line) {
+            let trimmed = line.trim();
 
-        let lower = trimmed.to_lowercase();
+            // Skip metadata/instruction lines
+            if is_metadata_line(trimmed) {
+                continue;
+            }
 
-        if starts_with_any(&lower, LEADER_PREFIXES) {
-            push_response_separator(&mut segments, previous_kind.is_some());
-            current_speaker = SpeakerRole::Leader;
-            push_prose_line(&mut segments, trimmed.to_string(), current_speaker, true);
-            previous_kind = Some(ResponsiveLineKind::Leader);
-        } else if starts_with_any(&lower, CONGREGATION_PREFIXES) {
-            push_response_separator(&mut segments, previous_kind.is_some());
-            current_speaker = SpeakerRole::Audience;
-            push_prose_line(&mut segments, trimmed.to_string(), current_speaker, true);
-            previous_kind = Some(ResponsiveLineKind::Congregation);
-        } else {
-            // A source hard wrap inherits the current speaker and paragraph.
-            push_prose_line(&mut segments, trimmed.to_string(), current_speaker, false);
+            let lower = trimmed.to_lowercase();
+
+            if starts_with_any(&lower, LEADER_PREFIXES) {
+                push_response_separator(&mut segments, previous_kind.is_some());
+                current_speaker = SpeakerRole::Leader;
+                push_prose_line(&mut segments, trimmed.to_string(), current_speaker, true);
+                previous_kind = Some(ResponsiveLineKind::Leader);
+            } else if starts_with_any(&lower, CONGREGATION_PREFIXES) {
+                push_response_separator(&mut segments, previous_kind.is_some());
+                current_speaker = SpeakerRole::Audience;
+                push_prose_line(&mut segments, trimmed.to_string(), current_speaker, true);
+                previous_kind = Some(ResponsiveLineKind::Congregation);
+            } else {
+                // A source hard wrap inherits the current speaker and paragraph.
+                push_prose_line(&mut segments, trimmed.to_string(), current_speaker, false);
+            }
         }
     }
 
@@ -589,6 +632,11 @@ fn starts_with_any(lower: &str, prefixes: &[&str]) -> bool {
 fn is_metadata_line(line: &str) -> bool {
     // Lines with [SLIDE], [NO SLIDE], etc. are PCO cues
     if slide_marker(line).is_some() || is_non_slide_marker(line) || is_silent_marker(line) {
+        return true;
+    }
+    // Operational bullets surrounding an explicit responsive reading are not
+    // display text.
+    if line.trim_start().starts_with("- ") {
         return true;
     }
     // "Liturgist:" instruction lines (not the same as "Leader:")

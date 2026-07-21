@@ -31,16 +31,16 @@ pub(super) fn build_scripture_plan(
             ) {
                 return plan;
             }
-            return ResolvedItemPlan {
+            return ResolvedItemPlan::new(
                 output_key,
-                position: item.position,
-                pco_title: item.title.clone(),
-                playlist_name: strip_speaker(&item.title),
-                reason: error,
-                item_kind: ItemKind::Scripture,
-                item_type: Some(type_key.to_string()),
-                disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-            };
+                item.position,
+                item.title.clone(),
+                strip_speaker(&item.title),
+                error,
+                ItemKind::Scripture,
+                Some(type_key.to_string()),
+                PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            );
         }
     };
 
@@ -54,16 +54,16 @@ pub(super) fn build_scripture_plan(
         let ref_infos = match ref_infos {
             Ok(ref_infos) => ref_infos,
             Err(error) => {
-                return ResolvedItemPlan {
+                return ResolvedItemPlan::new(
                     output_key,
-                    position: item.position,
-                    pco_title: item.title.clone(),
-                    playlist_name: strip_speaker(&item.title),
-                    reason: error.to_string(),
-                    item_kind: ItemKind::Scripture,
-                    item_type: Some(type_key.to_string()),
-                    disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-                };
+                    item.position,
+                    item.title.clone(),
+                    strip_speaker(&item.title),
+                    error.to_string(),
+                    ItemKind::Scripture,
+                    Some(type_key.to_string()),
+                    PlanDisposition::NeedsReview(ReviewContext::new(None)),
+                );
             }
         };
         let first_version = ref_infos[0].version();
@@ -99,33 +99,30 @@ pub(super) fn build_scripture_plan(
         };
         let reference_count = ref_infos.len();
         let Some(scripture) = ScriptureContent::combined(ref_infos) else {
-            return ResolvedItemPlan {
+            return ResolvedItemPlan::new(
                 output_key,
-                position: item.position,
-                pco_title: item.title.clone(),
-                playlist_name: combined_name,
-                reason: "Combined scripture source requires at least two references".to_string(),
-                item_kind: ItemKind::Scripture,
-                item_type: Some(type_key.to_string()),
-                disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-            };
+                item.position,
+                item.title.clone(),
+                combined_name,
+                "Combined scripture source requires at least two references".to_string(),
+                ItemKind::Scripture,
+                Some(type_key.to_string()),
+                PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            );
         };
 
-        return ResolvedItemPlan {
+        return ResolvedItemPlan::new(
             output_key,
-            position: item.position,
-            pco_title: item.title.clone(),
-            playlist_name: combined_name,
-            reason: format!(
+            item.position,
+            item.title.clone(),
+            combined_name,
+            format!(
                 "Generate combined scripture slides ({reference_count} refs, {version_summary})"
             ),
-            item_kind: ItemKind::Scripture,
-            item_type: Some(type_key.to_string()),
-            disposition: PlanDisposition::Ready(ReadyAction::GenerateScripture {
-                scripture,
-                style,
-            }),
-        };
+            ItemKind::Scripture,
+            Some(type_key.to_string()),
+            PlanDisposition::Ready(ReadyAction::GenerateScripture { scripture, style }),
+        );
     }
 
     let parsed_ref = &parsed_refs[0];
@@ -133,29 +130,29 @@ pub(super) fn build_scripture_plan(
         match ScriptureContent::single(parsed_ref.reference.clone(), parsed_ref.version.clone()) {
             Ok(scripture) => scripture,
             Err(error) => {
-                return ResolvedItemPlan {
+                return ResolvedItemPlan::new(
                     output_key,
-                    position: item.position,
-                    pco_title: item.title.clone(),
-                    playlist_name: strip_speaker(&item.title),
-                    reason: error.to_string(),
-                    item_kind: ItemKind::Scripture,
-                    item_type: Some(type_key.to_string()),
-                    disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-                };
+                    item.position,
+                    item.title.clone(),
+                    strip_speaker(&item.title),
+                    error.to_string(),
+                    ItemKind::Scripture,
+                    Some(type_key.to_string()),
+                    PlanDisposition::NeedsReview(ReviewContext::new(None)),
+                );
             }
         };
 
-    ResolvedItemPlan {
+    ResolvedItemPlan::new(
         output_key,
-        position: item.position,
-        pco_title: item.title.clone(),
-        playlist_name: format!("{} {}", parsed_ref.reference, parsed_ref.version),
-        reason: format!("Generate scripture slides ({})", parsed_ref.version),
-        item_kind: ItemKind::Scripture,
-        item_type: Some(type_key.to_string()),
-        disposition: PlanDisposition::Ready(ReadyAction::GenerateScripture { scripture, style }),
-    }
+        item.position,
+        item.title.clone(),
+        format!("{} {}", parsed_ref.reference, parsed_ref.version),
+        format!("Generate scripture slides ({})", parsed_ref.version),
+        ItemKind::Scripture,
+        Some(type_key.to_string()),
+        PlanDisposition::Ready(ReadyAction::GenerateScripture { scripture, style }),
+    )
 }
 
 fn build_prefix_excerpt_plan(
@@ -195,17 +192,16 @@ fn build_prefix_excerpt_plan(
     )
     .ok()?;
     let action = ReadyAction::GenerateScripture { scripture, style };
-    Some(ResolvedItemPlan {
+    Some(ResolvedItemPlan::new(
         output_key,
-        position: item.position,
-        pco_title: item.title.clone(),
-        playlist_name: format!("{} {}", parsed.display_reference, parsed.version),
-        reason: "Validate Planning Center partial-verse text against the local Bible corpus"
-            .to_string(),
-        item_kind: ItemKind::Scripture,
-        item_type: Some(type_key.to_string()),
-        disposition: PlanDisposition::NeedsReview(ReviewContext::new(Some(action))),
-    })
+        item.position,
+        item.title.clone(),
+        format!("{} {}", parsed.display_reference, parsed.version),
+        "Validate Planning Center partial-verse text against the local Bible corpus".to_string(),
+        ItemKind::Scripture,
+        Some(type_key.to_string()),
+        PlanDisposition::NeedsReview(ReviewContext::new(Some(action))),
+    ))
 }
 
 fn item_scripture_refs(

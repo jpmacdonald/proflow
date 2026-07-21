@@ -5,7 +5,7 @@ mod overrides;
 mod presentation;
 mod rules;
 
-use super::RawProjectConfig;
+use super::{ProjectConfig, RawProjectConfig};
 use serde::Serialize;
 use std::collections::HashSet;
 
@@ -43,6 +43,14 @@ pub struct ConfigValidationIssue {
 
 /// Validate an editable config candidate before it enters runtime planning.
 pub fn validate_project_config(config: &RawProjectConfig) -> Vec<ConfigValidationIssue> {
+    ProjectConfig::try_from(config.clone())
+        .err()
+        .map_or_else(Vec::new, |error| error.issues().to_vec())
+}
+
+pub(super) fn validate_project_config_structure(
+    config: &RawProjectConfig,
+) -> Vec<ConfigValidationIssue> {
     let mut issues = Vec::new();
 
     if config.version != 4 {

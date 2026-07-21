@@ -43,24 +43,30 @@ impl SlideType {
 
 /// Arrangement selection.
 pub mod arrangement;
+/// Checked macro-to-Audience-Look destination resolution.
+pub mod audience;
 /// Background image support.
 pub mod background;
 /// File deserialization (reading .pro files).
 pub mod deserialize;
 /// Generated protobuf types.
 pub mod generated;
+/// Checked final presentation documents produced by the semantic renderer.
+pub mod generated_document;
 /// Installed cue-group metadata.
 pub mod groups;
 /// Standalone semantic presentation inspection.
 pub mod inspection;
 /// Native presentation library catalog and fuzzy matching.
 pub mod library;
-/// Live ProPresenter playlist library helpers.
+/// Live ProPresenter playlist library helpers for fidelity tooling.
+#[cfg(any(test, feature = "dev-tools"))]
 pub mod live;
 /// Macro injection for presentations.
 pub mod macros;
 /// Media dependency discovery.
 pub mod media;
+mod native_url;
 mod native_zip;
 /// Playlist package inspection utilities.
 pub mod package;
@@ -78,6 +84,8 @@ pub mod rtf;
 pub mod scripture_layout;
 /// File serialization (writing .pro files).
 pub mod serialize;
+/// Native macOS text layout evidence used to prove final glyph fit.
+pub mod text_fit;
 /// Pure checked text flow for presentation slides.
 pub mod text_flow;
 /// Installed theme loading and exact text-box geometry.

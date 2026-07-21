@@ -74,8 +74,7 @@ pub(super) fn compare_embedded_presentations(
 fn presentation_fingerprints(package: &PlaylistPackage) -> BTreeMap<String, Vec<FileFingerprint>> {
     let mut fingerprints: BTreeMap<String, Vec<FileFingerprint>> = BTreeMap::new();
     for file in package
-        .embedded_file_details
-        .iter()
+        .embedded_file_details()
         .filter(|file| file.is_presentation)
     {
         fingerprints
@@ -472,8 +471,7 @@ pub(super) fn compare_media_assets(
 fn media_fingerprints(package: &PlaylistPackage) -> BTreeMap<String, Vec<FileFingerprint>> {
     let mut fingerprints: BTreeMap<String, Vec<FileFingerprint>> = BTreeMap::new();
     for file in package
-        .embedded_file_details
-        .iter()
+        .embedded_file_details()
         .filter(|file| !file.is_presentation)
     {
         fingerprints
@@ -522,19 +520,13 @@ mod tests {
             });
             embedded_file_data.insert((*archive_path).to_string(), data);
         }
-        PlaylistPackage {
-            document: rv_data::PlaylistDocument::default(),
-            document_data: Vec::new(),
-            document_round_trip_exact: true,
-            embedded_files: files
-                .iter()
-                .map(|(archive_path, _, _)| (*archive_path).to_string())
-                .collect(),
-            embedded_file_details,
+        PlaylistPackage::new(
+            rv_data::PlaylistDocument::default(),
+            Vec::new(),
             embedded_file_data,
-            archive_entries: Vec::new(),
-            archive_comment: Vec::new(),
-        }
+            embedded_file_details,
+            Vec::new(),
+        )
     }
 
     #[test]

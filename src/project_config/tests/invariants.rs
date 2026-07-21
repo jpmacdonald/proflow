@@ -99,7 +99,7 @@ fn exact_theme_arrangement_and_override_names_reject_padding_paths_and_controls(
 }
 
 #[test]
-fn rules_reject_inexact_duplicate_match_values_and_unknown_categories() {
+fn rules_reject_inexact_and_duplicate_match_values() {
     let message = invalid_message(
         r#"{
           "version": 4,
@@ -108,7 +108,7 @@ fn rules_reject_inexact_duplicate_match_values_and_unknown_categories() {
               "id": "weekly",
               "match": {
                 "title_prefix": ["sermon", "SERMON", " padded", "bad\nvalue"],
-                "category": "unknown"
+                "category": "text"
               },
               "action": { "kind": "skip", "reason": "manual" }
             },
@@ -126,10 +126,28 @@ fn rules_reject_inexact_duplicate_match_values_and_unknown_categories() {
         "duplicate match value",
         "match value must be unpadded",
         "match value must not contain control characters",
-        "unknown category 'unknown'",
     ] {
         assert_has(&message, expected);
     }
+}
+
+#[test]
+fn match_categories_are_rejected_at_the_typed_json_boundary() {
+    let message = invalid_message(
+        r#"{
+          "version": 4,
+          "item_rules": [{
+            "id": "weekly",
+            "match": { "category": "unknown" },
+            "action": { "kind": "skip", "reason": "manual" }
+          }]
+        }"#,
+    );
+
+    assert_has(
+        &message,
+        "unknown variant `unknown`, expected one of `text`, `graphic`, `title`, `song`, `other`",
+    );
 }
 
 #[test]
@@ -255,4 +273,66 @@ fn decision_edge_spaces_remain_meaningful_substring_boundaries() {
         }"#,
     )
     .expect("edge spaces remain significant until matching owns word boundaries");
+}
+
+#[test]
+fn choose_existing_file_rejects_an_ignored_generated_target() {
+    let message = invalid_message(
+        r#"{
+          "version": 4,
+          "presentation_types": {
+            "existing": {
+              "content_source": "static",
+              "output_strategy": "preserve_existing"
+            }
+          },
+          "item_rules": [{
+            "id": "choice",
+            "match": { "title_prefix": ["baptism"] },
+            "decision": {
+              "kind": "choose_existing_file",
+              "choices": {
+                "him": {
+                  "use_type": "existing",
+                  "file": "Him.pro",
+                  "target": {"name_template": "Ignored {title}"},
+                  "match": { "any": ["him"] }
+                }
+              }
+            }
+          }]
+        }"#,
+    );
+
+    assert_has(
+        &message,
+        "choose_existing_file target must define library_file, not name_template",
+    );
+}
+
+#[test]
+fn liturgical_rendering_requires_a_speaker_aware_content_role() {
+    let message = invalid_message(
+        r#"{
+          "version": 4,
+          "cue_roles": {
+            "title": { "slide": "Title" },
+            "body": { "slide": "Body", "enter_macro": "Scripture" }
+          },
+          "presentation_types": {
+            "liturgy": {
+              "kind": "liturgy",
+              "content_source": "description",
+              "description_parser": "liturgical",
+              "output_strategy": "generate_new",
+              "display": { "kind": "split", "title": "title", "content": "body" }
+            }
+          }
+        }"#,
+    );
+
+    assert_has(
+        &message,
+        "liturgical rendering requires content cue role 'body' to define speaker_colors",
+    );
 }

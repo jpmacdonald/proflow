@@ -130,6 +130,24 @@ impl RestyleMacroPolicy {
         if regions.is_empty() {
             return Err(RenderPlanError::EmptyRestyleMacroPolicy);
         }
+        let mut operator_cues = BTreeSet::new();
+        let mut arrangement_groups = BTreeSet::new();
+        for region in &regions {
+            match region.selector() {
+                RestyleMacroSelector::OperatorCue { index } if !operator_cues.insert(*index) => {
+                    return Err(RenderPlanError::DuplicateOperatorCueSelector { index: *index });
+                }
+                RestyleMacroSelector::ArrangementGroup { index, .. }
+                    if !arrangement_groups.insert(*index) =>
+                {
+                    return Err(RenderPlanError::DuplicateArrangementGroupSelector {
+                        index: *index,
+                    });
+                }
+                RestyleMacroSelector::OperatorCue { .. }
+                | RestyleMacroSelector::ArrangementGroup { .. } => {}
+            }
+        }
         Ok(Self {
             regions: regions.into_boxed_slice(),
         })
@@ -313,6 +331,9 @@ impl RenderRole {
         if has_leader_macro != speaker_palette.is_some() {
             return Err(RenderPlanError::IncompleteResponsiveRole { role_id: id });
         }
+        if speaker_palette.is_some_and(|palette| palette.leader == palette.audience) {
+            return Err(RenderPlanError::IndistinguishableSpeakerColors { role_id: id });
+        }
         Ok(Self {
             id,
             slide,
@@ -395,6 +416,17 @@ impl RenderStyle {
         })
     }
 
+    /// Return this checked style with only its resolved background replaced.
+    ///
+    /// Replacing a background cannot invalidate cue-role or line-bound
+    /// invariants, so callers do not need to reconstruct and revalidate the
+    /// complete style.
+    #[must_use]
+    pub fn with_background(mut self, background: ResolvedBackground) -> Self {
+        self.background = Some(background);
+        self
+    }
+
     /// Return the resolved background asset, when configured.
     pub const fn background(&self) -> Option<&ResolvedBackground> {
         self.background.as_ref()
@@ -448,58 +480,79 @@ fn identifier_problem(value: &str) -> Option<IdentifierProblem> {
 }
 
 /// Invalid render metadata rejected at the plan boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RenderPlanError {
     /// A restyle policy contained no operator regions.
+    #[error("restyle macro policy requires at least one region")]
     EmptyRestyleMacroPolicy,
     /// An arrangement-group selector contained no accepted native names.
+    #[error("restyle arrangement-group region {index} requires at least one allowed name")]
     EmptyArrangementGroupNames { index: usize },
+    /// Two macro regions selected the same operator cue.
+    #[error("restyle macro policy selects operator cue {index} more than once")]
+    DuplicateOperatorCueSelector { index: usize },
+    /// Two macro regions selected the same arrangement-group occurrence.
+    #[error("restyle macro policy selects arrangement group {index} more than once")]
+    DuplicateArrangementGroupSelector { index: usize },
     /// An arrangement-group selector name was not an exact native identity.
+    #[error("restyle arrangement-group region {index} name '{name}' contains {problem}")]
     InvalidArrangementGroupName {
         index: usize,
         name: String,
         problem: IdentifierProblem,
     },
     /// A cue macro contains no usable name.
+    #[error("cue macro name cannot be blank")]
     BlankCueMacro,
     /// A cue macro name cannot be used as an exact native lookup key.
+    #[error("cue macro name '{name}' contains {problem}")]
     InvalidCueMacro {
         name: String,
         problem: IdentifierProblem,
     },
     /// The leader-first cue macro contains no usable name.
+    #[error("leader-first cue macro name cannot be blank")]
     BlankLeaderCueMacro,
     /// A leader-first macro name cannot be used as an exact native lookup key.
+    #[error("leader-first cue macro name '{name}' contains {problem}")]
     InvalidLeaderCueMacro {
         name: String,
         problem: IdentifierProblem,
     },
     /// A render role contains no usable identifier.
+    #[error("render role id cannot be blank")]
     BlankRoleId,
     /// A render-role identifier cannot be used as an exact config lookup key.
+    #[error("render role id '{role_id}' contains {problem}")]
     InvalidRoleId {
         role_id: String,
         problem: IdentifierProblem,
     },
     /// A render role contains no usable theme slide.
+    #[error("render role '{role_id}' slide cannot be blank")]
     BlankRoleSlide { role_id: String },
     /// A theme-slide name cannot be used as an exact native lookup key.
+    #[error("render role '{role_id}' slide '{slide}' contains {problem}")]
     InvalidRoleSlide {
         role_id: String,
         slide: String,
         problem: IdentifierProblem,
     },
     /// A text-slot binding contains a blank semantic name.
+    #[error("render role '{role_id}' has a blank text-slot name ('{slot}')")]
     BlankTextSlotName { role_id: String, slot: String },
     /// A semantic text-slot name cannot be used as an exact lookup key.
+    #[error("render role '{role_id}' text-slot name '{slot}' contains {problem}")]
     InvalidTextSlotName {
         role_id: String,
         slot: String,
         problem: IdentifierProblem,
     },
     /// A text-slot binding contains a blank native element name.
+    #[error("render role '{role_id}' text slot '{slot}' has a blank element name")]
     BlankTextSlotElement { role_id: String, slot: String },
     /// A native text-element name cannot be used as an exact lookup key.
+    #[error("render role '{role_id}' text slot '{slot}' element '{element}' contains {problem}")]
     InvalidTextSlotElement {
         role_id: String,
         slot: String,
@@ -507,6 +560,9 @@ pub enum RenderPlanError {
         problem: IdentifierProblem,
     },
     /// Two semantic fields target the same native graphics element.
+    #[error(
+        "render role '{role_id}' text slots '{first_slot}' and '{duplicate_slot}' both target element '{element}'"
+    )]
     DuplicateTextSlotElement {
         role_id: String,
         first_slot: String,
@@ -514,110 +570,20 @@ pub enum RenderPlanError {
         element: String,
     },
     /// Explicit text bindings omit the required semantic body field.
+    #[error("render role '{role_id}' has explicit text slots but no required 'body' field")]
     MissingBodyTextSlot { role_id: String },
     /// A responsive role configured only one half of its macro/color contract.
+    #[error(
+        "render role '{role_id}' must configure a leader-first macro and speaker palette together"
+    )]
     IncompleteResponsiveRole { role_id: String },
+    /// A responsive role used the same editor color for both speakers.
+    #[error("render role '{role_id}' leader and audience colors must differ")]
+    IndistinguishableSpeakerColors { role_id: String },
     /// A render style requested a zero-line slide bound.
+    #[error("render style max lines per slide cannot be zero")]
     ZeroMaxLines,
     /// Title and content regions reused one semantic role identity.
+    #[error("render style title and content roles both use id '{role_id}'")]
     DuplicateRoleId { role_id: String },
 }
-
-impl fmt::Display for RenderPlanError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyRestyleMacroPolicy => {
-                formatter.write_str("restyle macro policy requires at least one region")
-            }
-            Self::EmptyArrangementGroupNames { index } => write!(
-                formatter,
-                "restyle arrangement-group region {index} requires at least one allowed name"
-            ),
-            Self::InvalidArrangementGroupName {
-                index,
-                name,
-                problem,
-            } => write!(
-                formatter,
-                "restyle arrangement-group region {index} name '{name}' contains {problem}"
-            ),
-            Self::BlankCueMacro => formatter.write_str("cue macro name cannot be blank"),
-            Self::InvalidCueMacro { name, problem } => {
-                write!(formatter, "cue macro name '{name}' contains {problem}")
-            }
-            Self::BlankLeaderCueMacro => {
-                formatter.write_str("leader-first cue macro name cannot be blank")
-            }
-            Self::InvalidLeaderCueMacro { name, problem } => write!(
-                formatter,
-                "leader-first cue macro name '{name}' contains {problem}"
-            ),
-            Self::BlankRoleId => formatter.write_str("render role id cannot be blank"),
-            Self::InvalidRoleId { role_id, problem } => {
-                write!(formatter, "render role id '{role_id}' contains {problem}")
-            }
-            Self::BlankRoleSlide { role_id } => {
-                write!(formatter, "render role '{role_id}' slide cannot be blank")
-            }
-            Self::InvalidRoleSlide {
-                role_id,
-                slide,
-                problem,
-            } => write!(
-                formatter,
-                "render role '{role_id}' slide '{slide}' contains {problem}"
-            ),
-            Self::BlankTextSlotName { role_id, slot } => write!(
-                formatter,
-                "render role '{role_id}' has a blank text-slot name ('{slot}')"
-            ),
-            Self::InvalidTextSlotName {
-                role_id,
-                slot,
-                problem,
-            } => write!(
-                formatter,
-                "render role '{role_id}' text-slot name '{slot}' contains {problem}"
-            ),
-            Self::BlankTextSlotElement { role_id, slot } => write!(
-                formatter,
-                "render role '{role_id}' text slot '{slot}' has a blank element name"
-            ),
-            Self::InvalidTextSlotElement {
-                role_id,
-                slot,
-                element,
-                problem,
-            } => write!(
-                formatter,
-                "render role '{role_id}' text slot '{slot}' element '{element}' contains {problem}"
-            ),
-            Self::DuplicateTextSlotElement {
-                role_id,
-                first_slot,
-                duplicate_slot,
-                element,
-            } => write!(
-                formatter,
-                "render role '{role_id}' text slots '{first_slot}' and '{duplicate_slot}' both target element '{element}'"
-            ),
-            Self::MissingBodyTextSlot { role_id } => write!(
-                formatter,
-                "render role '{role_id}' has explicit text slots but no 'body' slot"
-            ),
-            Self::IncompleteResponsiveRole { role_id } => write!(
-                formatter,
-                "render role '{role_id}' must configure a leader-first macro and speaker palette together"
-            ),
-            Self::ZeroMaxLines => {
-                formatter.write_str("render style max lines per slide cannot be zero")
-            }
-            Self::DuplicateRoleId { role_id } => write!(
-                formatter,
-                "render style title and content roles both use id '{role_id}'"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for RenderPlanError {}

@@ -1,7 +1,7 @@
 //! Build a service from PCO, then compare it against a live `ProPresenter` playlist.
 //!
 //! Usage:
-//!   `cargo run --bin parity_build_live_diff -- <ProPresenter root> <plan id> <service name> <live playlist name> [work dir]`
+//!   `cargo run --features dev-tools --bin parity_build_live_diff -- <ProPresenter root> <plan id> <service name> <live playlist name> [work dir]`
 
 #![allow(clippy::print_stdout)]
 
@@ -19,10 +19,10 @@ use proflow::propresenter::library::LibraryCatalog;
 use proflow::propresenter::live::{materialize_live_playlist, LivePlaylistMaterializeReport};
 use proflow::propresenter::package::{
     compare_playlist_items_aligned, compare_playlist_packages, embedded_presentation_structures,
-    infer_package_mode, presentation_items, read_playlist_package, EmbeddedPresentationStructure,
-    PlaylistItemAlignedDiff, PlaylistItemSummary, PlaylistPackageComparison, PlaylistPackageMode,
+    infer_archive_shape, presentation_items, read_playlist_package, EmbeddedPresentationStructure,
+    PlaylistArchiveShape, PlaylistItemAlignedDiff, PlaylistItemSummary, PlaylistPackageComparison,
 };
-use proflow::propresenter::playlist::PlaylistMetadata;
+use proflow::propresenter::playlist::{PlaylistExportIntent, PlaylistMetadata};
 use proflow::workflow::execute::{BuildRequest, RenderAssetSnapshot, ServiceBuildExecutor};
 use proflow::workflow::report::BuildServiceResult;
 use serde::Serialize;
@@ -46,8 +46,8 @@ struct ParityBuildLiveDiffReport {
     expected_path: String,
     actual_path: String,
     compatible: bool,
-    expected_mode: PlaylistPackageMode,
-    actual_mode: PlaylistPackageMode,
+    expected_shape: PlaylistArchiveShape,
+    actual_shape: PlaylistArchiveShape,
     package: PlaylistPackageComparison,
     expected_items: Vec<PlaylistItemSummary>,
     actual_items: Vec<PlaylistItemSummary>,
@@ -146,8 +146,7 @@ async fn run() -> Result<ParityBuildLiveDiffReport> {
             playlist_name: Some(live_playlist_name.clone()),
             skip_output_keys: Vec::new(),
             overrides: Vec::new(),
-            playlist_package_mode: PlaylistPackageMode::LibraryLocal,
-            media_assets: Vec::new(),
+            playlist_export: PlaylistExportIntent::library_links(),
         })
         .await
         .context("build service from PCO plan")?;
@@ -250,8 +249,8 @@ fn build_report(
             actual_path.display()
         )
     })?;
-    let expected_items = presentation_items(&expected.document);
-    let actual_items = presentation_items(&actual.document);
+    let expected_items = presentation_items(expected.document());
+    let actual_items = presentation_items(actual.document());
     let (manual_expected_items, expected_items_for_alignment) =
         split_manual_expected_items(&expected_items);
     let aligned_item_diffs =
@@ -264,8 +263,8 @@ fn build_report(
         expected_path: expected_path.display().to_string(),
         actual_path: actual_path.display().to_string(),
         compatible: package.compatible,
-        expected_mode: infer_package_mode(&expected),
-        actual_mode: infer_package_mode(&actual),
+        expected_shape: infer_archive_shape(&expected),
+        actual_shape: infer_archive_shape(&actual),
         expected_items,
         actual_items,
         manual_expected_items,

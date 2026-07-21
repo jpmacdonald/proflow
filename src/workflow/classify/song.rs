@@ -113,16 +113,16 @@ pub(super) fn build_song_plan(
         SongLibraryMatch::Missing => song_title.to_string(),
     };
 
-    ResolvedItemPlan {
+    ResolvedItemPlan::new(
         output_key,
-        position: item.position,
-        pco_title: item.title.clone(),
+        item.position,
+        item.title.clone(),
         playlist_name,
         reason,
-        item_kind: ItemKind::Song,
-        item_type: Some(type_key.to_string()),
+        ItemKind::Song,
+        Some(type_key.to_string()),
         disposition,
-    }
+    )
 }
 
 fn use_existing_song_action(

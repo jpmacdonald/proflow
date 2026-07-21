@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -151,13 +152,6 @@ pub enum PlaylistError {
         path: PathBuf,
         /// Conflicting caller-supplied archive member path.
         archive_path: String,
-    },
-
-    /// A caller requested portable media that no final embedded presentation uses.
-    #[error("Portable media asset {path:?} is not referenced by any embedded presentation")]
-    UnreferencedPortableMediaAsset {
-        /// Canonical media source path.
-        path: PathBuf,
     },
 
     /// One source presentation was supplied with different embedded bytes.
@@ -631,6 +625,15 @@ pub struct PlaylistSet {
 }
 
 impl PlaylistSet {
+    /// Build the common one-playlist package without exposing the intermediate
+    /// child representation to callers.
+    pub fn single(
+        name: impl Into<String>,
+        entries: Vec<PlaylistEntry>,
+    ) -> Result<Self, PlaylistSetError> {
+        Self::new(vec![NamedPlaylist::new(name, entries)?])
+    }
+
     /// Normalize named playlists into canonical package order.
     pub fn new(playlists: Vec<NamedPlaylist>) -> Result<Self, PlaylistSetError> {
         if playlists.is_empty() {
@@ -682,29 +685,38 @@ impl PlaylistMediaAsset {
         }
     }
 
+    /// Resolve the exact member identity used by a portable native archive.
+    ///
+    /// Keeping this checked translation beside the package writer prevents
+    /// workflow evidence from independently reimplementing `ProPresenter`'s
+    /// native absolute-path naming rule.
+    pub(crate) fn resolved_archive_path(&self) -> Result<String, PlaylistError> {
+        media_archive_path(self)
+    }
+
     /// Bind this reviewed archive identity to bytes captured at preview time.
-    pub(crate) fn bind_reviewed(
+    pub(crate) fn bind_reviewed<'a>(
         &self,
-        data: &[u8],
-    ) -> Result<ReviewedPlaylistMediaAsset, PlaylistError> {
+        data: &'a [u8],
+    ) -> Result<ReviewedPlaylistMediaAsset<'a>, PlaylistError> {
         Ok(ReviewedPlaylistMediaAsset {
-            archive_path: media_archive_path(self)?,
-            data: data.to_vec(),
+            archive_path: self.resolved_archive_path()?,
+            data: Cow::Borrowed(data),
         })
     }
 }
 
 /// Portable media whose identity and bytes were bound during preview approval.
 #[derive(Debug)]
-pub struct ReviewedPlaylistMediaAsset {
+pub struct ReviewedPlaylistMediaAsset<'a> {
     pub(super) archive_path: String,
-    pub(super) data: Vec<u8>,
+    pub(super) data: Cow<'a, [u8]>,
 }
 
 /// Requested behavior when writing a playlist package.
 ///
 /// This is intentionally distinct from
-/// [`crate::propresenter::package::PlaylistPackageMode`], which describes an
+/// [`crate::propresenter::package::PlaylistArchiveShape`], which describes an
 /// archive after it has been read. Portable imports always discover media
 /// referenced by their embedded presentations; callers cannot accidentally
 /// request a nominally portable package while disabling that work.
@@ -728,15 +740,68 @@ impl PlaylistExportIntent {
 
     /// Construct a portable import whose presentation dependencies are discovered.
     #[must_use]
-    pub fn portable_import(additional_media_assets: Vec<PlaylistMediaAsset>) -> Self {
+    pub const fn portable_import(additional_media_assets: Vec<PlaylistMediaAsset>) -> Self {
         Self::PortableImport {
             additional_media_assets,
         }
     }
+
+    /// Operator-facing mode represented by this complete export intent.
+    #[must_use]
+    pub const fn mode(&self) -> PlaylistExportMode {
+        match self {
+            Self::LibraryLinks => PlaylistExportMode::LibraryLinks,
+            Self::PortableImport { .. } => PlaylistExportMode::PortableImport,
+        }
+    }
+
+    /// Additional or discovered media owned by a portable import.
+    #[must_use]
+    pub fn media_assets(&self) -> &[PlaylistMediaAsset] {
+        match self {
+            Self::LibraryLinks => &[],
+            Self::PortableImport {
+                additional_media_assets,
+            } => additional_media_assets,
+        }
+    }
+}
+
+impl Default for PlaylistExportIntent {
+    fn default() -> Self {
+        Self::portable_import(Vec::new())
+    }
 }
 
 /// Export behavior whose portable media bytes were captured at review time.
-pub(crate) enum ReviewedPlaylistExportIntent<'a> {
+#[derive(Clone, Copy)]
+pub enum ReviewedPlaylistExportIntent<'a> {
     LibraryLinks,
-    PortableImport(&'a [ReviewedPlaylistMediaAsset]),
+    PortableImport(&'a [ReviewedPlaylistMediaAsset<'a>]),
+}
+
+/// Operator-facing playlist export behavior.
+///
+/// This is write intent, not an inference about an archive that has already
+/// been read. The serialized names remain compatible with the existing MCP
+/// and CLI contract.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    rmcp::schemars::JsonSchema,
+)]
+pub enum PlaylistExportMode {
+    /// Reference presentations already installed in the selected library.
+    #[serde(rename = "library_local", alias = "library_links")]
+    LibraryLinks,
+    /// Embed presentations and every reviewed, resolvable media dependency.
+    #[default]
+    #[serde(rename = "export_portable", alias = "portable_import")]
+    PortableImport,
 }

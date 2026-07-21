@@ -36,11 +36,6 @@ fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
             "liturgical_edited",
         ),
         (
-            "Affirmation of Faith - The Heidelberg Catechism",
-            "10:30am traditional",
-            "liturgical_audience_generated",
-        ),
-        (
             "Unison Prayer",
             "10:30am traditional",
             "liturgical_audience_generated",
@@ -54,7 +49,7 @@ fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
         (
             "Offertory: O, The Depth of the Love of God",
             "10:30am traditional",
-            "song",
+            "titled_song_static",
         ),
         ("Choir Anthem: Gloria", "10:30am traditional", "song"),
         ("Amazing Grace", "10:30am traditional", "hymn"),
@@ -70,11 +65,28 @@ fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
             .expect("classified plan item");
 
         assert_eq!(
-            plan.item_type.as_deref(),
+            plan.item_type(),
             Some(expected_type),
             "wrong rule selected for '{title}' in '{service}'"
         );
     }
+
+    let affirmation = test_text_item(
+        "rule-order-affirmation",
+        1,
+        "Affirmation of Faith - The Heidelberg Catechism",
+        Some("Q. What is your only comfort?\nA. That I belong to Jesus Christ."),
+    );
+    let plans = build_plan(&[affirmation], &config, None, Some("10:30am traditional"));
+    let affirmation = plans
+        .iter()
+        .find(|plan| plan.pco_title == "Affirmation of Faith - The Heidelberg Catechism")
+        .expect("classified affirmation item");
+    assert_eq!(
+        affirmation.item_type(),
+        Some("liturgical_audience_generated"),
+        "text-category affirmations must use the liturgy rule"
+    );
 }
 
 #[test]
@@ -111,7 +123,7 @@ fn repo_expansion_rule_matrix_keeps_speaker_nametag_and_liturgy_order() {
         let actual_types = plans
             .iter()
             .filter(|plan| plan.pco_title == title)
-            .map(|plan| plan.item_type.as_deref().expect("expanded item type"))
+            .map(|plan| plan.item_type().expect("expanded item type"))
             .collect::<Vec<_>>();
         assert_eq!(actual_types, expected_types, "wrong expansion for {title}");
     }
@@ -176,7 +188,7 @@ fn repo_native_liturgy_routes_select_the_reviewed_files() {
         );
         assert_eq!(plans.len(), 1, "unexpected expansion for {title}");
         let plan = &plans[0];
-        assert_eq!(plan.item_type.as_deref(), Some("preserved_liturgy_static"));
+        assert_eq!(plan.item_type(), Some("preserved_liturgy_static"));
         assert!(matches!(
             plan.ready_action(),
             Some(ReadyAction::RestyleExisting { .. })

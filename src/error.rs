@@ -34,6 +34,20 @@ pub enum Error {
         hint: Option<&'static str>,
     },
 
+    /// Two consecutive direct Planning Center reads disagreed, so no coherent
+    /// normalized plan snapshot was available for review or commit.
+    #[error(
+        "Planning Center plan '{plan_id}' changed while it was being captured ({first_revision} then {second_revision}); retry after edits settle"
+    )]
+    PlanningCenterSnapshotUnstable {
+        /// Stable plan identity being captured.
+        plan_id: String,
+        /// Revision of the first direct normalized read.
+        first_revision: String,
+        /// Revision of the immediately following direct normalized read.
+        second_revision: String,
+    },
+
     /// Configuration error with guidance
     #[error("Configuration error: {message}. {hint}")]
     Config {
@@ -63,10 +77,6 @@ pub enum Error {
     /// Playlist generation error
     #[error("Playlist generation failed: {0}")]
     Playlist(String),
-
-    /// Generic message error (escape hatch)
-    #[error("{0}")]
-    Msg(String),
 }
 
 impl Error {
@@ -140,25 +150,12 @@ impl From<crate::propresenter::playlist::PlaylistError> for Error {
     }
 }
 
-// Convenience conversions
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Self::Io {
             source: e,
             path: None,
         }
-    }
-}
-
-impl From<String> for Error {
-    fn from(s: String) -> Self {
-        Self::Msg(s)
-    }
-}
-
-impl From<&str> for Error {
-    fn from(s: &str) -> Self {
-        Self::Msg(s.to_string())
     }
 }
 

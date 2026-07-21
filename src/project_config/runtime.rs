@@ -5,11 +5,26 @@
 //! express unsupported source/output combinations.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use crate::workflow::plan::{
-    BackgroundTransform, CueMacro, CueTransform, ExistingTransform, MacroTransform, RenderRole,
-    RenderStyle, ResolvedBackground, RestyleMacroPolicy, RestyleMacroRegion, RestyleMacroSelector,
-    SpeakerPalette,
+mod classification;
+mod existing;
+mod render;
+
+pub use classification::{
+    compile_item_rules, compile_required_playlist_items, CompiledDecision, CompiledDirectTarget,
+    CompiledExpansionStep, CompiledItemRule, CompiledRequiredPlaylistItem, CompiledRuleOutcome,
+    CompiledSpeakerTarget, ItemMatchInput, ResolvedPresentationType, ResolvedRequiredPresentation,
+};
+pub use existing::{BackgroundTransform, CueTransform, ExistingTransform, MacroTransform};
+#[cfg(test)]
+pub use render::{
+    CueMacro, IdentifierProblem, RenderPlanError, RestyleMacroRegion, SpeakerPalette,
+};
+#[cfg(not(test))]
+use render::{CueMacro, RestyleMacroRegion, SpeakerPalette};
+pub use render::{
+    RenderRole, RenderStyle, ResolvedBackground, RestyleMacroPolicy, RestyleMacroSelector,
 };
 
 use super::{
@@ -66,6 +81,24 @@ impl PresentationPolicy {
             Self::Review(review) => review.kind(),
             Self::GenerateScripture { .. } => ItemKind::Scripture,
         }
+    }
+
+    /// Whether a rule may select one exact existing library file for this policy.
+    const fn accepts_library_file_target(&self) -> bool {
+        matches!(
+            self,
+            Self::PreserveExisting { .. }
+                | Self::RestyleExisting { .. }
+                | Self::EditDescription { .. }
+        )
+    }
+
+    /// Whether a contextual decision may choose an existing presentation.
+    const fn accepts_existing_file_decision(&self) -> bool {
+        matches!(
+            self,
+            Self::PreserveExisting { .. } | Self::RestyleExisting { .. }
+        )
     }
 }
 
@@ -201,25 +234,218 @@ impl ServiceScope {
     }
 }
 
+/// Compile every cue-role declaration once, including roles not currently used
+/// by a presentation. Presentation compilation consumes only these checked
+/// values and never reinterprets the raw role contract.
+pub(super) fn compile_render_roles(
+    config: &RawProjectConfig,
+) -> (BTreeMap<String, RenderRole>, Vec<ConfigValidationIssue>) {
+    let mut roles = BTreeMap::new();
+    let mut issues = Vec::new();
+    for (key, role) in &config.cue_roles {
+        match compile_render_role(key, role) {
+            Ok(role) => {
+                roles.insert(key.clone(), role);
+            }
+            Err(issue) => issues.push(issue),
+        }
+    }
+    (roles, issues)
+}
+
+fn compile_render_role(
+    key: &str,
+    role: &super::CueRoleConfig,
+) -> Result<RenderRole, ConfigValidationIssue> {
+    let cue_macro = match (&role.enter_macro, &role.leader_enter_macro) {
+        (None, Some(_)) => {
+            return Err(ConfigValidationIssue {
+                path: format!("cue_roles.{key}.leader_enter_macro"),
+                message: "leader_enter_macro requires enter_macro".to_string(),
+            });
+        }
+        (Some(enter), leader_enter) => Some(
+            CueMacro::new(enter.clone(), leader_enter.clone()).map_err(|error| {
+                ConfigValidationIssue {
+                    path: format!("cue_roles.{key}.enter_macro"),
+                    message: error.to_string(),
+                }
+            })?,
+        ),
+        (None, None) => None,
+    };
+    let speaker_palette = role.speaker_colors.map(|colors| {
+        SpeakerPalette::new(colors.leader.components(), colors.audience.components())
+    });
+    RenderRole::new(
+        key.to_string(),
+        role.slide.clone(),
+        role.text_slots.clone(),
+        cue_macro,
+        speaker_palette,
+    )
+    .map_err(|error| ConfigValidationIssue {
+        path: format!("cue_roles.{key}"),
+        message: error.to_string(),
+    })
+}
+
+/// Semantic presentation-shape checks owned by runtime compilation.
+///
+/// Lexical identities and global references are checked before this phase. The
+/// checks here correspond exactly to the variants that `compile_policy` can
+/// construct, so validation cannot drift into a second policy matrix.
+fn presentation_policy_issues(
+    key: &str,
+    wire: &PresentationTypeConfig,
+) -> Vec<ConfigValidationIssue> {
+    let mut issues = Vec::new();
+    let issue = |field: &str, message: String| ConfigValidationIssue {
+        path: format!("presentation_types.{key}.{field}"),
+        message,
+    };
+
+    match (wire.content_source, wire.description_parser) {
+        (ContentSourceKind::Description, _) | (_, None) => {}
+        (_, Some(_)) => issues.push(issue(
+            "description_parser",
+            "description_parser is only valid for description content".to_string(),
+        )),
+    }
+
+    if wire.content_source == ContentSourceKind::Song && wire.kind != ItemKind::Song {
+        issues.push(issue(
+            "content_source",
+            "song content_source requires song kind; song kind may use static content for an existing presentation".to_string(),
+        ));
+    }
+    let valid_scripture_source = match wire.kind {
+        ItemKind::Scripture => matches!(
+            wire.content_source,
+            ContentSourceKind::Static | ContentSourceKind::Scripture
+        ),
+        _ => wire.content_source != ContentSourceKind::Scripture,
+    };
+    if !valid_scripture_source {
+        issues.push(issue(
+            "content_source",
+            "scripture content_source requires scripture kind; scripture kind may use static content for an existing presentation".to_string(),
+        ));
+    }
+
+    if wire.arrangement.is_some()
+        && !matches!(
+            wire.output_strategy,
+            OutputStrategy::PreserveExisting | OutputStrategy::RestyleExisting
+        )
+    {
+        issues.push(issue(
+            "arrangement",
+            "arrangement is only valid for preserve_existing or restyle_existing presentations"
+                .to_string(),
+        ));
+    }
+    if wire.operator_cue_limit.is_some() && wire.output_strategy != OutputStrategy::RestyleExisting
+    {
+        issues.push(issue(
+            "operator_cue_limit",
+            "operator_cue_limit is only valid for restyle_existing presentations".to_string(),
+        ));
+    }
+
+    match wire.output_strategy {
+        OutputStrategy::PreserveExisting => {
+            for (field, configured) in [
+                ("display", wire.display.is_some()),
+                ("background", wire.background.is_some()),
+                ("max_lines_per_slide", wire.max_lines_per_slide.is_some()),
+                ("macro_transitions", wire.macro_transitions.is_some()),
+            ] {
+                if configured {
+                    issues.push(issue(
+                        field,
+                        format!(
+                            "{field} is not valid for preserve_existing because exempt files are unchanged"
+                        ),
+                    ));
+                }
+            }
+        }
+        OutputStrategy::RestyleExisting => {
+            for (field, configured) in [
+                ("display", wire.display.is_some()),
+                ("max_lines_per_slide", wire.max_lines_per_slide.is_some()),
+            ] {
+                if configured {
+                    issues.push(issue(
+                        field,
+                        format!(
+                            "{field} is not valid for restyle_existing because slide content is preserved"
+                        ),
+                    ));
+                }
+            }
+        }
+        OutputStrategy::Skip
+        | OutputStrategy::EditInPlace
+        | OutputStrategy::GenerateNew
+        | OutputStrategy::NeedsReview => {}
+    }
+
+    issues
+}
+
+const fn content_source_name(source: ContentSourceKind) -> &'static str {
+    match source {
+        ContentSourceKind::Static => "static",
+        ContentSourceKind::Description => "description",
+        ContentSourceKind::Scripture => "scripture",
+        ContentSourceKind::Song => "song",
+    }
+}
+
+const fn output_strategy_name(strategy: OutputStrategy) -> &'static str {
+    match strategy {
+        OutputStrategy::Skip => "skip",
+        OutputStrategy::PreserveExisting => "preserve_existing",
+        OutputStrategy::RestyleExisting => "restyle_existing",
+        OutputStrategy::EditInPlace => "edit_in_place",
+        OutputStrategy::GenerateNew => "generate_new",
+        OutputStrategy::NeedsReview => "needs_review",
+    }
+}
+
 pub(super) fn compile_presentation_policies(
     config: &RawProjectConfig,
-) -> Result<BTreeMap<String, PresentationPolicy>, ConfigValidationIssue> {
-    config
-        .presentation_types
-        .iter()
-        .map(|(key, wire)| compile_policy(config, key, wire).map(|policy| (key.clone(), policy)))
-        .collect()
+    roles: &BTreeMap<String, RenderRole>,
+) -> (
+    BTreeMap<String, Arc<PresentationPolicy>>,
+    Vec<ConfigValidationIssue>,
+) {
+    let mut policies = BTreeMap::new();
+    let mut issues = Vec::new();
+    for (key, wire) in &config.presentation_types {
+        let policy_issues = presentation_policy_issues(key, wire);
+        if !policy_issues.is_empty() {
+            issues.extend(policy_issues);
+            continue;
+        }
+        match compile_policy(config, roles, key, wire) {
+            Ok(policy) => {
+                policies.insert(key.clone(), Arc::new(policy));
+            }
+            Err(issue) => issues.push(issue),
+        }
+    }
+    (policies, issues)
 }
 
 fn compile_policy(
     config: &RawProjectConfig,
+    roles: &BTreeMap<String, RenderRole>,
     key: &str,
     wire: &PresentationTypeConfig,
 ) -> Result<PresentationPolicy, ConfigValidationIssue> {
-    let issue = |field: &str, message: &str| ConfigValidationIssue {
-        path: format!("presentation_types.{key}.{field}"),
-        message: message.to_string(),
-    };
     match (wire.output_strategy, wire.content_source) {
         (OutputStrategy::Skip, _) => Ok(PresentationPolicy::Skip { kind: wire.kind }),
         (OutputStrategy::NeedsReview, ContentSourceKind::Static) => {
@@ -228,16 +454,11 @@ fn compile_policy(
             }))
         }
         (OutputStrategy::NeedsReview, ContentSourceKind::Description) => {
-            let parser = wire.description_parser.ok_or_else(|| {
-                issue(
-                    "description_parser",
-                    "description content requires an explicit description_parser",
-                )
-            })?;
+            let parser = required_description_parser(key, wire)?;
             let render = wire
                 .display
                 .as_ref()
-                .map(|_| compile_render_policy(config, key, wire))
+                .map(|display| compile_render_policy(config, roles, key, wire, display))
                 .transpose()?;
             Ok(PresentationPolicy::Review(ReviewPolicy::Description {
                 kind: wire.kind,
@@ -275,41 +496,46 @@ fn compile_policy(
             })
         }
         (OutputStrategy::EditInPlace, ContentSourceKind::Description) => {
-            let parser = wire.description_parser.ok_or_else(|| {
-                issue(
-                    "description_parser",
-                    "description content requires an explicit description_parser",
-                )
-            })?;
+            let parser = required_description_parser(key, wire)?;
             Ok(PresentationPolicy::EditDescription {
                 kind: wire.kind,
                 parser,
-                render: compile_render_policy(config, key, wire)?,
+                render: compile_required_render_policy(config, roles, key, wire, "edit_in_place")?,
             })
         }
         (OutputStrategy::GenerateNew, ContentSourceKind::Description) => {
-            let parser = wire.description_parser.ok_or_else(|| {
-                issue(
-                    "description_parser",
-                    "description content requires an explicit description_parser",
-                )
-            })?;
+            let parser = required_description_parser(key, wire)?;
             Ok(PresentationPolicy::GenerateDescription {
                 kind: wire.kind,
                 parser,
-                render: compile_render_policy(config, key, wire)?,
+                render: compile_required_render_policy(config, roles, key, wire, "generate_new")?,
             })
         }
         (OutputStrategy::GenerateNew, ContentSourceKind::Scripture) => {
             Ok(PresentationPolicy::GenerateScripture {
-                render: compile_render_policy(config, key, wire)?,
+                render: compile_required_render_policy(config, roles, key, wire, "generate_new")?,
             })
         }
-        _ => Err(issue(
-            "output_strategy",
-            "content source and output strategy do not form a supported runtime policy",
-        )),
+        _ => Err(ConfigValidationIssue {
+            path: format!("presentation_types.{key}.output_strategy"),
+            message: format!(
+                "{} content is not supported by {}",
+                content_source_name(wire.content_source),
+                output_strategy_name(wire.output_strategy)
+            ),
+        }),
     }
+}
+
+fn required_description_parser(
+    key: &str,
+    wire: &PresentationTypeConfig,
+) -> Result<DescriptionParserKind, ConfigValidationIssue> {
+    wire.description_parser
+        .ok_or_else(|| ConfigValidationIssue {
+            path: format!("presentation_types.{key}.description_parser"),
+            message: "description content requires an explicit description_parser".to_string(),
+        })
 }
 
 fn existing_identity(
@@ -337,7 +563,9 @@ fn compile_existing_transform_policy(
     let macros = wire
         .macro_transitions
         .as_ref()
-        .map(|macros| compile_macro_policy(key, macros).map(MacroTransform::Enforce))
+        .map(|macros| {
+            compile_macro_policy(key, macros, wire.operator_cue_limit).map(MacroTransform::Enforce)
+        })
         .transpose()?
         .unwrap_or(MacroTransform::Preserve);
     let cues = wire
@@ -374,6 +602,7 @@ fn compile_existing_transform_policy(
 fn compile_macro_policy(
     key: &str,
     macros: &super::RestyleMacroConfig,
+    operator_cue_limit: Option<std::num::NonZeroUsize>,
 ) -> Result<RestyleMacroPolicy, ConfigValidationIssue> {
     let issue = |message: String| ConfigValidationIssue {
         path: format!("presentation_types.{key}.macro_transitions"),
@@ -382,41 +611,75 @@ fn compile_macro_policy(
     let regions = macros
         .regions
         .iter()
-        .map(|region| {
+        .enumerate()
+        .map(|(region_index, region)| {
             let selector = match &region.selector {
                 RestyleMacroSelectorConfig::OperatorCue { index } => {
+                    if let Some(limit) = operator_cue_limit.filter(|limit| *index >= limit.get()) {
+                        return Err(ConfigValidationIssue {
+                            path: format!(
+                                "presentation_types.{key}.macro_transitions.regions.{region_index}.selector.index"
+                            ),
+                            message: format!(
+                                "operator cue index {index} is not retained by operator_cue_limit {limit}"
+                            ),
+                        });
+                    }
                     RestyleMacroSelector::OperatorCue { index: *index }
                 }
                 RestyleMacroSelectorConfig::ArrangementGroup { index, names } => {
                     RestyleMacroSelector::arrangement_group(
                         *index,
                         names.iter().cloned().collect(),
-                    )?
+                    )
+                    .map_err(|error| ConfigValidationIssue {
+                        path: format!(
+                            "presentation_types.{key}.macro_transitions.regions.{region_index}.selector"
+                        ),
+                        message: error.to_string(),
+                    })?
                 }
             };
-            RestyleMacroRegion::new(selector, region.enter_macro.clone())
+            RestyleMacroRegion::new(selector, region.enter_macro.clone()).map_err(|error| {
+                ConfigValidationIssue {
+                    path: format!(
+                        "presentation_types.{key}.macro_transitions.regions.{region_index}.enter_macro"
+                    ),
+                    message: error.to_string(),
+                }
+            })
         })
-        .collect::<Result<Vec<_>, crate::workflow::plan::RenderPlanError>>()
-        .map_err(|error| issue(error.to_string()))?;
+        .collect::<Result<Vec<_>, ConfigValidationIssue>>()?;
     RestyleMacroPolicy::new(regions).map_err(|error| issue(error.to_string()))
 }
 
 fn compile_render_policy(
     config: &RawProjectConfig,
+    roles: &BTreeMap<String, RenderRole>,
     key: &str,
     wire: &PresentationTypeConfig,
+    display: &DisplayBindingConfig,
 ) -> Result<RenderPolicy, ConfigValidationIssue> {
-    let display = wire.display.as_ref().ok_or_else(|| ConfigValidationIssue {
-        path: format!("presentation_types.{key}.display"),
-        message: "rendered presentation requires a display binding".to_string(),
-    })?;
     let (title, content) = match display {
-        DisplayBindingConfig::Single { role } => (None, compile_role(config, key, role)?),
+        DisplayBindingConfig::Single { role } => (None, compile_role(roles, key, role)?),
         DisplayBindingConfig::Split { title, content } => (
-            Some(compile_role(config, key, title)?),
-            compile_role(config, key, content)?,
+            Some(compile_role(roles, key, title)?),
+            compile_role(roles, key, content)?,
         ),
     };
+    if matches!(
+        wire.description_parser,
+        Some(DescriptionParserKind::Liturgical | DescriptionParserKind::LiturgicalAudience)
+    ) && content.speaker_palette().is_none()
+    {
+        return Err(ConfigValidationIssue {
+            path: format!("presentation_types.{key}.display"),
+            message: format!(
+                "liturgical rendering requires content cue role '{}' to define speaker_colors and its paired leader_enter_macro",
+                content.id()
+            ),
+        });
+    }
     let background = wire
         .background
         .as_ref()
@@ -434,13 +697,7 @@ fn compile_render_policy(
         })
         .map(|(override_rule, background)| {
             let background = compile_background(config, key, background)?;
-            let style = checked_style(
-                key,
-                Some(background),
-                base.content().clone(),
-                base.title().cloned(),
-                wire.max_lines_per_slide,
-            )?;
+            let style = base.clone().with_background(background);
             Ok(ServiceRenderStyle {
                 scope: compile_scope(config, &override_rule.when),
                 style,
@@ -449,6 +706,20 @@ fn compile_render_policy(
         .collect::<Result<Vec<_>, ConfigValidationIssue>>()?;
 
     Ok(RenderPolicy { base, overrides })
+}
+
+fn compile_required_render_policy(
+    config: &RawProjectConfig,
+    roles: &BTreeMap<String, RenderRole>,
+    key: &str,
+    wire: &PresentationTypeConfig,
+    strategy: &str,
+) -> Result<RenderPolicy, ConfigValidationIssue> {
+    let display = wire.display.as_ref().ok_or_else(|| ConfigValidationIssue {
+        path: format!("presentation_types.{key}.display"),
+        message: format!("{strategy} requires a display binding"),
+    })?;
+    compile_render_policy(config, roles, key, wire, display)
 }
 
 fn checked_style(
@@ -471,40 +742,17 @@ fn checked_style(
 }
 
 fn compile_role(
-    config: &RawProjectConfig,
+    roles: &BTreeMap<String, RenderRole>,
     type_key: &str,
     role_key: &str,
 ) -> Result<RenderRole, ConfigValidationIssue> {
-    let role = config
-        .cue_roles
+    roles
         .get(role_key)
+        .cloned()
         .ok_or_else(|| ConfigValidationIssue {
             path: format!("presentation_types.{type_key}.display"),
             message: format!("references unknown cue role '{role_key}'"),
-        })?;
-    let cue_macro = role
-        .enter_macro
-        .as_ref()
-        .map(|enter| CueMacro::new(enter.clone(), role.leader_enter_macro.clone()))
-        .transpose()
-        .map_err(|error| ConfigValidationIssue {
-            path: format!("cue_roles.{role_key}.enter_macro"),
-            message: error.to_string(),
-        })?;
-    let speaker_palette = role.speaker_colors.map(|colors| {
-        SpeakerPalette::new(colors.leader.components(), colors.audience.components())
-    });
-    RenderRole::new(
-        role_key.to_string(),
-        role.slide.clone(),
-        role.text_slots.clone(),
-        cue_macro,
-        speaker_palette,
-    )
-    .map_err(|error| ConfigValidationIssue {
-        path: format!("cue_roles.{role_key}"),
-        message: error.to_string(),
-    })
+        })
 }
 
 fn compile_background(
@@ -598,20 +846,25 @@ mod tests {
     #[test]
     fn service_background_and_arrangement_are_compiled_by_capability() {
         let checked = parse_project_config_str(
-            r#"{
+            r##"{
               "version": 4,
               "service_groups": {"seasonal": {"service_types": ["Christmas Eve"]}},
               "backgrounds": {
                 "ordinary": "backgrounds/ordinary.png",
                 "seasonal": "backgrounds/seasonal.png"
               },
-              "cue_roles": {"body": {"slide": "Body"}},
+              "cue_roles": {"body": {
+                "slide": "Body",
+                "enter_macro": "Scripture/Prayer",
+                "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+                "speaker_colors": {"leader": "#FEDB4F", "audience": "#FFFFFF"}
+              }},
               "presentation_types": {
                 "song": {"kind":"song", "content_source":"song", "output_strategy": "preserve_existing", "arrangement":"Default"},
                 "text": {"kind":"liturgy", "content_source":"description", "description_parser":"liturgical", "output_strategy":"generate_new", "display":{"kind":"single", "role":"body"}, "background":"ordinary"}
               },
               "overrides": [{"when":{"service_group":"seasonal"}, "arrangement":"Seasonal", "background":"seasonal"}]
-            }"#,
+            }"##,
         )
         .expect("config should compile");
 

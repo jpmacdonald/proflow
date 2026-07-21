@@ -86,10 +86,109 @@ fn named_slot_binding_changes_only_the_selected_field() {
     let rendered =
         render_presentation(&spec, &RenderAssets::new(role, Vec::new()).expect("assets"))
             .expect("render");
-    let output = cue_slide(&rendered.presentation.cues[0]);
+    let output = cue_slide(&rendered.presentation().cues[0]);
 
     assert_eq!(rendered_text(output, 0), "Ada Lovelace");
     assert_eq!(rendered_text(output, 1), "Old title");
+}
+
+#[test]
+fn role_indexed_render_rejects_a_changed_cue_sequence_atomically() {
+    let slide = template(vec![text_element("Body", "Old")]);
+    let role_id = CueRoleId::new("content").expect("role");
+    let role = ResolvedCueRole::body(role_id.clone(), &slide).expect("body role");
+    let spec = PresentationSpec::new(
+        "Atomic",
+        GroupSpec::anonymous(
+            CueSpec::text(
+                role_id,
+                TextBindings::single(TextField::body(), vec![StyledSegment::unstyled("New")]),
+            ),
+            Vec::new(),
+        ),
+        Vec::new(),
+    )
+    .expect("spec");
+    let mut rendered =
+        render_presentation(&spec, &RenderAssets::new(role, Vec::new()).expect("assets"))
+            .expect("render");
+    let original = rendered.presentation().clone();
+    let mut candidate = original.clone();
+    candidate.cues.push(candidate.cues[0].clone());
+
+    assert_eq!(
+        rendered.replace_preserving_role_mapping(candidate),
+        Err(RenderError::RoleCueSequenceChanged)
+    );
+    assert_eq!(rendered.presentation(), &original);
+}
+
+#[test]
+fn measured_render_rejects_changed_text_geometry() {
+    let slide = template(vec![text_element("Body", "Old")]);
+    let role_id = CueRoleId::new("content").expect("role");
+    let role = ResolvedCueRole::body(role_id.clone(), &slide).expect("body role");
+    let spec = PresentationSpec::new(
+        "Measured",
+        GroupSpec::anonymous(
+            CueSpec::text(
+                role_id,
+                TextBindings::single(TextField::body(), vec![StyledSegment::unstyled("New")]),
+            ),
+            Vec::new(),
+        ),
+        Vec::new(),
+    )
+    .expect("spec");
+    let mut rendered =
+        render_presentation(&spec, &RenderAssets::new(role, Vec::new()).expect("assets"))
+            .expect("render");
+    let destination = crate::propresenter::text_fit::TextFitEvidence::diagnostic(1, true)
+        .summarize(
+            crate::propresenter::text_fit::TextFitDestinationIdentity::SourceTheme {
+                cue_role: "content".to_string(),
+                theme_slide_uuid: None,
+            },
+        );
+    rendered
+        .retain_text_fit_summary(vec![crate::propresenter::text_fit::CueTextFitSummary::new(
+            0,
+            vec![destination],
+        )])
+        .expect("retain measured cue evidence");
+    let original = rendered.presentation().clone();
+    let mut candidate = original.clone();
+    let text_element = candidate.cues[0]
+        .actions
+        .iter_mut()
+        .find_map(|action| match action.action_type_data.as_mut() {
+            Some(rv_data::action::ActionTypeData::Slide(slide)) => match slide.slide.as_mut() {
+                Some(rv_data::action::slide_type::Slide::Presentation(slide)) => slide
+                    .base_slide
+                    .as_mut()
+                    .and_then(|base| base.elements.first_mut())
+                    .and_then(|element| element.element.as_mut()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("rendered text element");
+    text_element.bounds = Some(rv_data::graphics::Rect {
+        origin: Some(rv_data::graphics::Point {
+            x: Some(0.0),
+            y: 0.0,
+        }),
+        size: Some(rv_data::graphics::Size {
+            width: 100.0,
+            height: 100.0,
+        }),
+    });
+
+    assert_eq!(
+        rendered.replace_preserving_role_mapping(candidate),
+        Err(RenderError::MeasuredCueLayoutChanged { cue_index: 0 })
+    );
+    assert_eq!(rendered.presentation(), &original);
 }
 
 #[test]
@@ -103,7 +202,10 @@ fn native_template_instances_have_unique_cue_local_identities() {
     )
     .expect("native template presentation");
     let template_slide = cue_slide(source.cues.first().expect("template cue")).clone();
-    let source_base = template_slide.base_slide.as_ref().expect("source base slide");
+    let source_base = template_slide
+        .base_slide
+        .as_ref()
+        .expect("source base slide");
     let source_element_uuid = source_base.elements[0]
         .element
         .as_ref()
@@ -127,8 +229,8 @@ fn native_template_instances_have_unique_cue_local_identities() {
     let rendered =
         render_presentation(&spec, &RenderAssets::new(role, Vec::new()).expect("assets"))
             .expect("render");
-    let first = cue_slide(&rendered.presentation.cues[0]);
-    let second = cue_slide(&rendered.presentation.cues[1]);
+    let first = cue_slide(&rendered.presentation().cues[0]);
+    let second = cue_slide(&rendered.presentation().cues[1]);
     let first_base = first.base_slide.as_ref().expect("first base slide");
     let second_base = second.base_slide.as_ref().expect("second base slide");
     let first_element_uuid = first_base.elements[0]
@@ -205,7 +307,7 @@ fn replacement_rtf_uses_native_style_and_preserves_rtf_family() {
     let rendered =
         render_presentation(&spec, &RenderAssets::new(role, Vec::new()).expect("assets"))
             .expect("render");
-    let output = cue_slide(&rendered.presentation.cues[0]);
+    let output = cue_slide(&rendered.presentation().cues[0]);
     let text = output.base_slide.as_ref().expect("base slide").elements[0]
         .element
         .as_ref()
@@ -274,11 +376,11 @@ fn renderer_records_generic_role_transitions() {
     )
     .expect("render");
 
-    assert_eq!(rendered.cue_roles.entries(&title_id), &[0, 2]);
-    assert_eq!(rendered.cue_roles.entries(&content_id), &[1]);
+    assert_eq!(rendered.cue_roles().entries(&title_id), &[0, 2]);
+    assert_eq!(rendered.cue_roles().entries(&content_id), &[1]);
     assert_eq!(
         rendered
-            .cue_roles
+            .cue_roles()
             .transitions()
             .iter()
             .map(RoleTransition::cue_index)
@@ -339,11 +441,11 @@ fn renderer_derives_role_entries_from_arrangement_traversal() {
     )
     .expect("render");
 
-    assert_eq!(rendered.cue_roles.entries(&shared_id), &[0, 1]);
-    assert_eq!(rendered.cue_roles.entries(&divider_id), &[2]);
+    assert_eq!(rendered.cue_roles().entries(&shared_id), &[0, 1]);
+    assert_eq!(rendered.cue_roles().entries(&divider_id), &[2]);
     assert_eq!(
         rendered
-            .cue_roles
+            .cue_roles()
             .transitions()
             .iter()
             .map(RoleTransition::cue_index)
@@ -399,19 +501,25 @@ fn renderer_constructs_only_declared_cues_and_groups() {
         .with_group_catalog(&groups);
     let rendered = render_presentation(&spec, &assets).expect("render");
 
-    assert_eq!(rendered.presentation.cues.len(), 3);
-    assert_eq!(rendered.presentation.cue_groups.len(), 2);
-    assert_eq!(rendered.presentation.cue_groups[0].cue_identifiers.len(), 2);
-    assert_eq!(rendered.presentation.cue_groups[1].cue_identifiers.len(), 1);
+    assert_eq!(rendered.presentation().cues.len(), 3);
+    assert_eq!(rendered.presentation().cue_groups.len(), 2);
     assert_eq!(
-        rendered.presentation.cue_groups[1]
+        rendered.presentation().cue_groups[0].cue_identifiers.len(),
+        2
+    );
+    assert_eq!(
+        rendered.presentation().cue_groups[1].cue_identifiers.len(),
+        1
+    );
+    assert_eq!(
+        rendered.presentation().cue_groups[1]
             .group
             .as_ref()
             .map(|group| group.name.as_str()),
         Some("Second")
     );
     assert_eq!(
-        rendered.presentation.cue_groups[1]
+        rendered.presentation().cue_groups[1]
             .group
             .as_ref()
             .and_then(|group| group.application_group_identifier.as_ref())
@@ -480,7 +588,7 @@ fn arrangements_round_trip_ordered_repeated_group_references_and_selection() {
     let rendered =
         render_presentation(&spec, &RenderAssets::new(role, Vec::new()).expect("assets"))
             .expect("render");
-    let decoded = rv_data::Presentation::decode(rendered.presentation.encode_to_vec().as_slice())
+    let decoded = rv_data::Presentation::decode(rendered.presentation().encode_to_vec().as_slice())
         .expect("native round trip");
     let group_ids = decoded
         .cue_groups

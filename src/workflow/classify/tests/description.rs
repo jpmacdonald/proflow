@@ -14,7 +14,15 @@ fn edit_in_place_without_parsed_content_requires_review() {
             {
               "version": 4,
               "cue_roles": {
-                "content": { "slide": "Content" }
+                "content": {
+                  "slide": "Content",
+                  "enter_macro": "Scripture/Prayer",
+                  "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+                  "speaker_colors": {
+                    "leader": "\u0023FEDB4F",
+                    "audience": "\u0023FFFFFF"
+                  }
+                }
               },
               "presentation_types": {
                 "weekly": {
@@ -114,7 +122,15 @@ fn description_placeholders_block_edit_and_generation_plans() {
             {
               "version": 4,
               "cue_roles": {
-                "content": { "slide": "Content" }
+                "content": {
+                  "slide": "Content",
+                  "enter_macro": "Scripture/Prayer",
+                  "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+                  "speaker_colors": {
+                    "leader": "\u0023FEDB4F",
+                    "audience": "\u0023FFFFFF"
+                  }
+                }
               },
               "presentation_types": {
                 "weekly_edit": {
@@ -262,7 +278,17 @@ fn broad_arrangement_override_only_changes_use_existing_style() {
         r#"
             {
               "version": 4,
-              "cue_roles": { "content": { "slide": "Content" } },
+              "cue_roles": {
+                "content": {
+                  "slide": "Content",
+                  "enter_macro": "Scripture/Prayer",
+                  "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+                  "speaker_colors": {
+                    "leader": "\u0023FEDB4F",
+                    "audience": "\u0023FFFFFF"
+                  }
+                }
+              },
               "presentation_types": {
                 "existing": {
                   "kind": "graphic",
@@ -408,7 +434,13 @@ fn description_generate_new_uses_strategy_not_edited_fallback() {
               "version": 4,
               "cue_roles": {
                 "information": {
-                  "slide": "Information (Projectors)"
+                  "slide": "Information (Projectors)",
+                  "enter_macro": "Scripture/Prayer",
+                  "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+                  "speaker_colors": {
+                    "leader": "\u0023FEDB4F",
+                    "audience": "\u0023FFFFFF"
+                  }
                 }
               },
               "presentation_types": {

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::propresenter::generated::rv_data::{self, playlist};
-use crate::propresenter::package::{presentation_items, PlaylistPackageMode};
+use crate::propresenter::package::{presentation_items, PlaylistArchiveShape};
 use crate::propresenter::SlideType;
 
 fn presentation_bytes(name: &str) -> Vec<u8> {

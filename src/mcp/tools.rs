@@ -11,6 +11,7 @@ use rmcp::{tool, tool_router};
 use serde::Serialize;
 
 use crate::project_config::parse_project_config_value;
+use crate::propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode};
 use crate::propresenter::theme::ThemeCache;
 use crate::setup;
 use crate::workflow::classify;
@@ -18,8 +19,8 @@ use crate::workflow::execute::BuildRequest;
 
 use super::config::write_config_reviewed;
 use super::review::{
-    bounded_days, bounded_usize, consume_reviewed_plan, parse_media_assets, preview_lookahead_days,
-    replace_prepared_snapshot, resolve_entry_override, resolve_plan_metadata, DEFAULT_DAYS_AHEAD,
+    bounded_days, bounded_usize, consume_reviewed_plan, parse_media_assets,
+    replace_prepared_snapshot, resolve_entry_override, DEFAULT_DAYS_AHEAD,
 };
 use super::schema::{
     format_category, BuildServiceArgs, CatalogAssetsArgs, ConfigValidationResponse,
@@ -208,37 +209,6 @@ impl ProFlowServer {
         &self,
         Parameters(args): Parameters<PreviewPlaylistArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let days_ahead = preview_lookahead_days(self.render_assets.config().defaults().days_ahead);
-        let (services, upcoming_plans) = self
-            .pco_client
-            .get_upcoming_services(days_ahead)
-            .await
-            .map_err(|error| mcp_err(error.to_string()))?;
-        let metadata = resolve_plan_metadata(
-            &services,
-            &upcoming_plans,
-            &args.plan_id,
-            args.service_name.as_deref(),
-            days_ahead,
-        )
-        .map_err(|error| mcp_err(error.to_string()))?;
-
-        let items = self
-            .pco_client
-            .get_service_items(&args.plan_id)
-            .await
-            .map_err(|e| mcp_err(e.to_string()))?;
-        let mappings = self.render_assets.config();
-
-        let index_guard = self.file_index.lock().await;
-        let plans = classify::build_plan(
-            &items,
-            mappings,
-            Some(&index_guard),
-            Some(metadata.service_name.as_str()),
-        );
-        drop(index_guard);
-
         let media_assets = parse_media_assets(args.media_assets);
         let overrides = args
             .overrides
@@ -246,33 +216,33 @@ impl ProFlowServer {
             .into_iter()
             .map(|entry| resolve_entry_override(self.render_assets.config(), entry))
             .collect::<Result<Vec<_>, _>>()?;
-        let playlist_package_mode = args.package_mode.unwrap_or_default();
+        let playlist_export_mode = args.package_mode.unwrap_or_default();
         let request = BuildRequest {
             plan_id: args.plan_id.clone(),
-            service_name: Some(metadata.service_name.clone()),
-            playlist_name: Some(
-                args.playlist_name
-                    .unwrap_or_else(|| metadata.default_playlist_name.clone()),
-            ),
+            service_name: args.service_name,
+            playlist_name: args.playlist_name,
             skip_output_keys: args.skip_output_keys.unwrap_or_default(),
             overrides,
-            playlist_package_mode,
-            media_assets,
+            playlist_export: match playlist_export_mode {
+                PlaylistExportMode::LibraryLinks => PlaylistExportIntent::library_links(),
+                PlaylistExportMode::PortableImport => {
+                    PlaylistExportIntent::portable_import(media_assets)
+                }
+            },
         };
         let reviewed = self
             .service_build_executor()
-            .review_build_request(
-                request,
-                &plans,
-                self.render_assets.config().defaults().presentation_size,
-            )
+            .review_service_request(request)
             .await
             .map_err(|error| mcp_err(error.to_string()))?;
+        let plan_title = reviewed.plan_title().to_string();
+        let service_name = reviewed.service_name().to_string();
+        let date = reviewed.date().format("%Y-%m-%d").to_string();
         let entries = classify::render_preview(reviewed.plans());
         let playlist_name = reviewed.playlist_name().to_string();
-        let package_mode = reviewed.playlist_package_mode();
+        let package_mode = reviewed.playlist_export_mode();
         let media_assets = reviewed
-            .media_assets()
+            .additional_media_assets()
             .iter()
             .map(|asset| ReviewedMediaAssetResponse {
                 path: asset.source_path.display().to_string(),
@@ -281,15 +251,15 @@ impl ProFlowServer {
             .collect();
         let summary = classify::PreviewSummary::from_entries(&entries);
         let result = classify::PreviewResult {
-            plan_title: metadata.plan_title,
-            service_name: metadata.service_name.clone(),
-            date: metadata.date,
+            plan_title,
+            service_name,
+            date,
             entries,
             summary,
         };
 
         let prepared = match reviewed {
-            crate::workflow::execute::BuildReview::Prepared(prepared) => Some(prepared),
+            crate::workflow::execute::BuildReview::Prepared(prepared) => Some(*prepared),
             crate::workflow::execute::BuildReview::NeedsReview(_) => None,
         };
         let preview_revision = {

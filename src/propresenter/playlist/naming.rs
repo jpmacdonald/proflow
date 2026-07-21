@@ -1,19 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::domain::PlaylistEntry;
-use crate::propresenter::generated::rv_data::url;
+use super::domain::{PlaylistEntry, PlaylistError};
+use crate::propresenter::generated::rv_data;
+use crate::propresenter::native_url;
 use crate::propresenter::package::PlaylistItemSummary;
 use crate::propresenter::SlideType;
 
 pub(super) fn presentation_filename(path: &str) -> Option<String> {
-    let filename = path
-        .trim()
-        .trim_end_matches(['/', '\\'])
-        .rsplit(['/', '\\'])
-        .next()
-        .filter(|filename| !filename.is_empty())?;
-    let filename = percent_decode_file_component(filename)?;
+    let filename = native_url::decoded_basename(path.trim())?;
     Path::new(&filename)
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pro"))
@@ -34,125 +29,40 @@ pub fn linked_presentation_filename(item: &PlaylistItemSummary) -> Option<String
         })
 }
 
-fn percent_decode_file_component(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hi = bytes.get(index + 1).and_then(|byte| hex_value(*byte))?;
-            let lo = bytes.get(index + 2).and_then(|byte| hex_value(*byte))?;
-            decoded.push((hi << 4) | lo);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(decoded).ok()
-}
-
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
 pub(super) fn embedded_filenames(
     entries: &[PlaylistEntry],
-) -> Result<Vec<Option<String>>, super::domain::PlaylistError> {
+) -> Result<Vec<Option<String>>, PlaylistError> {
     let mut used_names: HashMap<String, (String, String)> = HashMap::new();
     let mut embedded_sources = HashSet::new();
 
     entries
         .iter()
         .map(|entry| {
-            entry
-                .embedded_data()
-                .map(|_| {
-                    if !embedded_sources.insert(entry.presentation_path()) {
-                        return Ok(None);
-                    }
-                    let base = entry.embedded_filename().to_string();
-                    let key = base.to_lowercase();
-                    if let Some((first_basename, first_path)) = used_names.get(&key) {
-                        return Err(
-                            super::domain::PlaylistError::DuplicateEmbeddedPresentationBasename {
-                                basename: first_basename.clone(),
-                                first_presentation_path: first_path.clone(),
-                                conflicting_presentation_path: entry
-                                    .presentation_path()
-                                    .to_string(),
-                            },
-                        );
-                    }
-                    used_names.insert(key, (base.clone(), entry.presentation_path().to_string()));
-                    Ok(Some(base))
-                })
-                .transpose()
-                .map(Option::flatten)
+            if entry.embedded_data().is_none()
+                || !embedded_sources.insert(entry.presentation_path())
+            {
+                return Ok(None);
+            }
+            let basename = entry.embedded_filename().to_string();
+            let key = basename.to_lowercase();
+            if let Some((first_basename, first_path)) = used_names.get(&key) {
+                return Err(PlaylistError::DuplicateEmbeddedPresentationBasename {
+                    basename: first_basename.clone(),
+                    first_presentation_path: first_path.clone(),
+                    conflicting_presentation_path: entry.presentation_path().to_string(),
+                });
+            }
+            used_names.insert(
+                key,
+                (basename.clone(), entry.presentation_path().to_string()),
+            );
+            Ok(Some(basename))
         })
         .collect()
 }
 
-fn path_to_file_url(path: &str) -> String {
-    if path.starts_with("file://") {
-        return path.to_string();
-    }
-    format!("file://{}", percent_encode_file_path(path))
-}
-
-fn percent_encode_file_path(path: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut encoded = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'/'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'~'
-            | b','
-            | b'('
-            | b')'
-            | b'\'' => encoded.push(char::from(byte)),
-            b' ' => encoded.push_str("%20"),
-            _ => {
-                encoded.push('%');
-                encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-                encoded.push(char::from(HEX[usize::from(byte & 0x0F)]));
-            }
-        }
-    }
-    encoded
-}
-
-fn extract_relative_path(path: &str) -> Option<url::RelativeFilePath> {
-    let rel_path = if let Some(index) = path.find("Libraries/") {
-        path[index..].to_string()
-    } else {
-        Path::new(path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(String::from)?
-    };
-
-    Some(url::RelativeFilePath::Local(url::LocalRelativePath {
-        root: url::local_relative_path::Root::Show as i32,
-        path: rel_path,
-    }))
-}
-
-pub(super) fn document_path_for_presentation_path(
-    path: &str,
-) -> (String, Option<url::RelativeFilePath>) {
-    (path_to_file_url(path), extract_relative_path(path))
+pub(super) fn document_path_for_presentation_path(path: &str) -> rv_data::Url {
+    native_url::presentation_document_url(path)
 }
 
 /// Sanitize a name for use as a filename, applying type-specific rules.
@@ -290,5 +200,5 @@ pub fn playlist_output_path(output_directory: &Path, name: &str) -> PathBuf {
 
 #[cfg(test)]
 pub(super) fn file_url_for_test(path: &str) -> String {
-    path_to_file_url(path)
+    native_url::file_url(path)
 }

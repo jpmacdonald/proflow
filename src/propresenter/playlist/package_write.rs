@@ -58,22 +58,18 @@ pub fn write_playlist_set_file(
 /// diagnostic boundary deliberately does not discover media: callers are
 /// reconstructing an already-observed document/member pair, not requesting a
 /// new portable import.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn write_playlist_document_for_fidelity(
     playlist: &rv_data::PlaylistDocument,
     entries: &[PlaylistEntry],
     path: impl AsRef<Path>,
 ) -> Result<(), PlaylistError> {
-    write_playlist_document_with_reviewed_media(
-        playlist,
-        entries,
-        path.as_ref(),
-        true,
-        &[],
-    )
+    write_playlist_document_with_reviewed_media(playlist, entries, path.as_ref(), true, &[])
 }
 
 /// Write a raw document with explicit intent for format-boundary tests.
-pub(crate) fn write_playlist_document_file_with_intent(
+#[cfg(test)]
+pub fn write_playlist_document_file_with_intent(
     playlist: &rv_data::PlaylistDocument,
     entries: &[PlaylistEntry],
     path: impl AsRef<Path>,
@@ -107,7 +103,7 @@ pub(crate) fn write_playlist_document_file_with_intent(
 ///
 /// The member set is assembled here; `native_zip` is the single owner of the
 /// evidenced global lexicographic physical order. No media path is read here.
-pub(crate) fn write_playlist_set_file_with_reviewed_media(
+pub fn write_playlist_set_file_with_reviewed_media(
     playlist_set: &PlaylistSet,
     metadata: &PlaylistMetadata,
     path: impl AsRef<Path>,
@@ -139,7 +135,7 @@ fn write_playlist_document_with_reviewed_media(
     entries: &[PlaylistEntry],
     path: &Path,
     embed_presentations: bool,
-    media_assets: &[ReviewedPlaylistMediaAsset],
+    media_assets: &[ReviewedPlaylistMediaAsset<'_>],
 ) -> Result<(), PlaylistError> {
     let mut archive_paths = HashSet::from(["data".to_string()]);
     let embedded_filenames = if embed_presentations {
@@ -189,7 +185,10 @@ fn write_playlist_document_with_reviewed_media(
         })
         .collect::<Vec<_>>();
     for (asset, archive_path) in &prepared_media_assets {
-        archive_members.push(NativeZipEntry::borrowed(archive_path.clone(), &asset.data));
+        archive_members.push(NativeZipEntry::borrowed(
+            archive_path.clone(),
+            asset.data.as_ref(),
+        ));
     }
     archive_members.push(NativeZipEntry::borrowed(
         "data".to_string(),

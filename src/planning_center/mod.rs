@@ -5,10 +5,13 @@
 
 /// API client for Planning Center Online requests
 pub mod api;
+pub(crate) mod identity;
 mod normalize;
+mod snapshot;
 /// Data types representing Planning Center resources
 pub mod types;
 
 // Re-export key components
 pub use api::PlanningCenterClient;
+pub use snapshot::{PlanFreshnessError, PlanRevision, PlanRevisionError, PlanSnapshot};
 // Re-export core types from the submodule

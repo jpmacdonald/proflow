@@ -12,15 +12,12 @@ mod song;
 use std::collections::{BTreeMap, HashSet};
 
 use description::{build_description_plan, build_static_plan, DescriptionPolicy, StaticPolicy};
-use expansion::{process_expansion, resolve_speaker};
+use expansion::{process_expansion, resolve_speaker, SpeakerResolution};
 use required::ensure_required_playlist_items;
 use scripture::build_scripture_plan;
 use song::{build_song_plan, SongPolicy};
 
-use super::classify_matching::{
-    decision_choice_matches, decision_context_text, decision_review_reason, find_matching_rule,
-    normalize_apostrophes, strip_speaker,
-};
+use super::classify_matching::{select_matching_rule, strip_speaker, RuleSelection};
 pub use super::classify_preview::{
     render_preview, PreviewEntry, PreviewResult, PreviewStatus, PreviewSummary,
 };
@@ -29,8 +26,9 @@ use super::plan::{
 };
 use crate::planning_center::types::Item;
 use crate::project_config::{
-    AmbiguousDecisionPolicy, DecisionChoiceConfig, DecisionConfig, ExistingSource, ItemRuleConfig,
-    ItemRuleOutcome, PresentationPolicy, ProjectConfig, ReviewPolicy, RuleAction,
+    AmbiguousDecisionPolicy, CompiledDecision, CompiledDirectTarget, CompiledRuleOutcome,
+    ExistingSource, PresentationPolicy, ProjectConfig, ResolvedPresentationType, ReviewPolicy,
+    RuleAction,
 };
 use crate::propresenter::library::LibraryCatalog;
 
@@ -43,27 +41,38 @@ pub fn build_plan(
 ) -> Vec<ResolvedItemPlan> {
     let mut entries = Vec::new();
     let mut nametag_seen: HashSet<String> = HashSet::new();
+    let fallback_speaker = resolve_plan_speaker_fallback(items, mappings, service_name);
 
     for item in items {
-        let title_lower = normalize_apostrophes(&item.title.to_lowercase());
-        let speaker = resolve_speaker(&item.title, item.description.as_deref(), mappings);
-        let Some(rule) = find_matching_rule(item, &title_lower, mappings, service_name) else {
-            entries.push(ResolvedItemPlan {
-                output_key: OutputKey::primary(&item.id),
-                position: item.position,
-                pco_title: item.title.clone(),
-                playlist_name: strip_speaker(&item.title),
-                reason: "No matching item rule".to_string(),
-                item_kind: ItemKind::Other,
-                item_type: None,
-                disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-            });
-            continue;
+        let speaker = resolve_speaker(&item.title, item.description.as_deref(), mappings)
+            .with_fallback(fallback_speaker.as_deref());
+        let rule = match select_matching_rule(item, mappings, service_name) {
+            RuleSelection::None => {
+                entries.push(unclassified_item_plan(
+                    item,
+                    "No matching item rule".to_string(),
+                ));
+                continue;
+            }
+            RuleSelection::Ambiguous { tier, rules } => {
+                let rule_ids = rules
+                    .iter()
+                    .map(|rule| format!("'{}'", rule.id()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                entries.push(unclassified_item_plan(
+                    item,
+                    format!("Multiple {} item rules matched: {rule_ids}", tier.as_str()),
+                ));
+                continue;
+            }
+            RuleSelection::Selected(rule) => rule,
         };
 
+        let first_output = entries.len();
         let output_key = OutputKey::primary(&item.id);
-        match &rule.outcome {
-            ItemRuleOutcome::Expand(expansion) => process_expansion(
+        match rule.outcome() {
+            CompiledRuleOutcome::Expand(expansion) => process_expansion(
                 expansion,
                 item,
                 speaker.as_deref(),
@@ -73,28 +82,34 @@ pub fn build_plan(
                 file_index,
                 service_name,
             ),
-            ItemRuleOutcome::Action(action) => {
+            CompiledRuleOutcome::Action(action) => {
                 entries.push(rule_action_plan(action, item, output_key));
             }
-            ItemRuleOutcome::Decision(decision) => entries.push(build_decision_plan(
+            CompiledRuleOutcome::Decision(decision) => entries.push(build_decision_plan(
                 decision,
-                rule,
+                rule.id(),
                 item,
                 output_key,
                 mappings,
                 file_index,
                 service_name,
             )),
-            ItemRuleOutcome::UseType { type_key, target } => {
+            CompiledRuleOutcome::UseType {
+                presentation,
+                target,
+            } => {
                 entries.push(build_use_type_rule_plan(
-                    type_key,
-                    target.as_ref(),
+                    presentation,
+                    target,
                     item,
                     mappings,
                     file_index,
                     service_name,
                 ));
             }
+        }
+        for plan in &mut entries[first_output..] {
+            plan.set_classification_rule(rule.id());
         }
     }
 
@@ -106,6 +121,42 @@ pub fn build_plan(
     );
     audit_mutable_presentation_target_collisions(&mut entries);
     entries
+}
+
+fn resolve_plan_speaker_fallback(
+    items: &[Item],
+    mappings: &ProjectConfig,
+    service_name: Option<&str>,
+) -> Option<String> {
+    let fallback_rule = mappings.defaults().speaker_fallback_rule.as_deref()?;
+    let mut sources = items.iter().filter(|item| {
+        matches!(
+            select_matching_rule(item, mappings, service_name),
+            RuleSelection::Selected(rule) if rule.id() == fallback_rule
+        )
+    });
+    let source = sources.next()?;
+    if sources.next().is_some() {
+        return None;
+    }
+
+    match resolve_speaker(&source.title, source.description.as_deref(), mappings) {
+        SpeakerResolution::Resolved(name) => Some(name),
+        SpeakerResolution::Missing | SpeakerResolution::Unrecognized => None,
+    }
+}
+
+fn unclassified_item_plan(item: &Item, reason: String) -> ResolvedItemPlan {
+    ResolvedItemPlan::new(
+        OutputKey::primary(&item.id),
+        item.position,
+        item.title.clone(),
+        strip_speaker(&item.title),
+        reason,
+        ItemKind::Other,
+        None,
+        PlanDisposition::NeedsReview(ReviewContext::new(None)),
+    )
 }
 
 /// Build the operator-facing preview for a set of Planning Center items.
@@ -249,33 +300,20 @@ fn audit_selected_presentation_sizes(
 }
 
 fn build_use_type_rule_plan(
-    type_key: &str,
-    target: Option<&crate::project_config::TargetSpec>,
+    presentation: &ResolvedPresentationType,
+    target: &CompiledDirectTarget,
     item: &Item,
     mappings: &ProjectConfig,
     file_index: Option<&LibraryCatalog>,
     service_name: Option<&str>,
 ) -> ResolvedItemPlan {
     let output_key = OutputKey::primary(&item.id);
-    let Some(policy) = mappings.presentation_policy(type_key) else {
-        return ResolvedItemPlan {
-            output_key,
-            position: item.position,
-            pco_title: item.title.clone(),
-            playlist_name: strip_speaker(&item.title),
-            reason: format!("Unknown presentation type '{type_key}'"),
-            item_kind: ItemKind::Other,
-            item_type: Some(type_key.to_string()),
-            disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-        };
-    };
-
     build_type_plan(
         output_key,
-        type_key,
-        policy,
+        presentation.key(),
+        presentation.policy(),
         item,
-        target.and_then(crate::project_config::TargetSpec::library_file),
+        target.library_file(),
         mappings,
         file_index,
         service_name,
@@ -283,100 +321,51 @@ fn build_use_type_rule_plan(
 }
 
 fn build_decision_plan(
-    decision: &DecisionConfig,
-    rule: &ItemRuleConfig,
+    decision: &CompiledDecision,
+    rule_id: &str,
     item: &Item,
     output_key: OutputKey,
     mappings: &ProjectConfig,
     file_index: Option<&LibraryCatalog>,
     service_name: Option<&str>,
 ) -> ResolvedItemPlan {
-    match decision {
-        DecisionConfig::ChooseExistingFile {
-            context_fields,
-            instructions,
-            choices,
-            on_ambiguous,
-        } => {
-            let context_text = decision_context_text(item, context_fields);
-            let matched: Vec<_> = choices
-                .iter()
-                .filter(|(_, choice)| decision_choice_matches(choice, &context_text))
-                .collect();
+    let matched = decision.matching_choices(
+        &item.title,
+        item.description.as_deref(),
+        item.note.as_deref(),
+    );
 
-            if matched.len() != 1 {
-                let disposition = match on_ambiguous.unwrap_or_default() {
-                    AmbiguousDecisionPolicy::Ask => {
-                        PlanDisposition::NeedsReview(ReviewContext::new(None))
-                    }
-                    AmbiguousDecisionPolicy::Skip => PlanDisposition::Skip,
-                };
-                let reason =
-                    decision_review_reason(rule, instructions.as_deref(), choices, &matched);
-                return ResolvedItemPlan {
-                    output_key,
-                    position: item.position,
-                    pco_title: item.title.clone(),
-                    playlist_name: strip_speaker(&item.title),
-                    reason,
-                    item_kind: ItemKind::Other,
-                    item_type: None,
-                    disposition,
-                };
-            }
-
-            let (choice_key, choice) = matched[0];
-            let Some(type_key) = choice.use_type.as_deref() else {
-                return ResolvedItemPlan {
-                    output_key,
-                    position: item.position,
-                    pco_title: item.title.clone(),
-                    playlist_name: strip_speaker(&item.title),
-                    reason: format!("Decision choice '{choice_key}' has no use_type"),
-                    item_kind: ItemKind::Other,
-                    item_type: None,
-                    disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-                };
-            };
-            let Some(policy) = mappings.presentation_policy(type_key) else {
-                return ResolvedItemPlan {
-                    output_key,
-                    position: item.position,
-                    pco_title: item.title.clone(),
-                    playlist_name: strip_speaker(&item.title),
-                    reason: format!(
-                        "Decision choice '{choice_key}' uses unknown type '{type_key}'"
-                    ),
-                    item_kind: ItemKind::Other,
-                    item_type: Some(type_key.to_string()),
-                    disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-                };
-            };
-
-            let target_library_file = choice_library_file(choice);
-            let mut plan = build_type_plan(
-                output_key,
-                type_key,
-                policy,
-                item,
-                target_library_file.as_deref(),
-                mappings,
-                file_index,
-                service_name,
-            );
-            plan.reason = format!("Context choice '{choice_key}': {}", plan.reason);
-            plan
-        }
+    if matched.len() != 1 {
+        let disposition = match decision.on_ambiguous() {
+            AmbiguousDecisionPolicy::Ask => PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            AmbiguousDecisionPolicy::Skip => PlanDisposition::Skip,
+        };
+        return ResolvedItemPlan::new(
+            output_key,
+            item.position,
+            item.title.clone(),
+            strip_speaker(&item.title),
+            decision.review_reason(rule_id, &matched),
+            ItemKind::Other,
+            None,
+            disposition,
+        );
     }
-}
 
-fn choice_library_file(choice: &DecisionChoiceConfig) -> Option<String> {
-    choice
-        .target
-        .as_ref()
-        .and_then(crate::project_config::TargetSpec::library_file)
-        .map(str::to_string)
-        .or_else(|| choice.file.clone())
+    let choice = matched[0];
+    let presentation = choice.presentation();
+    let mut plan = build_type_plan(
+        output_key,
+        presentation.key(),
+        presentation.policy(),
+        item,
+        Some(choice.library_file()),
+        mappings,
+        file_index,
+        service_name,
+    );
+    plan.reason = format!("Context choice '{}': {}", choice.key(), plan.reason);
+    plan
 }
 
 #[allow(
@@ -558,16 +547,16 @@ fn configured_disposition_plan(
     disposition: PlanDisposition,
     reason: &str,
 ) -> ResolvedItemPlan {
-    ResolvedItemPlan {
+    ResolvedItemPlan::new(
         output_key,
-        position: item.position,
-        pco_title: item.title.clone(),
-        playlist_name: strip_speaker(&item.title),
-        reason: reason.to_string(),
-        item_kind: kind,
-        item_type: Some(type_key.to_string()),
+        item.position,
+        item.title.clone(),
+        strip_speaker(&item.title),
+        reason.to_string(),
+        kind,
+        Some(type_key.to_string()),
         disposition,
-    }
+    )
 }
 
 fn rule_action_plan(action: &RuleAction, item: &Item, output_key: OutputKey) -> ResolvedItemPlan {
@@ -579,16 +568,16 @@ fn rule_action_plan(action: &RuleAction, item: &Item, output_key: OutputKey) -> 
         ),
     };
 
-    ResolvedItemPlan {
+    ResolvedItemPlan::new(
         output_key,
-        position: item.position,
-        pco_title: item.title.clone(),
-        playlist_name: strip_speaker(&item.title),
+        item.position,
+        item.title.clone(),
+        strip_speaker(&item.title),
         reason,
-        item_kind: ItemKind::Other,
-        item_type: None,
+        ItemKind::Other,
+        None,
         disposition,
-    }
+    )
 }
 
 pub(super) fn file_stem(path: &str) -> String {

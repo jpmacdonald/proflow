@@ -8,7 +8,8 @@ use anyhow::{bail, Context, Result};
 use prost::Message;
 
 use super::deserialize::decode_presentation_bytes;
-use super::generated::rv_data::{self, playlist, playlist_item, url};
+use super::generated::rv_data::{self, playlist, playlist_item};
+use super::native_url;
 use super::native_zip::{self, Entry as NativeZipEntry};
 use super::package::{presentation_items, PlaylistItemSummary};
 use super::playlist::linked_presentation_filename;
@@ -348,33 +349,24 @@ fn item_type_name(item: &rv_data::PlaylistItem) -> String {
 }
 
 fn resolve_document_path(document_path: &rv_data::Url, root: &Path) -> Result<PathBuf> {
-    if let Some(url::RelativeFilePath::Local(local)) = &document_path.relative_file_path {
-        if local.root == url::local_relative_path::Root::Show as i32 {
-            return confined_existing_path(root, &root.join(&local.path));
+    let candidates = native_url::local_file_candidates(document_path, root);
+    if candidates.is_empty() {
+        bail!("document path has no usable local or show-relative file locator");
+    }
+    for candidate in &candidates {
+        if let Ok(path) = confined_existing_path(root, candidate) {
+            return Ok(path);
         }
     }
-
-    let source = match document_path
-        .storage
-        .as_ref()
-        .context("document path has neither a show-relative path nor a storage path")?
-    {
-        url::Storage::AbsoluteString(value) | url::Storage::RelativePath(value) => value,
-    };
-    if let Some(index) = source.find("Libraries/") {
-        return confined_existing_path(root, &root.join(&source[index..]));
-    }
-    if let Some(path) = source.strip_prefix("file://") {
-        let path = path.strip_prefix("localhost").unwrap_or(path);
-        return confined_existing_path(root, &PathBuf::from(percent_decode(path)?));
-    }
-    let path = PathBuf::from(source);
-    let candidate = if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    };
-    confined_existing_path(root, &candidate)
+    bail!(
+        "none of the linked presentation candidates exist safely below {}: {}",
+        root.display(),
+        candidates
+            .iter()
+            .map(|candidate| candidate.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn confined_existing_path(root: &Path, candidate: &Path) -> Result<PathBuf> {
@@ -394,39 +386,12 @@ fn confined_existing_path(root: &Path, candidate: &Path) -> Result<PathBuf> {
     Ok(canonical_candidate)
 }
 
-fn percent_decode(value: &str) -> Result<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                decoded.push((hi << 4) | lo);
-                index += 3;
-                continue;
-            }
-        }
-        decoded.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8(decoded).context("document path is not valid UTF-8")
-}
-
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use crate::propresenter::generated::rv_data::url;
 
     fn show_relative_url(path: &str) -> rv_data::Url {
         rv_data::Url {
@@ -582,11 +547,14 @@ mod tests {
         let package = crate::propresenter::package::read_playlist_package(output)
             .expect("read materialized package");
 
-        assert_eq!(package.document, expected);
+        assert_eq!(package.document(), &expected);
         assert_eq!(report.presentation_item_count, 1);
         assert_eq!(report.non_presentation_items.len(), 1);
-        assert_eq!(package.embedded_files, vec!["Actual File.pro"]);
-        let items = crate::propresenter::package::presentation_items(&package.document);
+        assert_eq!(
+            package.embedded_files().collect::<Vec<_>>(),
+            ["Actual File.pro"]
+        );
+        let items = crate::propresenter::package::presentation_items(package.document());
         assert_eq!(items[0].name, "Operator Display Alias");
         assert_eq!(
             items[0].arrangement_uuid.as_deref(),

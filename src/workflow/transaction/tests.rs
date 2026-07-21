@@ -13,6 +13,24 @@ fn reviewed_transaction(paths: &[PathBuf]) -> BuildFileTransaction {
     let outputs = OutputManifest::capture(paths).expect("capture reviewed outputs");
     BuildFileTransaction::from_reviewed(outputs)
 }
+
+#[test]
+fn file_fingerprint_hashes_empty_and_nonempty_files_to_completion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (name, bytes) in [
+        ("empty", b"".as_slice()),
+        ("content", b"proflow".as_slice()),
+    ] {
+        let path = dir.path().join(name);
+        fs::write(&path, bytes).expect("write fingerprint fixture");
+
+        assert_eq!(
+            fingerprint_file(&path).expect("fingerprint fixture"),
+            fingerprint_bytes(bytes).expect("fingerprint fixture bytes")
+        );
+    }
+}
+
 #[test]
 fn duplicate_target_is_rejected_before_rendering() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -201,6 +219,34 @@ fn sealing_preserves_staging_order_not_manifest_order() {
 }
 
 #[test]
+fn staged_artifact_evidence_uses_exact_bytes_in_reservation_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receipt = dir.path().join("service.proplaylist.proflow-build.json");
+    let playlist = dir.path().join("service.proplaylist");
+    let mut transaction = reviewed_transaction(&[playlist.clone(), receipt.clone()]);
+    let receipt_stage = transaction.stage_reviewed(&receipt).expect("receipt stage");
+    let playlist_stage = transaction
+        .stage_reviewed(&playlist)
+        .expect("playlist stage");
+    fs::write(receipt_stage, b"receipt bytes").expect("receipt bytes");
+    fs::write(playlist_stage, b"playlist bytes").expect("playlist bytes");
+
+    let evidence = transaction
+        .staged_artifacts()
+        .expect("exact staged evidence");
+
+    assert_eq!(evidence.len(), 2);
+    assert_eq!(evidence[0].target(), receipt);
+    assert_eq!(evidence[0].length(), 13);
+    let receipt_sha256: [u8; 32] = Sha256::digest(b"receipt bytes").into();
+    assert_eq!(evidence[0].sha256(), receipt_sha256);
+    assert_eq!(evidence[1].target(), playlist);
+    assert_eq!(evidence[1].length(), 14);
+    let playlist_sha256: [u8; 32] = Sha256::digest(b"playlist bytes").into();
+    assert_eq!(evidence[1].sha256(), playlist_sha256);
+}
+
+#[test]
 fn prepared_presentation_artifacts_reject_changed_staged_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("title.pro");
@@ -282,6 +328,74 @@ fn sealed_artifact_tampering_aborts_before_any_rename() {
     assert_eq!(
         fs::read(second_target).expect("second target"),
         b"old second"
+    );
+}
+
+#[test]
+fn sealed_receipt_drift_aborts_before_any_output_is_replaced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receipt = dir.path().join("service.proplaylist.proflow-build.json");
+    let playlist = dir.path().join("service.proplaylist");
+    fs::write(&receipt, b"old receipt").expect("old receipt");
+    fs::write(&playlist, b"old playlist").expect("old playlist");
+    let mut transaction = reviewed_transaction(&[playlist.clone(), receipt.clone()]);
+    let receipt_stage = transaction.stage_reviewed(&receipt).expect("receipt stage");
+    let playlist_stage = transaction
+        .stage_reviewed(&playlist)
+        .expect("playlist stage");
+    fs::write(&receipt_stage, b"prepared receipt").expect("prepared receipt");
+    fs::write(playlist_stage, b"prepared playlist").expect("prepared playlist");
+    let prepared = transaction.seal().expect("seal transaction");
+
+    fs::write(receipt_stage, b"tampered receipt").expect("tamper receipt stage");
+    let entered_commit_loop = Cell::new(false);
+    let error = prepared
+        .commit_with_before_recheck(|_, _| {
+            entered_commit_loop.set(true);
+            Ok(())
+        })
+        .expect_err("receipt drift must invalidate the transaction");
+
+    assert!(error.to_string().contains("changed after preview"));
+    assert!(!entered_commit_loop.get());
+    assert_eq!(fs::read(receipt).expect("live receipt"), b"old receipt");
+    assert_eq!(fs::read(playlist).expect("live playlist"), b"old playlist");
+}
+
+#[test]
+fn playlist_is_last_and_its_failure_rolls_back_the_receipt() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let receipt = dir.path().join("service.proplaylist.proflow-build.json");
+    let playlist = dir.path().join("service.proplaylist");
+    fs::write(&receipt, b"old receipt").expect("old receipt");
+    fs::write(&playlist, b"old playlist").expect("old playlist");
+    let mut transaction = reviewed_transaction(&[playlist.clone(), receipt.clone()]);
+    let receipt_stage = transaction.stage_reviewed(&receipt).expect("receipt stage");
+    let playlist_stage = transaction
+        .stage_reviewed(&playlist)
+        .expect("playlist stage");
+    fs::write(receipt_stage, b"prepared receipt").expect("prepared receipt");
+    fs::write(playlist_stage, b"prepared playlist").expect("prepared playlist");
+    let mut order = Vec::new();
+
+    let error = transaction
+        .seal()
+        .expect("seal transaction")
+        .commit_with_before_recheck(|index, target| {
+            order.push(target.to_path_buf());
+            if index == 1 {
+                return Err(io::Error::other("simulated playlist commit failure"));
+            }
+            Ok(())
+        })
+        .expect_err("playlist failure must roll back earlier receipt commit");
+
+    assert!(error.to_string().contains("playlist commit failure"));
+    assert_eq!(order, vec![receipt.clone(), playlist.clone()]);
+    assert_eq!(fs::read(receipt).expect("restored receipt"), b"old receipt");
+    assert_eq!(
+        fs::read(playlist).expect("unchanged playlist"),
+        b"old playlist"
     );
 }
 

@@ -94,15 +94,7 @@ pub(super) fn parse_scripture_refs(
             }
             let parsed = crate::bible::parse_scripture_ref(reference_text)
                 .ok_or_else(|| ScriptureRefsError::Invalid((*part).to_string()))?;
-            let reference = parsed.end_verse.map_or_else(
-                || format!("{} {}:{}", parsed.book, parsed.chapter, parsed.start_verse),
-                |end| {
-                    format!(
-                        "{} {}:{}-{end}",
-                        parsed.book, parsed.chapter, parsed.start_verse
-                    )
-                },
-            );
+            let reference = parsed.to_string();
             Ok(ParsedScriptureRef {
                 reference,
                 version: version.to_string(),
@@ -154,15 +146,7 @@ pub(super) fn parse_prefix_scripture_ref(
     }
     let parsed = crate::bible::parse_scripture_ref(whole_reference)
         .ok_or_else(|| ScriptureRefsError::Invalid(partial_reference.to_string()))?;
-    let reference = parsed.end_verse.map_or_else(
-        || format!("{} {}:{}", parsed.book, parsed.chapter, parsed.start_verse),
-        |end| {
-            format!(
-                "{} {}:{}-{end}",
-                parsed.book, parsed.chapter, parsed.start_verse
-            )
-        },
-    );
+    let reference = parsed.to_string();
     Ok(ParsedPrefixScriptureRef {
         display_reference: format!("{reference}a"),
         reference,

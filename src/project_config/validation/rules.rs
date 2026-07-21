@@ -9,8 +9,8 @@ use super::{
     service_group_scope, service_scopes_overlap, ConfigValidationIssue,
 };
 use crate::project_config::{
-    ContentSourceKind, DecisionChoiceMatch, DecisionConfig, ItemRuleOutcome, MatchSpec,
-    OutputStrategy, RawProjectConfig, TargetSpec,
+    DecisionChoiceConfig, DecisionChoiceMatch, DecisionConfig, ItemRuleOutcome, MatchSpec,
+    RawProjectConfig, TargetSpec,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -68,16 +68,15 @@ pub(super) fn validate_item_rules(
 
         match &rule.outcome {
             ItemRuleOutcome::UseType { type_key, target } => {
-                if !config.presentation_types.contains_key(type_key) {
-                    issues.push(ConfigValidationIssue {
-                        path: format!("item_rules[{idx}].use_type"),
-                        message: format!("references unknown presentation type '{type_key}'"),
-                    });
-                }
+                validate_presentation_type_reference(
+                    config,
+                    type_key,
+                    &format!("item_rules[{idx}].use_type"),
+                    issues,
+                );
                 if let Some(target) = target {
                     let path = format!("item_rules[{idx}].target");
                     validate_target_spec(target, &path, issues);
-                    validate_target_for_type(config, type_key, target, &path, false, issues);
                 }
             }
             ItemRuleOutcome::Action(_) => {}
@@ -86,29 +85,29 @@ pub(super) fn validate_item_rules(
             }
             ItemRuleOutcome::Expand(expansion) => {
                 for (step_idx, step) in expansion.iter().enumerate() {
-                    if !config.presentation_types.contains_key(&step.use_type) {
-                        issues.push(ConfigValidationIssue {
-                            path: format!("item_rules[{idx}].expand[{step_idx}].use_type"),
-                            message: format!(
-                                "references unknown presentation type '{}'",
-                                step.use_type
-                            ),
-                        });
-                    }
+                    validate_presentation_type_reference(
+                        config,
+                        &step.use_type,
+                        &format!("item_rules[{idx}].expand[{step_idx}].use_type"),
+                        issues,
+                    );
                     if let Some(target) = &step.target {
                         let path = format!("item_rules[{idx}].expand[{step_idx}].target");
                         validate_target_spec(target, &path, issues);
-                        validate_target_for_type(
-                            config,
-                            &step.use_type,
-                            target,
-                            &path,
-                            step.speaker.is_some(),
-                            issues,
-                        );
                     }
                 }
             }
+        }
+    }
+
+    if let Some(rule_id) = config.defaults.speaker_fallback_rule.as_deref() {
+        let path = "defaults.speaker_fallback_rule";
+        validate_exact_identity(rule_id, path, "speaker fallback rule ID", issues);
+        if !config.item_rules.iter().any(|rule| rule.id == rule_id) {
+            issues.push(ConfigValidationIssue {
+                path: path.to_string(),
+                message: format!("unknown item rule ID '{rule_id}'"),
+            });
         }
     }
 }
@@ -133,28 +132,12 @@ pub(super) fn validate_required_playlist_items(
             });
         }
         validate_library_filename(&item.library_file, &format!("{path}.library_file"), issues);
-
-        match config.presentation_types.get(&item.use_type) {
-            None => issues.push(ConfigValidationIssue {
-                path: format!("{path}.use_type"),
-                message: format!("references unknown presentation type '{}'", item.use_type),
-            }),
-            Some(presentation_type)
-                if !matches!(
-                    presentation_type.output_strategy,
-                    OutputStrategy::PreserveExisting | OutputStrategy::RestyleExisting
-                ) || presentation_type.content_source != ContentSourceKind::Static =>
-            {
-                issues.push(ConfigValidationIssue {
-                    path: format!("{path}.use_type"),
-                    message:
-                        "required playlist items must use a static preserve_existing or restyle_existing presentation type"
-                            .to_string(),
-                });
-            }
-            Some(_) => {}
-        }
-
+        validate_presentation_type_reference(
+            config,
+            &item.use_type,
+            &format!("{path}.use_type"),
+            issues,
+        );
         if let Some(group) = item.service_group.as_deref() {
             if !config.service_groups.contains_key(group) {
                 issues.push(ConfigValidationIssue {
@@ -235,39 +218,6 @@ pub(super) fn validate_people(config: &RawProjectConfig, issues: &mut Vec<Config
     }
 }
 
-fn validate_target_for_type(
-    config: &RawProjectConfig,
-    type_key: &str,
-    target: &TargetSpec,
-    path: &str,
-    speaker_expansion: bool,
-    issues: &mut Vec<ConfigValidationIssue>,
-) {
-    let Some(ptype) = config.presentation_types.get(type_key) else {
-        return;
-    };
-    match target {
-        TargetSpec::GeneratedName { .. } if !speaker_expansion => {
-            issues.push(ConfigValidationIssue {
-                path: path.to_string(),
-                message: "name_template is supported only for a speaker expansion".to_string(),
-            });
-        }
-        TargetSpec::ExistingFile { .. }
-            if matches!(
-                ptype.output_strategy,
-                OutputStrategy::GenerateNew | OutputStrategy::Skip | OutputStrategy::NeedsReview
-            ) =>
-        {
-            issues.push(ConfigValidationIssue {
-                path: path.to_string(),
-                message: "library_file requires an existing-source output strategy".to_string(),
-            });
-        }
-        TargetSpec::GeneratedName { .. } | TargetSpec::ExistingFile { .. } => {}
-    }
-}
-
 fn validate_target_spec(target: &TargetSpec, path: &str, issues: &mut Vec<ConfigValidationIssue>) {
     match target {
         TargetSpec::ExistingFile { library_file } => {
@@ -298,17 +248,6 @@ fn validate_match_spec(
     ] {
         validate_identity_values(values, &format!("{path}.{field}"), "match value", issues);
     }
-    if let Some(category) = match_spec.category.as_deref() {
-        let category_path = format!("{path}.category");
-        if validate_exact_identity(category, &category_path, "category", issues)
-            && !matches!(category, "text" | "graphic" | "title" | "song" | "other")
-        {
-            issues.push(ConfigValidationIssue {
-                path: category_path,
-                message: format!("unknown category '{category}'"),
-            });
-        }
-    }
 }
 
 fn validate_decision(
@@ -325,19 +264,12 @@ fn validate_decision(
         } => {
             let mut seen_context_fields = HashSet::new();
             for (field_idx, field) in context_fields.iter().enumerate() {
-                if !matches!(field.as_str(), "title" | "description" | "note") {
+                if !seen_context_fields.insert(*field) {
                     issues.push(ConfigValidationIssue {
                         path: format!(
                             "item_rules[{rule_idx}].decision.context_fields[{field_idx}]"
                         ),
-                        message: format!("unknown context field '{field}'"),
-                    });
-                } else if !seen_context_fields.insert(field.as_str()) {
-                    issues.push(ConfigValidationIssue {
-                        path: format!(
-                            "item_rules[{rule_idx}].decision.context_fields[{field_idx}]"
-                        ),
-                        message: format!("duplicate context field '{field}'"),
+                        message: format!("duplicate context field '{}'", field.as_str()),
                     });
                 }
             }
@@ -355,53 +287,15 @@ fn validate_decision(
             );
             for (choice_key, choice) in choices {
                 let choice_path = format!("item_rules[{rule_idx}].decision.choices.{choice_key}");
-                let Some(type_key) = &choice.use_type else {
-                    issues.push(ConfigValidationIssue {
-                        path: format!("{choice_path}.use_type"),
-                        message: "decision choice must define use_type".to_string(),
-                    });
-                    continue;
-                };
-                match config.presentation_types.get(type_key) {
-                    None => issues.push(ConfigValidationIssue {
-                        path: format!("{choice_path}.use_type"),
-                        message: format!("references unknown presentation type '{type_key}'"),
-                    }),
-                    Some(ptype)
-                        if !matches!(
-                            ptype.output_strategy,
-                            OutputStrategy::PreserveExisting | OutputStrategy::RestyleExisting
-                        ) =>
-                    {
-                        issues.push(ConfigValidationIssue {
-                            path: format!("{choice_path}.use_type"),
-                            message:
-                                "choose_existing_file requires a preserve_existing or restyle_existing presentation type"
-                                    .to_string(),
-                        });
-                    }
-                    Some(_) => {}
+                if let Some(type_key) = choice.use_type.as_deref() {
+                    validate_presentation_type_reference(
+                        config,
+                        type_key,
+                        &format!("{choice_path}.use_type"),
+                        issues,
+                    );
                 }
-
-                let has_file = choice.file.is_some();
-                let has_target_file = choice
-                    .target
-                    .as_ref()
-                    .and_then(TargetSpec::library_file)
-                    .is_some();
-                if usize::from(has_file) + usize::from(has_target_file) != 1 {
-                    issues.push(ConfigValidationIssue {
-                        path: choice_path.clone(),
-                        message: "choice must define exactly one of file or target.library_file"
-                            .to_string(),
-                    });
-                }
-                if let Some(file) = &choice.file {
-                    validate_library_filename(file, &format!("{choice_path}.file"), issues);
-                }
-                if let Some(target) = &choice.target {
-                    validate_target_spec(target, &format!("{choice_path}.target"), issues);
-                }
+                validate_decision_target(choice, &choice_path, issues);
                 if choice.match_spec.any.is_empty()
                     && choice.match_spec.all.is_empty()
                     && choice.match_spec.none.is_empty()
@@ -415,6 +309,33 @@ fn validate_decision(
                 validate_decision_phrases(&choice.match_spec, &choice_path, issues);
             }
         }
+    }
+}
+
+fn validate_presentation_type_reference(
+    config: &RawProjectConfig,
+    type_key: &str,
+    path: &str,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    if !config.presentation_types.contains_key(type_key) {
+        issues.push(ConfigValidationIssue {
+            path: path.to_string(),
+            message: format!("references unknown presentation type '{type_key}'"),
+        });
+    }
+}
+
+fn validate_decision_target(
+    choice: &DecisionChoiceConfig,
+    choice_path: &str,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    if let Some(file) = &choice.file {
+        validate_library_filename(file, &format!("{choice_path}.file"), issues);
+    }
+    if let Some(target) = &choice.target {
+        validate_target_spec(target, &format!("{choice_path}.target"), issues);
     }
 }
 

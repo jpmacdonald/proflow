@@ -1,20 +1,20 @@
 use std::collections::BTreeSet;
 
 use super::super::model::{PackageFileSummary, PlaylistPackage, PlaylistPackageIssue};
-use super::infer_package_mode;
+use super::infer_archive_shape;
 
-pub(super) fn compare_package_modes(
+pub(super) fn compare_inferred_archive_shapes(
     expected: &PlaylistPackage,
     actual: &PlaylistPackage,
     issues: &mut Vec<PlaylistPackageIssue>,
 ) {
-    let expected_mode = infer_package_mode(expected);
-    let actual_mode = infer_package_mode(actual);
-    if expected_mode != actual_mode {
+    let expected_shape = infer_archive_shape(expected);
+    let actual_shape = infer_archive_shape(actual);
+    if expected_shape != actual_shape {
         issues.push(PlaylistPackageIssue {
-            kind: "package_mode_mismatch".to_string(),
+            kind: "archive_shape_mismatch".to_string(),
             index: None,
-            message: format!("expected {expected_mode:?}, found {actual_mode:?}"),
+            message: format!("expected {expected_shape:?}, found {actual_shape:?}"),
         });
     }
 }
@@ -24,25 +24,25 @@ pub(super) fn compare_archive_shape(
     actual: &PlaylistPackage,
     issues: &mut Vec<PlaylistPackageIssue>,
 ) {
-    if expected.archive_entries.len() != actual.archive_entries.len() {
+    let expected_entries = expected.archive_entries();
+    let actual_entries = actual.archive_entries();
+    if expected_entries.len() != actual_entries.len() {
         issues.push(PlaylistPackageIssue {
             kind: "archive_entry_count_mismatch".to_string(),
             index: None,
             message: format!(
                 "expected {} archive entries, found {}",
-                expected.archive_entries.len(),
-                actual.archive_entries.len()
+                expected_entries.len(),
+                actual_entries.len()
             ),
         });
     }
 
-    let expected_paths = expected
-        .archive_entries
+    let expected_paths = expected_entries
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
-    let actual_paths = actual
-        .archive_entries
+    let actual_paths = actual_entries
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
@@ -70,19 +70,15 @@ pub(super) fn compare_archive_shape(
         });
     }
 
-    for index in 0..expected
-        .archive_entries
-        .len()
-        .min(actual.archive_entries.len())
-    {
-        let expected_entry = &expected.archive_entries[index];
-        let actual_entry = &actual.archive_entries[index];
+    for index in 0..expected_entries.len().min(actual_entries.len()) {
+        let expected_entry = &expected_entries[index];
+        let actual_entry = &actual_entries[index];
         if expected_entry.name == actual_entry.name {
             compare_archive_entry_metadata(index, expected_entry, actual_entry, issues);
         }
     }
 
-    if expected.archive_comment != actual.archive_comment {
+    if expected.archive_comment() != actual.archive_comment() {
         issues.push(PlaylistPackageIssue {
             kind: "archive_comment_mismatch".to_string(),
             index: None,
@@ -133,14 +129,14 @@ pub(super) fn compare_playlist_schema_coverage(
     actual: &PlaylistPackage,
     issues: &mut Vec<PlaylistPackageIssue>,
 ) {
-    if !expected.document_round_trip_exact {
+    if !expected.document_round_trip_is_exact() {
         issues.push(PlaylistPackageIssue {
             kind: "expected_playlist_schema_round_trip_loss".to_string(),
             index: None,
             message: "reference playlist data is not byte-exact after decode and encode; the protobuf schema may be incomplete".to_string(),
         });
     }
-    if !actual.document_round_trip_exact {
+    if !actual.document_round_trip_is_exact() {
         issues.push(PlaylistPackageIssue {
             kind: "actual_playlist_schema_round_trip_loss".to_string(),
             index: None,

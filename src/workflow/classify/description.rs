@@ -171,19 +171,19 @@ fn finish_plan(
     {
         reason = format!("{reason}: {target}");
     }
-    ResolvedItemPlan {
+    ResolvedItemPlan::new(
         output_key,
-        position: item.position,
-        pco_title: item.title.clone(),
-        playlist_name: found.map_or_else(
+        item.position,
+        item.title.clone(),
+        found.map_or_else(
             || target_library_file.map_or_else(|| strip_speaker(&item.title), file_stem),
             |path| file_stem(&path.display().to_string()),
         ),
         reason,
-        item_kind: kind,
-        item_type: Some(type_key.to_string()),
+        kind,
+        Some(type_key.to_string()),
         disposition,
-    }
+    )
 }
 
 fn configured_review_action(

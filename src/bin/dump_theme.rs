@@ -25,13 +25,17 @@ fn main() {
                 println!("Name: {:?}", slide.name);
                 println!("Actions: {}", slide.actions.len());
                 if let Some(ref base) = slide.base_slide {
+                    println!(
+                        "UUID: {:?}",
+                        base.uuid.as_ref().map(|uuid| uuid.string.as_str())
+                    );
                     println!("Elements: {}", base.elements.len());
                     println!("Background color: {:?}", base.background_color);
                     println!("Draws bg: {}", base.draws_background_color);
                     println!("Size: {:?}", base.size);
                     for (j, elem) in base.elements.iter().enumerate() {
                         if let Some(ref ge) = elem.element {
-                            println!("  Element {j}:");
+                            println!("  Element {j}: {:?}", ge.name);
                             if let Some(ref bounds) = ge.bounds {
                                 println!(
                                     "    Bounds: origin=({}, {}), size=({}, {})",
@@ -46,6 +50,31 @@ fn main() {
                                 );
                             }
                             if let Some(ref text) = ge.text {
+                                println!(
+                                    "    Layout: scale={} transform={} vertical={} margins={:?}",
+                                    text.scale_behavior,
+                                    text.transform,
+                                    text.vertical_alignment,
+                                    text.margins
+                                );
+                                println!(
+                                    "    Native text features: standardized_superscript={} chord_pro={:?} alternates={} capitalization={} superscript={} ligatures={} custom_attributes={}",
+                                    text.is_superscript_standardized,
+                                    text.chord_pro,
+                                    text.alternate_texts.len(),
+                                    text.attributes
+                                        .as_ref()
+                                        .map_or(0, |attributes| attributes.capitalization),
+                                    text.attributes
+                                        .as_ref()
+                                        .map_or(0, |attributes| attributes.superscript),
+                                    text.attributes
+                                        .as_ref()
+                                        .map_or(0, |attributes| attributes.ligature_style),
+                                    text.attributes
+                                        .as_ref()
+                                        .map_or(0, |attributes| attributes.custom_attributes.len())
+                                );
                                 let rtf = String::from_utf8_lossy(&text.rtf_data);
                                 // Show first 200 chars of RTF
                                 let preview: String = rtf.chars().take(200).collect();

@@ -1,6 +1,9 @@
 //! Native text-style resolution and structured RTF style scanning.
 
-use std::{collections::BTreeMap, fmt::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write,
+};
 
 use super::{is_ignored_destination, RtfFontFamily, RtfOptions};
 use crate::propresenter::generated::rv_data;
@@ -59,6 +62,32 @@ pub fn extract_rtf_options(rtf_data: &[u8]) -> RtfOptions {
     options
 }
 
+/// Whether visible text contains an RTF superscript run.
+///
+/// This deliberately scans parsed content state rather than searching for a
+/// `\\super` byte sequence: escaped user text and ignored RTF destinations
+/// must not be mistaken for rendered superscript.
+pub fn has_visible_superscript(rtf_data: &[u8]) -> bool {
+    RtfStyleScan::parse(&String::from_utf8_lossy(rtf_data)).has_visible_superscript
+}
+
+/// Font-table names explicitly selected by visible RTF runs.
+///
+/// Fonts present only in an unused table entry are ignored. Glyph-level system
+/// fallback is also intentionally absent: `AppKit` reports the exact resolved
+/// programs after shaping, while this list prevents silent substitution of an
+/// authored visible font run.
+pub fn visible_font_names(rtf_data: &[u8]) -> Vec<String> {
+    let parsed = RtfStyleScan::parse(&String::from_utf8_lossy(rtf_data));
+    parsed
+        .visible_font_indices
+        .iter()
+        .filter_map(|index| parsed.fonts.get(index))
+        .map(|font| font.name.clone())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
 /// Resolve the effective RTF baseline for one native text element.
 ///
 /// Native attributes own values represented in the protobuf. The RTF scan is
@@ -96,6 +125,7 @@ struct RtfRunStyle {
     kerning: Option<i32>,
     bold: Option<bool>,
     italic: Option<bool>,
+    superscript: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +176,8 @@ struct RtfStyleScan {
     color: RtfColorBuilder,
     first_visible_run: Option<RtfRunStyle>,
     fallback_run: RtfRunStyle,
+    has_visible_superscript: bool,
+    visible_font_indices: BTreeSet<i32>,
 }
 
 impl RtfStyleScan {
@@ -282,6 +314,14 @@ impl RtfStyleScan {
                 state.run.italic = Some(parameter != Some(0));
                 true
             }
+            "super" => {
+                state.run.superscript = true;
+                true
+            }
+            "sub" | "nosupersub" => {
+                state.run.superscript = false;
+                true
+            }
             _ => false,
         };
         if changed {
@@ -406,6 +446,10 @@ impl RtfStyleScan {
 
     fn mark_visible_run(&mut self, run: RtfRunStyle) {
         self.first_visible_run.get_or_insert(run);
+        self.has_visible_superscript |= run.superscript;
+        if let Some(index) = run.font_index.or(self.default_font_index) {
+            self.visible_font_indices.insert(index);
+        }
     }
 }
 

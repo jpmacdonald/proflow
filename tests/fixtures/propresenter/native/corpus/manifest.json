@@ -5,9 +5,10 @@
       "path": "playlists/2026-04-19-0900-contemporary.proplaylist",
       "provenance": "proflow_reconstruction_from_live_library",
       "independent_native_export": false,
-      "mode": "library_local",
+      "mode": "presentations_only",
       "item_count": 16,
       "embedded_file_count": 16,
+      "media_file_count": 0,
       "required_embedded_files": [
         "Pre-Service, Post-Service Slides.pro",
         "Announcements.pro",
@@ -19,9 +20,10 @@
       "path": "playlists/2026-04-19-1030-traditional.proplaylist",
       "provenance": "proflow_reconstruction_from_live_library",
       "independent_native_export": false,
-      "mode": "library_local",
+      "mode": "presentations_only",
       "item_count": 19,
       "embedded_file_count": 19,
+      "media_file_count": 0,
       "required_embedded_files": [
         "Pre-Service, Post-Service Slides.pro",
         "Prelude Nametag.pro",
@@ -34,13 +36,28 @@
       "path": "playlists/native-template-library.proplaylist",
       "provenance": "independent_native_export",
       "independent_native_export": true,
-      "mode": "library_local",
+      "mode": "presentations_only",
       "item_count": 3,
       "embedded_file_count": 3,
+      "media_file_count": 0,
       "required_embedded_files": [
         "__template_scripture__.pro",
         "__template_info__.pro",
         "__template_song__.pro"
+      ]
+    },
+    {
+      "path": "playlists/native-easter-portable-media.proplaylist",
+      "provenance": "independent_native_export",
+      "independent_native_export": true,
+      "mode": "contains_media",
+      "item_count": 17,
+      "embedded_file_count": 19,
+      "media_file_count": 2,
+      "required_embedded_files": [
+        "Call to Worship - Easter 1100.pro",
+        "Doxology.pro",
+        "[Hymn] Crown Him With Many Crowns.pro"
       ]
     }
   ],

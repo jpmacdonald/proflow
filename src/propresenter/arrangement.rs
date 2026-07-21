@@ -10,9 +10,9 @@ use super::generated::rv_data;
 /// Failure to retain a checked prefix of the operator-visible cue traversal.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RetainOperatorCuesError {
-    /// The presentation has no cue that can be shown in operator order.
-    #[error("presentation has no operator-visible cues")]
-    EmptyTraversal,
+    /// The presentation's selected/default operator traversal was not safe to mutate.
+    #[error(transparent)]
+    Traversal(#[from] OperatorTraversalError),
     /// The requested prefix is longer than the complete operator traversal.
     #[error(
         "cannot retain {requested} operator-visible cue occurrences; presentation has {available}"
@@ -25,6 +25,59 @@ pub enum RetainOperatorCuesError {
     },
 }
 
+/// Why operator-visible cue order cannot safely drive a native mutation.
+///
+/// Inspection deliberately remains best-effort, but mutations must never fall
+/// through a malformed selected/default arrangement to a different cue order.
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum OperatorTraversalError {
+    /// The selected native identifier did not resolve to an arrangement.
+    #[error("selected arrangement {identifier:?} is unavailable")]
+    SelectedArrangementUnavailable {
+        /// Exact native identifier stored by the presentation.
+        identifier: String,
+    },
+    /// More than one arrangement used the selected native identifier.
+    #[error("selected arrangement {identifier:?} is ambiguous")]
+    SelectedArrangementAmbiguous {
+        /// Duplicated native identifier.
+        identifier: String,
+    },
+    /// The selected arrangement's complete group/cue graph did not resolve.
+    #[error("selected arrangement {name:?} has an incomplete group/cue traversal")]
+    SelectedArrangementIncomplete {
+        /// Native arrangement display name.
+        name: String,
+    },
+    /// The selected arrangement did not have one exact selectable identity.
+    #[error("selected arrangement {name:?} has an invalid or ambiguous native identity")]
+    SelectedArrangementIdentityInvalid {
+        /// Native arrangement display name.
+        name: String,
+    },
+    /// More than one unselected arrangement was named `Default`.
+    #[error("presentation has more than one default arrangement")]
+    DefaultArrangementAmbiguous,
+    /// The only default arrangement's complete group/cue graph did not resolve.
+    #[error("default arrangement {name:?} has an incomplete group/cue traversal")]
+    DefaultArrangementIncomplete {
+        /// Native arrangement display name.
+        name: String,
+    },
+    /// The default arrangement did not have one exact selectable identity.
+    #[error("default arrangement {name:?} has an invalid or ambiguous native identity")]
+    DefaultArrangementIdentityInvalid {
+        /// Native arrangement display name.
+        name: String,
+    },
+    /// Arrangement-less cue groups contained a missing or ambiguous cue reference.
+    #[error("presentation cue-group traversal is incomplete")]
+    CueGroupTraversalIncomplete,
+    /// The presentation has no cue that can be shown in operator order.
+    #[error("presentation has no operator-visible cues")]
+    EmptyTraversal,
+}
+
 /// Return cue indices in the order visible to a `ProPresenter` operator.
 ///
 /// The selected arrangement owns the order when it resolves to presentation
@@ -32,13 +85,44 @@ pub enum RetainOperatorCuesError {
 /// without either structure fall back to their stored cue order.
 #[must_use]
 pub fn operator_cue_indices(presentation: &rv_data::Presentation) -> Vec<usize> {
-    if let Some(arrangement) = selected_or_default_arrangement(presentation) {
-        if let Some(arranged_indices) = resolved_arrangement_cue_indices(presentation, arrangement)
-        {
-            return arranged_indices;
-        }
+    if let Some(arrangement) = selected_or_default_resolved_arrangement(presentation) {
+        return arrangement.cue_indices().to_vec();
+    }
+    fallback_operator_cue_indices(presentation)
+}
+
+/// Return the exact operator traversal permitted to drive native mutation.
+///
+/// Unlike [`operator_cue_indices`], this never substitutes cue-group or raw
+/// order for a malformed selected/default arrangement.
+pub(crate) fn checked_operator_cue_indices(
+    presentation: &rv_data::Presentation,
+) -> Result<Vec<usize>, OperatorTraversalError> {
+    if let Some(arrangement) = checked_selected_or_default_arrangement(presentation)? {
+        return Ok(arrangement.cue_indices().to_vec());
     }
 
+    if presentation.cue_groups.is_empty() {
+        return if presentation.cues.is_empty() {
+            Err(OperatorTraversalError::EmptyTraversal)
+        } else {
+            Ok((0..presentation.cues.len()).collect())
+        };
+    }
+    let mut indices = Vec::new();
+    if presentation
+        .cue_groups
+        .iter()
+        .all(|group| append_group_cue_indices(presentation, group, &mut indices))
+        && !indices.is_empty()
+    {
+        Ok(indices)
+    } else {
+        Err(OperatorTraversalError::CueGroupTraversalIncomplete)
+    }
+}
+
+fn fallback_operator_cue_indices(presentation: &rv_data::Presentation) -> Vec<usize> {
     let mut indices = Vec::new();
     let complete = presentation
         .cue_groups
@@ -63,10 +147,7 @@ pub fn retain_first_operator_cues(
     presentation: &mut rv_data::Presentation,
     count: NonZeroUsize,
 ) -> Result<bool, RetainOperatorCuesError> {
-    let traversal = operator_cue_indices(presentation);
-    if traversal.is_empty() {
-        return Err(RetainOperatorCuesError::EmptyTraversal);
-    }
+    let traversal = checked_operator_cue_indices(presentation)?;
     if count.get() > traversal.len() {
         return Err(RetainOperatorCuesError::CountExceedsTraversal {
             requested: count.get(),
@@ -159,23 +240,9 @@ pub(crate) fn selectable_arrangement_uuid(
     presentation: &rv_data::Presentation,
     arrangement: &rv_data::presentation::Arrangement,
 ) -> Option<uuid::Uuid> {
-    let name = arrangement.name.as_str();
-    if name.trim().is_empty() || name.trim() != name || name.chars().any(char::is_control) {
-        return None;
-    }
-    let uuid = uuid::Uuid::parse_str(&arrangement.uuid.as_ref()?.string).ok()?;
-    let matching_uuid_count = presentation
-        .arrangements
-        .iter()
-        .filter_map(|candidate| candidate.uuid.as_ref())
-        .filter_map(|candidate| uuid::Uuid::parse_str(&candidate.string).ok())
-        .filter(|candidate| *candidate == uuid)
-        .count();
-    if matching_uuid_count != 1 {
-        return None;
-    }
-    resolved_arrangement_cue_indices(presentation, arrangement)?;
-    Some(uuid)
+    selectable_arrangement(presentation, arrangement)
+        .ok()
+        .map(|arrangement| arrangement.uuid())
 }
 
 /// Whether an exact UUID/name pair identifies one selectable arrangement.
@@ -188,34 +255,259 @@ pub(crate) fn has_selectable_arrangement(
     uuid: &uuid::Uuid,
     name: &str,
 ) -> bool {
-    presentation.arrangements.iter().any(|arrangement| {
-        arrangement.name == name
-            && selectable_arrangement_uuid(presentation, arrangement).as_ref() == Some(uuid)
-    })
+    selectable_arrangement_by_identity(presentation, uuid, name).is_ok()
 }
 
-pub(crate) fn resolved_arrangement_cue_indices(
-    presentation: &rv_data::Presentation,
-    arrangement: &rv_data::presentation::Arrangement,
-) -> Option<Vec<usize>> {
+/// Why an operator-supplied arrangement selection cannot be bound exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ArrangementSelectionError {
+    /// No native arrangement has the supplied exact UUID/name identity.
+    #[error("arrangement is unavailable")]
+    Unavailable,
+    /// More than one native arrangement has the supplied identity.
+    #[error("arrangement identity is ambiguous across {matches} matches")]
+    Ambiguous {
+        /// Number of native arrangements sharing the identity.
+        matches: usize,
+    },
+    /// The arrangement references a missing or ambiguous group/cue.
+    #[error("arrangement has an incomplete group/cue traversal")]
+    Incomplete,
+}
+
+/// Resolve one exact native UUID/name pair through the canonical arrangement
+/// identity and graph predicate.
+pub(crate) fn selectable_arrangement_by_identity<'a>(
+    presentation: &'a rv_data::Presentation,
+    uuid: &uuid::Uuid,
+    name: &str,
+) -> Result<SelectableArrangement<'a>, ArrangementSelectionError> {
+    let matches = presentation
+        .arrangements
+        .iter()
+        .filter(|arrangement| {
+            arrangement
+                .uuid
+                .as_ref()
+                .and_then(|native| uuid::Uuid::parse_str(&native.string).ok())
+                .as_ref()
+                == Some(uuid)
+        })
+        .collect::<Vec<_>>();
+    let arrangement = match matches.as_slice() {
+        [arrangement] if arrangement.name == name => *arrangement,
+        [_] | [] => return Err(ArrangementSelectionError::Unavailable),
+        _ => {
+            return Err(ArrangementSelectionError::Ambiguous {
+                matches: matches.len(),
+            });
+        }
+    };
+    selectable_arrangement(presentation, arrangement)
+}
+
+/// Resolve one case-insensitive operator arrangement name through the same
+/// identity and graph predicate used by playlist and background boundaries.
+pub(crate) fn selectable_arrangement_by_name<'a>(
+    presentation: &'a rv_data::Presentation,
+    name: &str,
+) -> Result<SelectableArrangement<'a>, ArrangementSelectionError> {
+    let matches = presentation
+        .arrangements
+        .iter()
+        .filter(|arrangement| arrangement.name.eq_ignore_ascii_case(name))
+        .collect::<Vec<_>>();
+    let arrangement = match matches.as_slice() {
+        [arrangement] => *arrangement,
+        [] => return Err(ArrangementSelectionError::Unavailable),
+        _ => {
+            return Err(ArrangementSelectionError::Ambiguous {
+                matches: matches.len(),
+            });
+        }
+    };
+    selectable_arrangement(presentation, arrangement)
+}
+
+/// Check one native arrangement's exact identity and complete group/cue graph.
+pub(crate) fn selectable_arrangement<'a>(
+    presentation: &'a rv_data::Presentation,
+    arrangement: &'a rv_data::presentation::Arrangement,
+) -> Result<SelectableArrangement<'a>, ArrangementSelectionError> {
+    let resolved = resolve_arrangement(presentation, arrangement)
+        .ok_or(ArrangementSelectionError::Incomplete)?;
+    let uuid = resolved.checked_uuid().map_err(|error| match error {
+        ArrangementIdentityError::AmbiguousUuid(uuid) => ArrangementSelectionError::Ambiguous {
+            matches: presentation
+                .arrangements
+                .iter()
+                .filter_map(|arrangement| arrangement.uuid.as_ref())
+                .filter_map(|native| uuid::Uuid::parse_str(&native.string).ok())
+                .filter(|candidate| *candidate == uuid)
+                .count(),
+        },
+        ArrangementIdentityError::InvalidName | ArrangementIdentityError::MissingOrInvalidUuid => {
+            ArrangementSelectionError::Incomplete
+        }
+    })?;
+    Ok(SelectableArrangement { resolved, uuid })
+}
+
+/// An arrangement whose native identity and complete traversal are proven.
+pub(crate) struct SelectableArrangement<'a> {
+    resolved: ResolvedArrangement<'a>,
+    uuid: uuid::Uuid,
+}
+
+impl<'a> SelectableArrangement<'a> {
+    pub(crate) const fn name(&self) -> &'a str {
+        self.resolved.name()
+    }
+
+    pub(crate) const fn native_uuid(&self) -> Option<&'a rv_data::Uuid> {
+        self.resolved.native_uuid()
+    }
+
+    pub(crate) const fn uuid(&self) -> uuid::Uuid {
+        self.uuid
+    }
+
+    pub(crate) const fn entry_cue_index(&self) -> usize {
+        self.resolved.entry_cue_index()
+    }
+}
+
+/// Why a structurally resolved arrangement cannot be used as an exact native
+/// selection identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArrangementIdentityError {
+    InvalidName,
+    MissingOrInvalidUuid,
+    AmbiguousUuid(uuid::Uuid),
+}
+
+/// One checked group occurrence in an arrangement traversal.
+pub(crate) struct ResolvedArrangementGroup<'a> {
+    name: &'a str,
+    entry_cue_index: Option<usize>,
+}
+
+impl<'a> ResolvedArrangementGroup<'a> {
+    pub(crate) const fn name(&self) -> &'a str {
+        self.name
+    }
+
+    pub(crate) const fn entry_cue_index(&self) -> Option<usize> {
+        self.entry_cue_index
+    }
+}
+
+/// A native arrangement whose complete group/cue graph resolves uniquely.
+///
+/// The view preserves repeated group occurrences and their native cue order.
+/// Exact selectable identity is checked separately because operator traversal
+/// can still use legacy documents whose UUID strings are not canonical UUIDs.
+pub(crate) struct ResolvedArrangement<'a> {
+    arrangement: &'a rv_data::presentation::Arrangement,
+    identity: Result<uuid::Uuid, ArrangementIdentityError>,
+    groups: Vec<ResolvedArrangementGroup<'a>>,
+    entry_cue_index: usize,
+    cue_indices: Vec<usize>,
+}
+
+impl<'a> ResolvedArrangement<'a> {
+    pub(crate) const fn name(&self) -> &'a str {
+        self.arrangement.name.as_str()
+    }
+
+    pub(crate) const fn native_uuid(&self) -> Option<&'a rv_data::Uuid> {
+        self.arrangement.uuid.as_ref()
+    }
+
+    pub(crate) fn groups(&self) -> &[ResolvedArrangementGroup<'a>] {
+        &self.groups
+    }
+
+    pub(crate) fn cue_indices(&self) -> &[usize] {
+        &self.cue_indices
+    }
+
+    pub(crate) const fn entry_cue_index(&self) -> usize {
+        self.entry_cue_index
+    }
+
+    pub(crate) const fn checked_uuid(&self) -> Result<uuid::Uuid, ArrangementIdentityError> {
+        self.identity
+    }
+}
+
+/// Resolve one complete arrangement graph without guessing through ambiguous
+/// group or cue identifiers.
+pub(crate) fn resolve_arrangement<'a>(
+    presentation: &'a rv_data::Presentation,
+    arrangement: &'a rv_data::presentation::Arrangement,
+) -> Option<ResolvedArrangement<'a>> {
     if arrangement.group_identifiers.is_empty() {
         return None;
     }
-    let mut indices = Vec::new();
+    let mut groups = Vec::with_capacity(arrangement.group_identifiers.len());
+    let mut cue_indices = Vec::new();
     for group_id in &arrangement.group_identifiers {
-        let mut groups = presentation.cue_groups.iter().filter(|group| {
-            group
+        let mut matches = presentation.cue_groups.iter().filter(|candidate| {
+            candidate
                 .group
                 .as_ref()
                 .and_then(|group| group.uuid.as_ref())
                 .is_some_and(|uuid| uuid.string == group_id.string)
         });
-        let group = groups.next()?;
-        if groups.next().is_some() || !append_group_cue_indices(presentation, group, &mut indices) {
+        let group = matches.next()?;
+        if matches.next().is_some() {
             return None;
         }
+        let name = group.group.as_ref()?.name.as_str();
+        let start = cue_indices.len();
+        if !append_group_cue_indices(presentation, group, &mut cue_indices) {
+            return None;
+        }
+        groups.push(ResolvedArrangementGroup {
+            name,
+            entry_cue_index: cue_indices.get(start).copied(),
+        });
     }
-    (!indices.is_empty()).then_some(indices)
+    let entry_cue_index = cue_indices.first().copied()?;
+    Some(ResolvedArrangement {
+        arrangement,
+        identity: arrangement_identity(presentation, arrangement),
+        groups,
+        entry_cue_index,
+        cue_indices,
+    })
+}
+
+fn arrangement_identity(
+    presentation: &rv_data::Presentation,
+    arrangement: &rv_data::presentation::Arrangement,
+) -> Result<uuid::Uuid, ArrangementIdentityError> {
+    let name = arrangement.name.as_str();
+    if name.trim().is_empty() || name.trim() != name || name.chars().any(char::is_control) {
+        return Err(ArrangementIdentityError::InvalidName);
+    }
+    let uuid = arrangement
+        .uuid
+        .as_ref()
+        .and_then(|native| uuid::Uuid::parse_str(&native.string).ok())
+        .ok_or(ArrangementIdentityError::MissingOrInvalidUuid)?;
+    let matching_uuid_count = presentation
+        .arrangements
+        .iter()
+        .filter_map(|candidate| candidate.uuid.as_ref())
+        .filter_map(|candidate| uuid::Uuid::parse_str(&candidate.string).ok())
+        .filter(|candidate| *candidate == uuid)
+        .count();
+    if matching_uuid_count != 1 {
+        return Err(ArrangementIdentityError::AmbiguousUuid(uuid));
+    }
+    Ok(uuid)
 }
 
 /// One ordered selected-arrangement group occurrence and its entry cue.
@@ -224,52 +516,37 @@ pub(crate) struct SelectedGroupEntry<'a> {
     pub(crate) cue_index: usize,
 }
 
-/// Resolve every group occurrence in the selected/default arrangement.
+/// Resolve every group occurrence in the checked selected/default arrangement.
 ///
 /// Repeated group identifiers remain repeated occurrences. The complete
-/// arrangement and each entry cue must resolve uniquely; otherwise no partial
-/// region list escapes.
-pub(crate) fn selected_group_entries(
+/// arrangement identity and each entry cue must resolve uniquely; otherwise no
+/// partial region list escapes.
+pub(crate) fn checked_selected_group_entries(
     presentation: &rv_data::Presentation,
-) -> Option<Vec<SelectedGroupEntry<'_>>> {
-    let arrangement = selected_or_default_arrangement(presentation)?;
-    // Region selection and operator traversal must describe the same native
-    // structure. Reject a partially resolvable arrangement instead of pairing
-    // its entry cues with the raw/group fallback traversal.
-    resolved_arrangement_cue_indices(presentation, arrangement)?;
-    let mut entries = Vec::with_capacity(arrangement.group_identifiers.len());
-    for group_id in &arrangement.group_identifiers {
-        let mut groups = presentation.cue_groups.iter().filter(|candidate| {
-            candidate
-                .group
-                .as_ref()
-                .and_then(|group| group.uuid.as_ref())
-                .is_some_and(|uuid| uuid.string == group_id.string)
-        });
-        let group = groups.next()?;
-        if groups.next().is_some() {
-            return None;
-        }
-        let group_name = group.group.as_ref()?.name.as_str();
-        let first_cue = group.cue_identifiers.first()?;
-        let mut cues = presentation.cues.iter().enumerate().filter(|(_, cue)| {
-            cue.uuid
-                .as_ref()
-                .is_some_and(|uuid| uuid.string == first_cue.string)
-        });
-        let (cue_index, _) = cues.next()?;
-        if cues.next().is_some() {
-            return None;
-        }
-        entries.push(SelectedGroupEntry {
-            name: group_name,
-            cue_index,
-        });
-    }
-    (!entries.is_empty()).then_some(entries)
+) -> Result<Option<Vec<SelectedGroupEntry<'_>>>, OperatorTraversalError> {
+    let Some(resolved) = checked_selected_or_default_arrangement(presentation)? else {
+        return Ok(None);
+    };
+    Ok(resolved
+        .groups()
+        .iter()
+        .map(|group| {
+            Some(SelectedGroupEntry {
+                name: group.name(),
+                cue_index: group.entry_cue_index()?,
+            })
+        })
+        .collect())
 }
 
-fn selected_or_default_arrangement(
+fn selected_or_default_resolved_arrangement(
+    presentation: &rv_data::Presentation,
+) -> Option<ResolvedArrangement<'_>> {
+    let arrangement = selected_or_default_arrangement_for_inspection(presentation)?;
+    resolve_arrangement(presentation, arrangement)
+}
+
+fn selected_or_default_arrangement_for_inspection(
     presentation: &rv_data::Presentation,
 ) -> Option<&rv_data::presentation::Arrangement> {
     if let Some(selected) = &presentation.selected_arrangement {
@@ -292,6 +569,65 @@ fn selected_or_default_arrangement(
     match (defaults.next(), defaults.next()) {
         (Some(arrangement), None) => Some(arrangement),
         _ => None,
+    }
+}
+
+fn checked_selected_or_default_arrangement(
+    presentation: &rv_data::Presentation,
+) -> Result<Option<ResolvedArrangement<'_>>, OperatorTraversalError> {
+    if let Some(selected) = &presentation.selected_arrangement {
+        let mut matches = presentation.arrangements.iter().filter(|arrangement| {
+            arrangement
+                .uuid
+                .as_ref()
+                .is_some_and(|uuid| uuid.string == selected.string)
+        });
+        let arrangement = match (matches.next(), matches.next()) {
+            (None, _) => {
+                return Err(OperatorTraversalError::SelectedArrangementUnavailable {
+                    identifier: selected.string.clone(),
+                });
+            }
+            (Some(arrangement), None) => arrangement,
+            (Some(_), Some(_)) => {
+                return Err(OperatorTraversalError::SelectedArrangementAmbiguous {
+                    identifier: selected.string.clone(),
+                });
+            }
+        };
+        let resolved = resolve_arrangement(presentation, arrangement).ok_or_else(|| {
+            OperatorTraversalError::SelectedArrangementIncomplete {
+                name: arrangement.name.clone(),
+            }
+        })?;
+        resolved.checked_uuid().map_err(|_| {
+            OperatorTraversalError::SelectedArrangementIdentityInvalid {
+                name: arrangement.name.clone(),
+            }
+        })?;
+        return Ok(Some(resolved));
+    }
+
+    let mut defaults = presentation
+        .arrangements
+        .iter()
+        .filter(|arrangement| arrangement.name.eq_ignore_ascii_case("Default"));
+    match (defaults.next(), defaults.next()) {
+        (None, _) => Ok(None),
+        (Some(arrangement), None) => {
+            let resolved = resolve_arrangement(presentation, arrangement).ok_or_else(|| {
+                OperatorTraversalError::DefaultArrangementIncomplete {
+                    name: arrangement.name.clone(),
+                }
+            })?;
+            resolved.checked_uuid().map_err(|_| {
+                OperatorTraversalError::DefaultArrangementIdentityInvalid {
+                    name: arrangement.name.clone(),
+                }
+            })?;
+            Ok(Some(resolved))
+        }
+        (Some(_), Some(_)) => Err(OperatorTraversalError::DefaultArrangementAmbiguous),
     }
 }
 
@@ -378,10 +714,10 @@ mod tests {
             name: "Retained presentation metadata".to_string(),
             notes: "Notes survive cue selection".to_string(),
             selected_arrangement: Some(rv_data::Uuid {
-                string: "service".to_string(),
+                string: "11111111-1111-4111-8111-111111111111".to_string(),
             }),
             arrangements: vec![arrangement(
-                "service",
+                "11111111-1111-4111-8111-111111111111",
                 "Retained arrangement metadata",
                 &["title-group", "content-group"],
             )],
@@ -433,7 +769,7 @@ mod tests {
                 .selected_arrangement
                 .as_ref()
                 .map(|id| id.string.as_str()),
-            Some("service")
+            Some("11111111-1111-4111-8111-111111111111")
         );
         assert_eq!(operator_cue_indices(&presentation), vec![0]);
     }
@@ -444,10 +780,10 @@ mod tests {
         content_group.group.as_mut().expect("content group").name = "Content metadata".to_string();
         let mut presentation = rv_data::Presentation {
             selected_arrangement: Some(rv_data::Uuid {
-                string: "service".to_string(),
+                string: "11111111-1111-4111-8111-111111111111".to_string(),
             }),
             arrangements: vec![arrangement(
-                "service",
+                "11111111-1111-4111-8111-111111111111",
                 "Service",
                 &["title-group", "content-group"],
             )],
@@ -486,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn retaining_operator_prefix_removes_empty_arrangements_and_dangling_selection() {
+    fn retaining_operator_prefix_rejects_a_dangling_selected_arrangement_atomically() {
         let mut presentation = rv_data::Presentation {
             selected_arrangement: Some(rv_data::Uuid {
                 string: "broken-selected".to_string(),
@@ -503,18 +839,23 @@ mod tests {
             ],
             ..rv_data::Presentation::default()
         };
+        let original = presentation.clone();
 
-        retain_first_operator_cues(
+        let error = retain_first_operator_cues(
             &mut presentation,
             NonZeroUsize::new(1).expect("nonzero count"),
         )
-        .expect("retain raw fallback prefix");
+        .expect_err("mutation cannot use the raw inspection fallback");
 
-        assert!(presentation.selected_arrangement.is_none());
-        assert_eq!(presentation.arrangements.len(), 1);
-        assert_eq!(presentation.arrangements[0].name, "Alternate");
-        assert_eq!(presentation.cue_groups.len(), 1);
-        assert_eq!(presentation.cues.len(), 1);
+        assert_eq!(
+            error,
+            RetainOperatorCuesError::Traversal(
+                OperatorTraversalError::SelectedArrangementIncomplete {
+                    name: "Broken".to_string(),
+                }
+            )
+        );
+        assert_eq!(presentation, original);
     }
 
     #[test]
@@ -557,8 +898,39 @@ mod tests {
         )
         .expect_err("empty traversal must fail");
 
-        assert_eq!(error, RetainOperatorCuesError::EmptyTraversal);
+        assert_eq!(
+            error,
+            RetainOperatorCuesError::Traversal(OperatorTraversalError::EmptyTraversal)
+        );
         assert_eq!(presentation, original);
+    }
+
+    #[test]
+    fn retaining_rejects_an_invalid_default_arrangement_identity_atomically() {
+        let mut presentation = rv_data::Presentation {
+            arrangements: vec![arrangement("not-a-uuid", "Default", &["group"])],
+            cues: vec![cue("cue")],
+            cue_groups: vec![group("group", &["cue"])],
+            ..rv_data::Presentation::default()
+        };
+        let original = presentation.clone();
+
+        let error = retain_first_operator_cues(
+            &mut presentation,
+            NonZeroUsize::new(1).expect("nonzero count"),
+        )
+        .expect_err("mutation requires selectable default identity");
+
+        assert_eq!(
+            error,
+            RetainOperatorCuesError::Traversal(
+                OperatorTraversalError::DefaultArrangementIdentityInvalid {
+                    name: "Default".to_string(),
+                }
+            )
+        );
+        assert_eq!(presentation, original);
+        assert_eq!(operator_cue_indices(&presentation), vec![0]);
     }
 
     #[test]
@@ -590,6 +962,12 @@ mod tests {
         };
 
         assert_eq!(operator_cue_indices(&presentation), vec![1, 2, 0]);
+        assert_eq!(
+            checked_operator_cue_indices(&presentation),
+            Err(OperatorTraversalError::SelectedArrangementIdentityInvalid {
+                name: "Alternate".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -652,6 +1030,12 @@ mod tests {
         };
 
         assert_eq!(operator_cue_indices(&presentation), vec![0, 1]);
+        assert_eq!(
+            checked_operator_cue_indices(&presentation),
+            Err(OperatorTraversalError::SelectedArrangementIncomplete {
+                name: "Broken".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -682,7 +1066,10 @@ mod tests {
             ..rv_data::Presentation::default()
         };
 
-        assert!(selected_group_entries(&presentation).is_none());
+        assert!(matches!(
+            checked_selected_group_entries(&presentation),
+            Err(OperatorTraversalError::SelectedArrangementIncomplete { .. })
+        ));
     }
 
     #[test]
@@ -741,6 +1128,9 @@ mod tests {
             selectable_arrangement_uuid(&presentation, &presentation.arrangements[0]),
             Some(arrangement_uuid)
         );
+        let selected = selectable_arrangement_by_name(&presentation, "default")
+            .expect("case-insensitive checked selection");
+        assert_eq!(selected.uuid(), arrangement_uuid);
 
         presentation.arrangements[0].group_identifiers[0].string = "missing".to_string();
         assert!(
@@ -806,5 +1196,11 @@ mod tests {
         };
 
         assert_eq!(operator_cue_indices(&presentation), vec![0, 1]);
+        assert_eq!(
+            checked_operator_cue_indices(&presentation),
+            Err(OperatorTraversalError::SelectedArrangementUnavailable {
+                identifier: "missing".to_string(),
+            })
+        );
     }
 }

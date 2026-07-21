@@ -3,24 +3,26 @@
 //! Loads the user's macro definitions from `ProPresenter`'s config, then injects
 //! macro actions at caller-supplied cue-region boundaries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use prost::Message;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use super::generated::rv_data::{self, action, CollectionElementType, Uuid};
-use crate::workflow::plan::{RestyleMacroPolicy, RestyleMacroSelector};
-
 /// Cached macro name → native collection identification loaded from
 /// `ProPresenter`'s config.
 pub struct MacroCache {
     macros: HashMap<String, InstalledMacro>,
+    source_path: Option<PathBuf>,
+    source_sha256: Option<[u8; 32]>,
 }
 
 struct InstalledMacro {
     identification: CollectionElementType,
     actions: Vec<MacroActionSummary>,
+    native: rv_data::macros_document::Macro,
 }
 
 /// Read-only description of one installed macro.
@@ -79,6 +81,9 @@ pub enum MacroCacheLoadError {
 /// Failure to apply a configured macro at rendered cue boundaries.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum MacroApplyError {
+    /// The presentation's selected/default operator traversal was unsafe.
+    #[error(transparent)]
+    OperatorTraversal(#[from] crate::propresenter::arrangement::OperatorTraversalError),
     /// The requested macro is not installed.
     #[error("macro '{0}' is not available")]
     Unavailable(String),
@@ -93,6 +98,12 @@ pub enum MacroApplyError {
     /// The presentation has no operator-visible cue on which a macro can run.
     #[error("presentation has no operator-visible cue")]
     MissingOperatorCue,
+    /// A native target did not belong to the selected operator traversal.
+    #[error("cue {index} is not part of the selected operator traversal")]
+    CueOutsideOperatorTraversal {
+        /// Native presentation cue index outside the selected traversal.
+        index: usize,
+    },
     /// A configured native region could not be resolved.
     #[error("macro region {region} is unavailable: {selector}")]
     RegionUnavailable {
@@ -121,6 +132,31 @@ pub enum MacroApplyError {
         /// Native presentation cue index targeted more than once.
         cue_index: usize,
     },
+}
+
+/// One already-resolved native cue entry and the exact installed macro it
+/// should trigger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MacroCueTarget<'a> {
+    cue_index: usize,
+    macro_name: &'a str,
+}
+
+impl<'a> MacroCueTarget<'a> {
+    pub(crate) const fn new(cue_index: usize, macro_name: &'a str) -> Self {
+        Self {
+            cue_index,
+            macro_name,
+        }
+    }
+
+    pub(crate) const fn cue_index(self) -> usize {
+        self.cue_index
+    }
+
+    pub(crate) const fn macro_name(self) -> &'a str {
+        self.macro_name
+    }
 }
 
 impl MacroCache {
@@ -164,7 +200,11 @@ impl MacroCache {
 
     /// Load macros from a specific file path.
     pub fn load_from(path: &Path) -> Result<Self, MacroCacheLoadError> {
-        load_macro_map(path).map(|macros| Self { macros })
+        load_macro_map(path).map(|(macros, source_sha256)| Self {
+            macros,
+            source_path: Some(path.to_path_buf()),
+            source_sha256: Some(source_sha256),
+        })
     }
 
     /// Create an empty cache (no macros available).
@@ -172,6 +212,8 @@ impl MacroCache {
     pub fn empty() -> Self {
         Self {
             macros: HashMap::new(),
+            source_path: None,
+            source_sha256: None,
         }
     }
 
@@ -217,10 +259,25 @@ impl MacroCache {
         summaries.sort_by(|left, right| left.name.cmp(&right.name));
         summaries
     }
+
+    /// Exact installed native macro definition from the captured document.
+    ///
+    /// Audience Look resolution uses its enabled action payload and UUID; the
+    /// human-readable action summary is deliberately not a semantic substitute.
+    pub(crate) fn native(&self, name: &str) -> Option<&rv_data::macros_document::Macro> {
+        self.macros.get(name).map(|installed| &installed.native)
+    }
+
+    /// Exact native macro document parsed into this immutable cache.
+    pub(crate) fn source_document(&self) -> Option<(&Path, [u8; 32])> {
+        self.source_path.as_deref().zip(self.source_sha256)
+    }
 }
 
 /// Load installed macro identity and action summaries from one protobuf read.
-fn load_macro_map(path: &Path) -> Result<HashMap<String, InstalledMacro>, MacroCacheLoadError> {
+fn load_macro_map(
+    path: &Path,
+) -> Result<(HashMap<String, InstalledMacro>, [u8; 32]), MacroCacheLoadError> {
     let mut map = HashMap::new();
     let mut canonical_names = HashMap::<String, String>::new();
     let data = std::fs::read(path).map_err(|source| MacroCacheLoadError::Read {
@@ -275,12 +332,13 @@ fn load_macro_map(path: &Path) -> Result<HashMap<String, InstalledMacro>, MacroC
                                 .map(Box::new),
                         },
                         actions: m.actions.iter().map(summarize_macro_action).collect(),
+                        native: m.clone(),
                     },
                 );
             }
         }
     }
-    Ok(map)
+    Ok((map, Sha256::digest(&data).into()))
 }
 
 fn summarize_macro_action(native: &rv_data::Action) -> MacroActionSummary {
@@ -396,37 +454,6 @@ fn make_macro_action_from_identification(identification: CollectionElementType) 
     }
 }
 
-/// Add a macro action to each rendered cue-region entry.
-///
-/// The renderer owns role detection and supplies exact cue indices. Every index
-/// is validated before any cue is changed, so stale render metadata cannot
-/// partially mutate a presentation.
-pub fn add_macro_to_cue_entries(
-    presentation: &mut rv_data::Presentation,
-    cue_indices: &[usize],
-    macro_name: &str,
-    cache: &MacroCache,
-) -> Result<(), MacroApplyError> {
-    let Some((installed_name, identification)) = cache.find(macro_name) else {
-        return Err(MacroApplyError::Unavailable(macro_name.to_string()));
-    };
-    let cue_count = presentation.cues.len();
-    if let Some(&index) = cue_indices.iter().find(|&&index| index >= cue_count) {
-        return Err(MacroApplyError::CueUnavailable { index, cue_count });
-    }
-
-    for &index in cue_indices {
-        let cue = &mut presentation.cues[index];
-        if !cue_has_macro_named(cue, installed_name) {
-            debug_assert_eq!(installed_name, identification.parameter_name);
-            cue.actions.push(make_macro_action_from_identification(
-                identification.clone(),
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// Replace all macro actions on one native entry cue with the configured macro.
 ///
 /// A matching native action keeps its wrapper identity. The configured macro
@@ -469,67 +496,44 @@ pub(crate) fn replace_entry_macro(
     Ok(())
 }
 
-/// Enforce the configured macro sequence on the selected operator traversal.
+/// Enforce already-resolved macro targets on the selected operator traversal.
 ///
-/// Every selector and installed macro is resolved before mutation. Existing
-/// macro actions in the selected traversal are then removed and the configured
-/// region transitions are applied atomically in config order.
-pub(crate) fn apply_operator_macro_policy(
+/// Workflow selectors are deliberately absent from this native boundary.
+/// Every target and installed macro is checked before mutation. Existing macro
+/// actions in the selected traversal are then removed and the requested entry
+/// transitions are applied atomically in caller order.
+pub(crate) fn apply_operator_macro_targets(
     presentation: &mut rv_data::Presentation,
-    policy: &RestyleMacroPolicy,
+    targets: &[MacroCueTarget<'_>],
     cache: &MacroCache,
 ) -> Result<bool, MacroApplyError> {
-    let traversal = crate::propresenter::arrangement::operator_cue_indices(presentation);
-    if traversal.is_empty() {
-        return Err(MacroApplyError::MissingOperatorCue);
-    }
-    let selected_groups = crate::propresenter::arrangement::selected_group_entries(presentation);
-    let mut targets = Vec::with_capacity(policy.regions().len());
-    let mut target_indexes = std::collections::HashSet::new();
-    for (region_index, region) in policy.regions().iter().enumerate() {
-        if cache.find(region.enter_macro()).is_none() {
+    let traversal = crate::propresenter::arrangement::checked_operator_cue_indices(presentation)?;
+    let cue_count = presentation.cues.len();
+    let traversal_indexes = traversal.iter().copied().collect::<HashSet<_>>();
+    let mut target_indexes = HashSet::with_capacity(targets.len());
+    for target in targets {
+        if cache.find(target.macro_name()).is_none() {
             return Err(MacroApplyError::Unavailable(
-                region.enter_macro().to_string(),
+                target.macro_name().to_string(),
             ));
         }
-        let cue_index = match region.selector() {
-            RestyleMacroSelector::OperatorCue { index } => traversal
-                .get(*index)
-                .copied()
-                .ok_or_else(|| MacroApplyError::RegionUnavailable {
-                    region: region_index,
-                    selector: format!("operator cue {index}"),
-                })?,
-            RestyleMacroSelector::ArrangementGroup {
-                index,
-                allowed_names,
-            } => {
-                let group = selected_groups
-                    .as_ref()
-                    .and_then(|groups| groups.get(*index))
-                    .ok_or_else(|| MacroApplyError::RegionUnavailable {
-                        region: region_index,
-                        selector: format!("selected arrangement group {index}"),
-                    })?;
-                if !allowed_names.contains(group.name) {
-                    return Err(MacroApplyError::UnexpectedGroup {
-                        region: region_index,
-                        index: *index,
-                        actual: group.name.to_string(),
-                        allowed: allowed_names.iter().cloned().collect(),
-                    });
-                }
-                group.cue_index
-            }
-        };
+        let cue_index = target.cue_index();
+        if cue_index >= cue_count {
+            return Err(MacroApplyError::CueUnavailable {
+                index: cue_index,
+                cue_count,
+            });
+        }
+        if !traversal_indexes.contains(&cue_index) {
+            return Err(MacroApplyError::CueOutsideOperatorTraversal { index: cue_index });
+        }
         if !target_indexes.insert(cue_index) {
             return Err(MacroApplyError::DuplicateRegionTarget { cue_index });
         }
-        targets.push((cue_index, region.enter_macro()));
     }
 
     let mut transformed = presentation.clone();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = HashSet::new();
     for &index in &traversal {
         if !visited.insert(index) {
             continue;
@@ -542,13 +546,14 @@ pub(crate) fn apply_operator_macro_policy(
             cue.actions.retain(|action| !is_macro_action(action));
         }
     }
-    for (index, macro_name) in targets {
+    for target in targets {
+        let index = target.cue_index();
         let cue_count = transformed.cues.len();
         let cue = transformed
             .cues
             .get_mut(index)
             .ok_or(MacroApplyError::CueUnavailable { index, cue_count })?;
-        replace_entry_macro(cue, macro_name, cache)?;
+        replace_entry_macro(cue, target.macro_name(), cache)?;
     }
 
     if transformed == *presentation {
@@ -592,7 +597,6 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::workflow::plan::RestyleMacroRegion;
 
     fn identification(name: &str, id: &str) -> CollectionElementType {
         CollectionElementType {
@@ -608,6 +612,13 @@ mod tests {
         InstalledMacro {
             identification: identification(name, id),
             actions: Vec::new(),
+            native: rv_data::macros_document::Macro {
+                uuid: Some(Uuid {
+                    string: id.to_string(),
+                }),
+                name: name.to_string(),
+                ..rv_data::macros_document::Macro::default()
+            },
         }
     }
 
@@ -621,27 +632,9 @@ mod tests {
                 ("Song".to_string(), installed_macro("Song", "song-macro")),
                 ("Wrong".to_string(), installed_macro("Wrong", "wrong-macro")),
             ]),
+            source_path: None,
+            source_sha256: None,
         }
-    }
-
-    fn arrangement_group_policy(regions: &[(usize, &[&str], &str)]) -> RestyleMacroPolicy {
-        RestyleMacroPolicy::new(
-            regions
-                .iter()
-                .map(|(index, names, macro_name)| {
-                    RestyleMacroRegion::new(
-                        RestyleMacroSelector::arrangement_group(
-                            *index,
-                            names.iter().map(|name| (*name).to_string()).collect(),
-                        )
-                        .expect("valid exact group names"),
-                        (*macro_name).to_string(),
-                    )
-                    .expect("valid exact macro name")
-                })
-                .collect(),
-        )
-        .expect("nonempty macro policy")
     }
 
     fn native_macro(name: &str) -> rv_data::Action {
@@ -651,17 +644,18 @@ mod tests {
     fn presentation_with_selected_groups(
         groups: &[(&str, &str, &[&str])],
     ) -> rv_data::Presentation {
+        const ARRANGEMENT_UUID: &str = "11111111-1111-4111-8111-111111111111";
         let cue_ids = groups
             .iter()
             .flat_map(|(_, _, cue_ids)| cue_ids.iter().copied())
             .collect::<Vec<_>>();
         rv_data::Presentation {
             selected_arrangement: Some(Uuid {
-                string: "selected-arrangement".to_string(),
+                string: ARRANGEMENT_UUID.to_string(),
             }),
             arrangements: vec![rv_data::presentation::Arrangement {
                 uuid: Some(Uuid {
-                    string: "selected-arrangement".to_string(),
+                    string: ARRANGEMENT_UUID.to_string(),
                 }),
                 name: "Default".to_string(),
                 group_identifiers: groups
@@ -725,10 +719,10 @@ mod tests {
             ("background", "Background", &["blank"]),
             ("verse", "Verse 1", &["verse-1", "verse-2"]),
         ]);
-        let policy = arrangement_group_policy(&[(0, &["Background", "Blank"], "Song")]);
+        let targets = [MacroCueTarget::new(0, "Song")];
 
         assert!(
-            apply_operator_macro_policy(&mut presentation, &policy, &cache)
+            apply_operator_macro_targets(&mut presentation, &targets, &cache)
                 .expect("selected contemporary arrangement")
         );
 
@@ -745,13 +739,13 @@ mod tests {
             ("verse", "Verse 1", &["verse-1", "verse-2"]),
             ("blank", "Blank", &["blank"]),
         ]);
-        let policy = arrangement_group_policy(&[
-            (0, &["Background", "Title"], "Name Tag/Title"),
-            (1, &["Verse", "Verse 1"], "Song"),
-        ]);
+        let targets = [
+            MacroCueTarget::new(0, "Name Tag/Title"),
+            MacroCueTarget::new(1, "Song"),
+        ];
 
         assert!(
-            apply_operator_macro_policy(&mut presentation, &policy, &cache)
+            apply_operator_macro_targets(&mut presentation, &targets, &cache)
                 .expect("selected hymn arrangement")
         );
 
@@ -769,11 +763,13 @@ mod tests {
             ("verse", "Verse", &["verse-1", "verse-2"]),
             ("blank", "Blank", &["blank"]),
         ]);
-        let policy =
-            arrangement_group_policy(&[(0, &["Group"], "Name Tag/Title"), (1, &["Verse"], "Song")]);
+        let targets = [
+            MacroCueTarget::new(0, "Name Tag/Title"),
+            MacroCueTarget::new(1, "Song"),
+        ];
 
         assert!(
-            apply_operator_macro_policy(&mut presentation, &policy, &cache)
+            apply_operator_macro_targets(&mut presentation, &targets, &cache)
                 .expect("selected doxology arrangement")
         );
 
@@ -781,31 +777,6 @@ mod tests {
         assert_only_macro(&presentation.cues[1], Some("Song"));
         assert_only_macro(&presentation.cues[2], None);
         assert_only_macro(&presentation.cues[3], None);
-    }
-
-    #[test]
-    fn macro_is_added_to_each_explicit_region_entry() {
-        let cache = MacroCache {
-            macros: HashMap::from([(
-                "Scripture/Prayer".to_string(),
-                installed_macro("Scripture/Prayer", "00000000-0000-0000-0000-000000000001"),
-            )]),
-        };
-        let mut presentation = rv_data::Presentation {
-            cues: vec![
-                rv_data::Cue::default(),
-                rv_data::Cue::default(),
-                rv_data::Cue::default(),
-            ],
-            ..rv_data::Presentation::default()
-        };
-
-        add_macro_to_cue_entries(&mut presentation, &[0, 2], "Scripture/Prayer", &cache)
-            .expect("valid cue entries");
-
-        assert_eq!(presentation.cues[0].actions.len(), 1);
-        assert!(presentation.cues[1].actions.is_empty());
-        assert_eq!(presentation.cues[2].actions.len(), 1);
     }
 
     #[test]
@@ -821,6 +792,8 @@ mod tests {
                     installed_macro("Wrong", "00000000-0000-0000-0000-000000000002"),
                 ),
             ]),
+            source_path: None,
+            source_sha256: None,
         };
         let mut cue = rv_data::Cue {
             actions: vec![
@@ -853,58 +826,78 @@ mod tests {
     }
 
     #[test]
-    fn title_and_content_macros_follow_rendered_role_boundaries() {
-        let cache = MacroCache {
-            macros: HashMap::from([
-                (
-                    "Title".to_string(),
-                    installed_macro("Title", "00000000-0000-0000-0000-000000000001"),
-                ),
-                (
-                    "Content".to_string(),
-                    installed_macro("Content", "00000000-0000-0000-0000-000000000002"),
-                ),
-            ]),
-        };
+    fn native_target_outside_operator_traversal_is_rejected_atomically() {
+        let cache = macro_cache();
         let mut presentation = rv_data::Presentation {
-            // title, content, divider, title, content
-            cues: vec![rv_data::Cue::default(); 5],
+            cues: vec![
+                rv_data::Cue {
+                    uuid: Some(Uuid {
+                        string: "operator-cue".to_string(),
+                    }),
+                    actions: vec![native_macro("Wrong")],
+                    ..rv_data::Cue::default()
+                },
+                rv_data::Cue {
+                    uuid: Some(Uuid {
+                        string: "hidden-cue".to_string(),
+                    }),
+                    actions: vec![native_macro("Wrong")],
+                    ..rv_data::Cue::default()
+                },
+            ],
+            cue_groups: vec![rv_data::presentation::CueGroup {
+                group: Some(rv_data::Group {
+                    uuid: Some(Uuid {
+                        string: "operator-group".to_string(),
+                    }),
+                    ..rv_data::Group::default()
+                }),
+                cue_identifiers: vec![Uuid {
+                    string: "operator-cue".to_string(),
+                }],
+            }],
             ..rv_data::Presentation::default()
         };
+        let original = presentation.clone();
 
-        add_macro_to_cue_entries(&mut presentation, &[0, 3], "Title", &cache)
-            .expect("valid title entries");
-        add_macro_to_cue_entries(&mut presentation, &[1, 4], "Content", &cache)
-            .expect("valid content entries");
-
-        assert!(cue_has_macro_named(&presentation.cues[0], "Title"));
-        assert!(cue_has_macro_named(&presentation.cues[1], "Content"));
-        assert!(presentation.cues[2].actions.is_empty());
-        assert!(cue_has_macro_named(&presentation.cues[3], "Title"));
-        assert!(cue_has_macro_named(&presentation.cues[4], "Content"));
-    }
-
-    #[test]
-    fn invalid_region_entry_does_not_partially_apply_macros() {
-        let cache = MacroCache {
-            macros: HashMap::from([("Title".to_string(), installed_macro("Title", "macro-id"))]),
-        };
-        let mut presentation = rv_data::Presentation {
-            cues: vec![rv_data::Cue::default()],
-            ..rv_data::Presentation::default()
-        };
-
-        let error = add_macro_to_cue_entries(&mut presentation, &[0, 1], "Title", &cache)
-            .expect_err("stale cue metadata must fail");
+        let error = apply_operator_macro_targets(
+            &mut presentation,
+            &[MacroCueTarget::new(1, "Song")],
+            &cache,
+        )
+        .expect_err("non-operator cue must not be targeted");
 
         assert_eq!(
             error,
-            MacroApplyError::CueUnavailable {
-                index: 1,
-                cue_count: 1
-            }
+            MacroApplyError::CueOutsideOperatorTraversal { index: 1 }
         );
-        assert!(presentation.cues[0].actions.is_empty());
+        assert_eq!(presentation, original);
+    }
+
+    #[test]
+    fn malformed_selected_arrangement_cannot_drive_macro_mutation() {
+        let cache = macro_cache();
+        let mut presentation =
+            presentation_with_selected_groups(&[("verse", "Verse", &["verse-1"])]);
+        presentation.arrangements[0].group_identifiers[0].string = "missing-group".to_string();
+        let original = presentation.clone();
+
+        let error = apply_operator_macro_targets(
+            &mut presentation,
+            &[MacroCueTarget::new(0, "Song")],
+            &cache,
+        )
+        .expect_err("macro mutation must not use inspection fallback order");
+
+        assert_eq!(
+            error,
+            MacroApplyError::OperatorTraversal(
+                crate::propresenter::arrangement::OperatorTraversalError::SelectedArrangementIncomplete {
+                    name: "Default".to_string(),
+                }
+            )
+        );
+        assert_eq!(presentation, original);
     }
 
     #[test]
@@ -964,24 +957,23 @@ mod tests {
     fn macro_lookup_requires_the_exact_installed_name() {
         let cache = MacroCache {
             macros: HashMap::from([("Title".to_string(), installed_macro("Title", "one"))]),
+            source_path: None,
+            source_sha256: None,
         };
 
         assert!(cache.find("Title").is_some());
         assert!(cache.find("title").is_none());
 
-        let mut presentation = rv_data::Presentation {
-            cues: vec![rv_data::Cue {
-                actions: vec![make_macro_action_from_identification(identification(
-                    "title",
-                    "lowercase",
-                ))],
-                ..rv_data::Cue::default()
-            }],
-            ..rv_data::Presentation::default()
+        let mut cue = rv_data::Cue {
+            actions: vec![make_macro_action_from_identification(identification(
+                "title",
+                "lowercase",
+            ))],
+            ..rv_data::Cue::default()
         };
-        add_macro_to_cue_entries(&mut presentation, &[0], "Title", &cache)
-            .expect("installed exact macro");
-        assert!(cue_has_macro_named(&presentation.cues[0], "Title"));
+        replace_entry_macro(&mut cue, "Title", &cache).expect("installed exact macro");
+        assert!(cue_has_macro_named(&cue, "Title"));
+        assert_eq!(cue.actions.len(), 1);
     }
 
     #[test]
@@ -1023,8 +1015,12 @@ mod tests {
             ..rv_data::Presentation::default()
         };
 
-        add_macro_to_cue_entries(&mut presentation, &[0], "Scripture/Prayer", &cache)
-            .expect("installed exact macro");
+        apply_operator_macro_targets(
+            &mut presentation,
+            &[MacroCueTarget::new(0, "Scripture/Prayer")],
+            &cache,
+        )
+        .expect("installed exact macro");
         let action = presentation.cues[0].actions.first().expect("macro action");
         assert_eq!(action.name, "Scripture/Prayer");
         assert!(matches!(
@@ -1123,11 +1119,19 @@ mod tests {
             ],
             macro_collections: Vec::new(),
         };
-        std::fs::write(&path, document.encode_to_vec()).expect("write macro document");
+        let bytes = document.encode_to_vec();
+        std::fs::write(&path, &bytes).expect("write macro document");
 
-        let summaries = MacroCache::load_from(&path)
-            .expect("load native macro document")
-            .summaries();
+        let cache = MacroCache::load_from(&path).expect("load native macro document");
+        assert_eq!(
+            cache.native("Alpha"),
+            document.macros.iter().find(|native| native.name == "Alpha")
+        );
+        assert_eq!(
+            cache.source_document(),
+            Some((path.as_path(), Sha256::digest(bytes).into()))
+        );
+        let summaries = cache.summaries();
 
         assert_eq!(
             summaries

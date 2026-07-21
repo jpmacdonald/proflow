@@ -122,17 +122,45 @@ impl BibleVersion {
     }
 }
 
-/// A parsed scripture reference
-#[derive(Debug, Clone)]
+/// Verse selection within one scripture chapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerseSelection {
+    /// Every verse present in the chapter.
+    Chapter,
+    /// One exact verse.
+    Verse(u32),
+    /// One inclusive verse range.
+    Range {
+        /// First requested verse.
+        start: u32,
+        /// Last requested verse.
+        end: u32,
+    },
+}
+
+/// A parsed scripture reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptureRef {
     /// Canonical book name (e.g., "Genesis")
     pub book: String,
     /// Chapter number
     pub chapter: u32,
-    /// First verse in the range
-    pub start_verse: u32,
-    /// Last verse in the range, if a range was specified
-    pub end_verse: Option<u32>,
+    /// Exact verse selection.
+    pub verses: VerseSelection,
+}
+
+impl std::fmt::Display for ScriptureRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.verses {
+            VerseSelection::Chapter => write!(formatter, "{} {}", self.book, self.chapter),
+            VerseSelection::Verse(verse) => {
+                write!(formatter, "{} {}:{verse}", self.book, self.chapter)
+            }
+            VerseSelection::Range { start, end } => {
+                write!(formatter, "{} {}:{start}-{end}", self.book, self.chapter)
+            }
+        }
+    }
 }
 
 /// Bible data structure: Book -> Chapter -> Verse -> Text
@@ -457,20 +485,34 @@ fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
     let verse_part = parts.next()?;
     let book_part = parts.next()?.trim();
 
-    // Parse chapter:verse-verse or chapter-v-verse notation. Only the final
-    // numeric token owns this delimiter; a `v` inside a book name is content.
-    let (chapter_str, verse_range) = verse_part
+    // Parse a whole chapter, chapter:verse-range, or chapter-v-verse notation.
+    // Only the final numeric token owns this delimiter; a `v` inside a book
+    // name is content.
+    let chapter_and_verses = verse_part
         .split_once(':')
-        .or_else(|| verse_part.split_once('v'))?;
+        .or_else(|| verse_part.split_once('v'));
+    let (chapter_str, verse_range) = chapter_and_verses.unwrap_or((verse_part, ""));
     let chapter: u32 = chapter_str.parse().ok()?;
+    if chapter == 0 {
+        return None;
+    }
 
-    let (start_verse, end_verse) = if verse_range.contains('-') {
+    let verses = if verse_range.is_empty() {
+        VerseSelection::Chapter
+    } else if verse_range.contains('-') {
         let mut range_parts = verse_range.split('-');
         let start: u32 = range_parts.next()?.parse().ok()?;
         let end: u32 = range_parts.next()?.parse().ok()?;
-        (start, Some(end))
+        if start == 0 || end < start || range_parts.next().is_some() {
+            return None;
+        }
+        VerseSelection::Range { start, end }
     } else {
-        (verse_range.parse().ok()?, None)
+        let verse = verse_range.parse().ok()?;
+        if verse == 0 {
+            return None;
+        }
+        VerseSelection::Verse(verse)
     };
 
     let book = normalize_book_name(book_part)?;
@@ -478,8 +520,7 @@ fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
     Some(ScriptureRef {
         book: book.to_string(),
         chapter,
-        start_verse,
-        end_verse,
+        verses,
     })
 }
 
@@ -588,11 +629,29 @@ impl BibleService {
                 ))
             })?;
 
-        let end = reference.end_verse.unwrap_or(reference.start_verse);
+        let requested_verses = match reference.verses {
+            VerseSelection::Chapter => {
+                let mut verses = chapter_data
+                    .keys()
+                    .map(|verse| {
+                        verse.parse::<u32>().map_err(|error| {
+                            crate::error::Error::Scripture(format!(
+                                "Invalid verse key '{verse}' in {} {}: {error}",
+                                reference.book, reference.chapter
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                verses.sort_unstable();
+                verses
+            }
+            VerseSelection::Verse(verse) => vec![verse],
+            VerseSelection::Range { start, end } => (start..=end).collect(),
+        };
         let mut verses = Vec::new();
         let mut missing_verses = Vec::new();
 
-        for verse_num in reference.start_verse..=end {
+        for verse_num in requested_verses {
             if let Some(text) = chapter_data.get(&verse_num.to_string()) {
                 let clean_text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 verses.push(Verse {
@@ -607,8 +666,7 @@ impl BibleService {
         let header = ScriptureHeader {
             book: reference.book.clone(),
             chapter: reference.chapter,
-            start_verse: reference.start_verse,
-            end_verse: reference.end_verse,
+            verses: reference.verses,
             version,
             missing_verses,
         };
@@ -656,10 +714,8 @@ pub struct ScriptureHeader {
     pub book: String,
     /// Chapter number
     pub chapter: u32,
-    /// First verse in the range
-    pub start_verse: u32,
-    /// Last verse in the range, if a range was specified
-    pub end_verse: Option<u32>,
+    /// Exact verse selection.
+    pub verses: VerseSelection,
     /// Bible version used for lookup
     pub version: BibleVersion,
     /// Verse numbers in the requested range that were not found in the data.
@@ -669,26 +725,12 @@ pub struct ScriptureHeader {
 impl ScriptureHeader {
     /// Format for display (e.g., "Isaiah 32:15-17 `NRSVue`").
     pub fn display(&self) -> String {
-        self.end_verse.map_or_else(
-            || {
-                format!(
-                    "{} {}:{} {}",
-                    self.book,
-                    self.chapter,
-                    self.start_verse,
-                    self.version.name()
-                )
-            },
-            |end| {
-                format!(
-                    "{} {}:{}-{end} {}",
-                    self.book,
-                    self.chapter,
-                    self.start_verse,
-                    self.version.name()
-                )
-            },
-        )
+        let reference = ScriptureRef {
+            book: self.book.clone(),
+            chapter: self.chapter,
+            verses: self.verses,
+        };
+        format!("{reference} {}", self.version.name())
     }
 }
 
@@ -709,8 +751,7 @@ mod tests {
         ScriptureRef {
             book: "John".to_string(),
             chapter: 3,
-            start_verse: 16,
-            end_verse: None,
+            verses: VerseSelection::Verse(16),
         }
     }
 
@@ -719,8 +760,7 @@ mod tests {
         let r = parse_scripture_ref("Isaiah 32:15-17").unwrap();
         assert_eq!(r.book, "Isaiah");
         assert_eq!(r.chapter, 32);
-        assert_eq!(r.start_verse, 15);
-        assert_eq!(r.end_verse, Some(17));
+        assert_eq!(r.verses, VerseSelection::Range { start: 15, end: 17 });
     }
 
     #[test]
@@ -728,8 +768,7 @@ mod tests {
         let r = parse_scripture_ref("1 John 3:1-3").unwrap();
         assert_eq!(r.book, "1 John");
         assert_eq!(r.chapter, 3);
-        assert_eq!(r.start_verse, 1);
-        assert_eq!(r.end_verse, Some(3));
+        assert_eq!(r.verses, VerseSelection::Range { start: 1, end: 3 });
     }
 
     #[test]
@@ -737,8 +776,7 @@ mod tests {
         let r = parse_scripture_ref("Luke 1:76-79 (NRSV)").unwrap();
         assert_eq!(r.book, "Luke");
         assert_eq!(r.chapter, 1);
-        assert_eq!(r.start_verse, 76);
-        assert_eq!(r.end_verse, Some(79));
+        assert_eq!(r.verses, VerseSelection::Range { start: 76, end: 79 });
     }
 
     #[test]
@@ -746,8 +784,7 @@ mod tests {
         let r = parse_scripture_ref("Scripture (Adrian) - Luke 8:26-39 NRSVue").unwrap();
         assert_eq!(r.book, "Luke");
         assert_eq!(r.chapter, 8);
-        assert_eq!(r.start_verse, 26);
-        assert_eq!(r.end_verse, Some(39));
+        assert_eq!(r.verses, VerseSelection::Range { start: 26, end: 39 });
     }
 
     #[test]
@@ -755,8 +792,18 @@ mod tests {
         let r = parse_scripture_ref("John 3:16").unwrap();
         assert_eq!(r.book, "John");
         assert_eq!(r.chapter, 3);
-        assert_eq!(r.start_verse, 16);
-        assert_eq!(r.end_verse, None);
+        assert_eq!(r.verses, VerseSelection::Verse(16));
+    }
+
+    #[test]
+    fn whole_chapter_is_a_distinct_reference() {
+        let reference =
+            parse_scripture_ref("Scripture: Jonah 3 NRSVue").expect("whole chapter reference");
+
+        assert_eq!(reference.book, "Jonah");
+        assert_eq!(reference.chapter, 3);
+        assert_eq!(reference.verses, VerseSelection::Chapter);
+        assert_eq!(reference.to_string(), "Jonah 3");
     }
 
     #[test]
@@ -779,8 +826,7 @@ mod tests {
 
         assert_eq!(parsed.book, "Leviticus");
         assert_eq!(parsed.chapter, 2);
-        assert_eq!(parsed.start_verse, 11);
-        assert_eq!(parsed.end_verse, Some(13));
+        assert_eq!(parsed.verses, VerseSelection::Range { start: 11, end: 13 });
     }
 
     #[test]
@@ -825,6 +871,27 @@ mod tests {
 
         assert_eq!(first[0].text, "old text");
         assert_eq!(second[0].text, "new text");
+    }
+
+    #[test]
+    fn whole_chapter_lookup_returns_every_verse_in_numeric_order() {
+        let source = serde_json::to_vec(&serde_json::json!({
+            "Jonah": { "3": { "10": "Tenth", "2": "Second", "1": "First" } }
+        }))
+        .expect("serialize whole chapter fixture");
+        let reference = parse_scripture_ref("Jonah 3").expect("whole chapter reference");
+        let mut bible = BibleService::new(PathBuf::new());
+
+        let (header, verses) = bible
+            .lookup_verses_from_bytes(&reference, BibleVersion::NRSVue, &source)
+            .expect("whole chapter lookup");
+
+        assert_eq!(
+            verses.iter().map(|verse| verse.number).collect::<Vec<_>>(),
+            vec![1, 2, 10]
+        );
+        assert_eq!(header.display(), "Jonah 3 NRSVue");
+        assert!(header.missing_verses.is_empty());
     }
 
     #[test]

@@ -4,7 +4,10 @@ use std::collections::HashSet;
 
 use super::{build_type_plan, file_stem};
 use crate::planning_center::types::Item;
-use crate::project_config::{ExpansionRule, ExpansionStep, PresentationPolicy, ProjectConfig};
+use crate::project_config::{
+    CompiledDirectTarget, CompiledExpansionStep, CompiledSpeakerTarget, ProjectConfig,
+    ResolvedPresentationType,
+};
 use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify_matching::strip_speaker;
 use crate::workflow::plan::{
@@ -13,7 +16,7 @@ use crate::workflow::plan::{
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn process_expansion(
-    expansion: &ExpansionRule,
+    expansion: &[CompiledExpansionStep],
     item: &Item,
     speaker: Option<&str>,
     mappings: &ProjectConfig,
@@ -23,23 +26,47 @@ pub(super) fn process_expansion(
     service_name: Option<&str>,
 ) {
     for (step_index, step) in expansion.iter().enumerate() {
-        let output_key = OutputKey::expanded(&item.id, step_index, &step.use_type);
-        if step.speaker.is_some() {
-            if let Some(name) = speaker {
-                if matches!(
-                    mappings
-                        .presentation_policy(&step.use_type)
-                        .map(PresentationPolicy::kind),
-                    Some(crate::project_config::ItemKind::Nametag)
-                ) {
+        let presentation = step.presentation();
+        let output_key = OutputKey::expanded(&item.id, step_index, presentation.key());
+        match step {
+            CompiledExpansionStep::Direct {
+                presentation,
+                target,
+            } => entries.push(build_direct_expansion_plan(
+                presentation,
+                target,
+                item,
+                mappings,
+                file_index,
+                service_name,
+                output_key,
+            )),
+            CompiledExpansionStep::Speaker {
+                presentation,
+                target,
+            } => {
+                let Some(name) = speaker else {
+                    entries.push(ResolvedItemPlan::new(
+                        output_key,
+                        item.position,
+                        item.title.clone(),
+                        strip_speaker(&item.title),
+                        "Speaker could not be resolved for expansion".to_string(),
+                        presentation.kind(),
+                        Some(presentation.key().to_string()),
+                        PlanDisposition::NeedsReview(ReviewContext::new(None)),
+                    ));
+                    continue;
+                };
+                if presentation.kind() == crate::project_config::ItemKind::Nametag {
                     let first = first_name(name);
-                    if nametag_seen.contains(&first) {
+                    if !nametag_seen.insert(first) {
                         continue;
                     }
-                    nametag_seen.insert(first);
                 }
                 entries.push(build_speaker_expansion_plan(
-                    step,
+                    presentation,
+                    target,
                     item,
                     name,
                     mappings,
@@ -47,56 +74,37 @@ pub(super) fn process_expansion(
                     service_name,
                     output_key,
                 ));
-            } else {
-                let item_kind = mappings
-                    .presentation_policy(&step.use_type)
-                    .map_or(ItemKind::Other, PresentationPolicy::kind);
-                entries.push(ResolvedItemPlan {
-                    output_key,
-                    position: item.position,
-                    pco_title: item.title.clone(),
-                    playlist_name: strip_speaker(&item.title),
-                    reason: "Speaker could not be resolved for expansion".to_string(),
-                    item_kind,
-                    item_type: Some(step.use_type.clone()),
-                    disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-                });
             }
-            continue;
         }
-
-        let Some(policy) = mappings.presentation_policy(&step.use_type) else {
-            entries.push(ResolvedItemPlan {
-                output_key,
-                position: item.position,
-                pco_title: item.title.clone(),
-                playlist_name: strip_speaker(&item.title),
-                reason: format!("Unknown presentation type '{}'", step.use_type),
-                item_kind: ItemKind::Other,
-                item_type: Some(step.use_type.clone()),
-                disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-            });
-            continue;
-        };
-
-        let plan = build_type_plan(
-            output_key,
-            &step.use_type,
-            policy,
-            item,
-            step.target
-                .as_ref()
-                .and_then(crate::project_config::TargetSpec::library_file),
-            mappings,
-            file_index,
-            service_name,
-        );
-        entries.push(plan);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_direct_expansion_plan(
+    presentation: &ResolvedPresentationType,
+    target: &CompiledDirectTarget,
+    item: &Item,
+    mappings: &ProjectConfig,
+    file_index: Option<&LibraryCatalog>,
+    service_name: Option<&str>,
+    output_key: OutputKey,
+) -> ResolvedItemPlan {
+    build_type_plan(
+        output_key,
+        presentation.key(),
+        presentation.policy(),
+        item,
+        target.library_file(),
+        mappings,
+        file_index,
+        service_name,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_speaker_expansion_plan(
-    step: &ExpansionStep,
+    presentation: &ResolvedPresentationType,
+    target: &CompiledSpeakerTarget,
     item: &Item,
     name: &str,
     mappings: &ProjectConfig,
@@ -104,36 +112,23 @@ fn build_speaker_expansion_plan(
     service_name: Option<&str>,
     output_key: OutputKey,
 ) -> ResolvedItemPlan {
-    let Some(policy) = mappings.presentation_policy(&step.use_type) else {
-        return ResolvedItemPlan {
-            output_key,
-            position: item.position,
-            pco_title: item.title.clone(),
-            playlist_name: strip_speaker(&item.title),
-            reason: format!("Unknown presentation type '{}'", step.use_type),
-            item_kind: ItemKind::Other,
-            item_type: Some(step.use_type.clone()),
-            disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-        };
-    };
-
-    if matches!(policy.kind(), crate::project_config::ItemKind::Nametag) {
-        let Some(target) = resolve_nametag_target(step, item, name, mappings) else {
-            return ResolvedItemPlan {
+    if presentation.kind() == crate::project_config::ItemKind::Nametag {
+        let Some(target) = resolve_nametag_target(target, item, name, mappings) else {
+            return ResolvedItemPlan::new(
                 output_key,
-                position: item.position,
-                pco_title: item.title.clone(),
-                playlist_name: strip_speaker(&item.title),
-                reason: format!("Configured person '{name}' has no nametag target"),
-                item_kind: ItemKind::Nametag,
-                item_type: Some(step.use_type.clone()),
-                disposition: PlanDisposition::NeedsReview(ReviewContext::new(None)),
-            };
+                item.position,
+                item.title.clone(),
+                strip_speaker(&item.title),
+                format!("Configured person '{name}' has no nametag target"),
+                ItemKind::Nametag,
+                Some(presentation.key().to_string()),
+                PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            );
         };
         let mut plan = build_type_plan(
             output_key,
-            &step.use_type,
-            policy,
+            presentation.key(),
+            presentation.policy(),
             item,
             Some(&target.library_file),
             mappings,
@@ -144,21 +139,17 @@ fn build_speaker_expansion_plan(
         return plan;
     }
 
-    let resolved_target = step
-        .target
-        .as_ref()
-        .and_then(crate::project_config::TargetSpec::library_file)
-        .map(str::to_string)
-        .or_else(|| {
-            step.target
-                .as_ref()
-                .and_then(crate::project_config::TargetSpec::name_template)
-                .map(|template| render_name_template(template, item, name))
-        });
+    let resolved_target = match target {
+        CompiledSpeakerTarget::Automatic => None,
+        CompiledSpeakerTarget::LibraryFile(file) => Some(file.clone()),
+        CompiledSpeakerTarget::NameTemplate(template) => {
+            Some(render_name_template(template, item, name))
+        }
+    };
     let mut plan = build_type_plan(
         output_key,
-        &step.use_type,
-        policy,
+        presentation.key(),
+        presentation.policy(),
         item,
         resolved_target.as_deref(),
         mappings,
@@ -179,25 +170,26 @@ struct ResolvedNametagTarget {
 }
 
 fn resolve_nametag_target(
-    step: &ExpansionStep,
+    target: &CompiledSpeakerTarget,
     item: &Item,
     person_name: &str,
     mappings: &ProjectConfig,
 ) -> Option<ResolvedNametagTarget> {
-    let explicit_target = step
-        .target
-        .as_ref()
-        .and_then(crate::project_config::TargetSpec::library_file);
+    let explicit_target = match target {
+        CompiledSpeakerTarget::LibraryFile(file) => Some(file.as_str()),
+        CompiledSpeakerTarget::Automatic | CompiledSpeakerTarget::NameTemplate(_) => None,
+    };
     let playlist_name = mappings
         .people()
         .get(&first_name(person_name))
         .and_then(|person| person.nametag.clone())
         .or_else(|| explicit_target.map(file_stem))
         .or_else(|| {
-            step.target
-                .as_ref()
-                .and_then(crate::project_config::TargetSpec::name_template)
-                .map(|template| render_name_template(template, item, person_name))
+            if let CompiledSpeakerTarget::NameTemplate(template) = target {
+                Some(render_name_template(template, item, person_name))
+            } else {
+                None
+            }
         })?;
     Some(ResolvedNametagTarget {
         library_file: explicit_target.unwrap_or(&playlist_name).to_string(),
@@ -211,6 +203,23 @@ fn extract_speaker(title: &str) -> Option<String> {
     (end > start + 1).then(|| title[start + 1..end].trim().to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SpeakerResolution {
+    Resolved(String),
+    Missing,
+    Unrecognized,
+}
+
+impl SpeakerResolution {
+    pub(super) fn with_fallback(self, fallback: Option<&str>) -> Option<String> {
+        match self {
+            Self::Resolved(name) => Some(name),
+            Self::Missing => fallback.map(str::to_string),
+            Self::Unrecognized => None,
+        }
+    }
+}
+
 /// Resolve the speaker for an item only when the person is configured.
 /// Parentheticals and `Liturgist:` lines remain useful context, but an unknown
 /// name requires review instead of inventing a nametag filename.
@@ -218,10 +227,12 @@ pub(super) fn resolve_speaker(
     title: &str,
     description: Option<&str>,
     mappings: &ProjectConfig,
-) -> Option<String> {
+) -> SpeakerResolution {
+    let mut speaker_was_supplied = false;
     if let Some(candidate) = extract_speaker(title) {
+        speaker_was_supplied = true;
         if let Some(name) = configured_person_name(&candidate, mappings) {
-            return Some(name);
+            return SpeakerResolution::Resolved(name);
         }
     }
     if let Some(desc) = description {
@@ -231,14 +242,19 @@ pub(super) fn resolve_speaker(
                 .strip_prefix("Liturgist:")
                 .or_else(|| trimmed.strip_prefix("liturgist:"))
             {
+                speaker_was_supplied = true;
                 let name = rest.split(';').next().unwrap_or(rest).trim();
                 if let Some(name) = configured_person_name(name, mappings) {
-                    return Some(name);
+                    return SpeakerResolution::Resolved(name);
                 }
             }
         }
     }
-    None
+    if speaker_was_supplied {
+        SpeakerResolution::Unrecognized
+    } else {
+        SpeakerResolution::Missing
+    }
 }
 
 fn configured_person_name(candidate: &str, mappings: &ProjectConfig) -> Option<String> {

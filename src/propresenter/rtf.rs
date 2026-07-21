@@ -362,7 +362,7 @@ fn write_rtf_char(rtf: &mut String, c: char) {
 mod style;
 
 pub use style::extract_rtf_options;
-pub(crate) use style::extract_text_options;
+pub(crate) use style::{extract_text_options, has_visible_superscript, visible_font_names};
 
 /// Convert RTF data to plain text.
 ///
@@ -823,5 +823,26 @@ mod tests {
         // Both texts present
         assert!(rtf.contains("Leader line"));
         assert!(rtf.contains("Response line"));
+    }
+
+    #[test]
+    fn visible_superscript_scan_ignores_headers_and_escaped_text() {
+        let visible = br"{\rtf1\ansi Normal {\super 12} text}";
+        let header_only = br"{\rtf1\ansi{\*\generator \super hidden;}Normal text}";
+        let escaped = br"{\rtf1\ansi Literal \\super text}";
+
+        assert!(has_visible_superscript(visible));
+        assert!(!has_visible_superscript(header_only));
+        assert!(!has_visible_superscript(escaped));
+    }
+
+    #[test]
+    fn visible_font_scan_ignores_unused_table_entries() {
+        let rtf = br"{\rtf1\ansi\deff0{\fonttbl{\f0\fswiss Helvetica;}{\f1\froman Times New Roman;}{\f2\fmodern Unused Font;}}\f0 First {\f1 second}}";
+
+        assert_eq!(
+            visible_font_names(rtf),
+            vec!["Helvetica".to_string(), "Times New Roman".to_string()]
+        );
     }
 }

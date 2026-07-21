@@ -1,8 +1,8 @@
 //! Debug tool to dump and analyze `ProPresenter` `.pro` files.
 //!
 //! Usage:
-//!   `cargo run --bin dump_pro -- <file.pro>`
-//!   `cargo run --bin dump_pro -- <file1.pro> <file2.pro> --diff`
+//!   `cargo run --features dev-tools --bin dump_pro -- <file.pro>`
+//!   `cargo run --features dev-tools --bin dump_pro -- <file1.pro> <file2.pro> --diff`
 //!
 //! This tool outputs a detailed structure of the presentation for debugging
 //! slide generation issues.

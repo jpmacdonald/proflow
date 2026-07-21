@@ -28,6 +28,30 @@ fn test_responsive_reading() {
 }
 
 #[test]
+fn inline_communion_responses_split_speakers_and_drop_operational_bullets() {
+    let desc = "- Invitation/Explanation: CONNIE\n- Great Thanksgiving: CONNIE\nLeader: The Lord be with you. People: And also with you\nLeader: Lift up your hearts. People: We lift them up to the Lord.\nLeader: Let us give thanks to the Lord our God. People: It is right to give our thanks and praise.\n- Communion Prayers";
+    let content = parse_description(
+        desc,
+        "Communion: Connie, Adrian",
+        DescriptionParserKind::Liturgical,
+    )
+    .expect("description should parse")
+    .expect("responsive content");
+    let spoken = content
+        .segments
+        .iter()
+        .filter(|segment| !segment.text.is_empty())
+        .collect::<Vec<_>>();
+
+    assert_eq!(spoken.len(), 6);
+    assert!(spoken[0].text.starts_with("Leader:"));
+    assert!(spoken[1].text.starts_with("People:"));
+    assert_eq!(spoken[0].speaker, SpeakerRole::Leader);
+    assert_eq!(spoken[1].speaker, SpeakerRole::Audience);
+    assert!(spoken.iter().all(|segment| !segment.text.starts_with('-')));
+}
+
+#[test]
 fn test_marker_parsing() {
     let desc = "[CONFESSION no slide] - If we say that we have no sin...\n[SLIDE/ALL] - [Precious Lord, the cross is ever before us...]\n[SILENT CONFESSION]\n[ASSURANCE no slide] - Rejoice!";
     let result = parse_description(

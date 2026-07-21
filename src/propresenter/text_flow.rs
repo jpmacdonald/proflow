@@ -1,9 +1,9 @@
 //! Pure, checked text flow for presentation slides.
 //!
-//! This module owns the estimate used to decide whether text fits. Callers
-//! construct one [`crate::propresenter::text_flow::TextLayout`] and use that same
-//! value for fragmentation and postcondition checks, so a zero-line slide cannot
-//! enter the renderer.
+//! Grammar and front-loading are independent of the measurement backend.
+//! Production injects a checked native fit predicate;
+//! [`TextLayout`](crate::propresenter::text_flow::TextLayout) preserves
+//! the deterministic estimated backend for diagnostics and isolated tests.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
@@ -109,6 +109,15 @@ pub enum TextLayoutError {
     ZeroMaxLinesPerSlide,
 }
 
+/// A checked fit predicate failed or no nonempty fragment can fit one slide.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FitPartitionError<E> {
+    /// The injected measurement backend failed.
+    Measurement(E),
+    /// Even one indivisible source word cannot fit the resolved text field.
+    NoFittingPartition,
+}
+
 /// Word-wrap text for capacity estimation.
 ///
 /// Whitespace is normalized for the estimate. An indivisible word wider than
@@ -166,9 +175,33 @@ pub fn pack_segments_for_slides<S: TextFlowSegment>(
     segments: &[S],
     layout: TextLayout,
 ) -> Vec<Vec<S>> {
+    let mut estimated_fit = |candidate: &[S]| {
+        Ok::<_, std::convert::Infallible>(
+            estimated_slide_lines(candidate, layout) <= layout.max_lines(),
+        )
+    };
+    match pack_segments_with_fit(segments, &mut estimated_fit) {
+        Ok(slides) => slides,
+        Err(FitPartitionError::NoFittingPartition) => Vec::new(),
+        Err(FitPartitionError::Measurement(unreachable)) => match unreachable {},
+    }
+}
+
+/// Pack segments using one authoritative, fallible fit predicate.
+///
+/// The callback receives the exact semantic segments that would be rendered
+/// together on one slide. It therefore controls both physical bounds and any
+/// configured line policy without leaking renderer details into this module.
+pub fn pack_segments_with_fit<S, E, F>(
+    segments: &[S],
+    fits: &mut F,
+) -> Result<Vec<Vec<S>>, FitPartitionError<E>>
+where
+    S: TextFlowSegment,
+    F: FnMut(&[S]) -> Result<bool, E>,
+{
     let mut slides = Vec::new();
     let mut current = Vec::new();
-    let mut current_lines = 0;
     let mut pending_blanks = Vec::new();
 
     for segment in segments {
@@ -179,53 +212,44 @@ pub fn pack_segments_for_slides<S: TextFlowSegment>(
             continue;
         }
 
-        let blank_lines = pending_blanks.len();
-        let available = layout
-            .max_lines()
-            .saturating_sub(current_lines + blank_lines);
-        let segment_lines = layout.estimated_lines(segment.text());
-
-        if segment_lines <= available {
+        let mut candidate = current.clone();
+        candidate.extend_from_slice(&pending_blanks);
+        candidate.push(segment.clone());
+        if fits(&candidate).map_err(FitPartitionError::Measurement)? {
             if current.is_empty() {
                 pending_blanks.clear();
             } else {
                 current.append(&mut pending_blanks);
-                current_lines += blank_lines;
             }
             current.push(segment.clone());
-            current_lines += segment_lines;
             continue;
         }
 
-        if let Some((previous, next, next_lines)) =
-            rebalance_tiny_boundary(&current, &pending_blanks, segment, layout)
+        if let Some(rebalanced) =
+            rebalance_tiny_boundary_with_fit(&current, &pending_blanks, segment, fits)?
         {
-            slides.push(previous);
-            current = next;
-            current_lines = next_lines;
+            slides.push(rebalanced.previous);
+            current = rebalanced.next;
             pending_blanks.clear();
             continue;
         }
 
         push_slide(&mut slides, &mut current);
-        current_lines = 0;
         pending_blanks.clear();
 
-        let mut fragments = partition_paragraph(segment.text(), layout)
+        let mut fragments = partition_paragraph_with_fit(segment, fits)?
             .into_iter()
             .peekable();
         while let Some(fragment) = fragments.next() {
-            current_lines += layout.estimated_lines(&fragment);
             current.push(segment.with_text(fragment));
             if fragments.peek().is_some() {
                 push_slide(&mut slides, &mut current);
-                current_lines = 0;
             }
         }
     }
 
     push_slide(&mut slides, &mut current);
-    slides
+    Ok(slides)
 }
 
 fn push_slide<S: TextFlowSegment>(slides: &mut Vec<Vec<S>>, current: &mut Vec<S>) {
@@ -247,30 +271,44 @@ struct BoundaryRebalanceScore {
     moved_words: usize,
 }
 
-fn rebalance_tiny_boundary<S: TextFlowSegment>(
+struct BoundaryRebalance<S> {
+    previous: Vec<S>,
+    next: Vec<S>,
+}
+
+fn rebalance_tiny_boundary_with_fit<S, E, F>(
     current: &[S],
     pending_blanks: &[S],
     incoming: &S,
-    layout: TextLayout,
-) -> Option<(Vec<S>, Vec<S>, usize)> {
+    fits: &mut F,
+) -> Result<Option<BoundaryRebalance<S>>, FitPartitionError<E>>
+where
+    S: TextFlowSegment,
+    F: FnMut(&[S]) -> Result<bool, E>,
+{
     let incoming_words = incoming.text().split_whitespace().count();
     if incoming_words == 0 || incoming_words >= MIN_TRAILING_FRAGMENT_WORDS {
-        return None;
+        return Ok(None);
     }
 
-    let previous_index = current
+    let Some(previous_index) = current
         .iter()
-        .rposition(|segment| !segment.text().trim().is_empty())?;
-    let previous_segment = current.get(previous_index)?;
+        .rposition(|segment| !segment.text().trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(previous_segment) = current.get(previous_index) else {
+        return Ok(None);
+    };
     let words = previous_segment
         .text()
         .split_whitespace()
         .collect::<Vec<_>>();
     if words.len() < 2 {
-        return None;
+        return Ok(None);
     }
 
-    let mut best: Option<(BoundaryRebalanceScore, Vec<S>, Vec<S>, usize)> = None;
+    let mut best: Option<(BoundaryRebalanceScore, Vec<S>, Vec<S>)> = None;
     for prefix_words in 1..words.len() {
         let Some(prefix_slice) = words.get(..prefix_words) else {
             continue;
@@ -280,10 +318,12 @@ fn rebalance_tiny_boundary<S: TextFlowSegment>(
         };
         let prefix = prefix_slice.join(" ");
         let suffix = suffix_slice.join(" ");
-        let mut previous = current.get(..previous_index)?.to_vec();
+        let Some(previous_prefix) = current.get(..previous_index) else {
+            continue;
+        };
+        let mut previous = previous_prefix.to_vec();
         previous.push(previous_segment.with_text(prefix));
-        let previous_lines = estimated_slide_lines(&previous, layout);
-        if previous_lines > layout.max_lines() {
+        if !fits(&previous).map_err(FitPartitionError::Measurement)? {
             continue;
         }
 
@@ -291,8 +331,7 @@ fn rebalance_tiny_boundary<S: TextFlowSegment>(
         next.push(previous_segment.with_text(suffix));
         next.extend_from_slice(pending_blanks);
         next.push(incoming.clone());
-        let next_lines = estimated_slide_lines(&next, layout);
-        if next_lines > layout.max_lines() {
+        if !fits(&next).map_err(FitPartitionError::Measurement)? {
             continue;
         }
 
@@ -313,11 +352,11 @@ fn rebalance_tiny_boundary<S: TextFlowSegment>(
             .as_ref()
             .is_none_or(|(best_score, ..)| score < *best_score)
         {
-            best = Some((score, previous, next, next_lines));
+            best = Some((score, previous, next));
         }
     }
 
-    best.map(|(_, previous, next, next_lines)| (previous, next, next_lines))
+    Ok(best.map(|(_, previous, next)| BoundaryRebalance { previous, next }))
 }
 
 fn estimated_slide_lines<S: TextFlowSegment>(segments: &[S], layout: TextLayout) -> usize {
@@ -470,14 +509,20 @@ impl ParagraphPartition {
     }
 }
 
-fn partition_paragraph(text: &str, layout: TextLayout) -> Vec<String> {
-    let words = text.split_whitespace().collect::<Vec<_>>();
-    let Some(partition) = optimal_paragraph_partition(&words, layout) else {
-        return Vec::new();
-    };
+fn partition_paragraph_with_fit<S, E, F>(
+    source: &S,
+    fits: &mut F,
+) -> Result<Vec<String>, FitPartitionError<E>>
+where
+    S: TextFlowSegment,
+    F: FnMut(&[S]) -> Result<bool, E>,
+{
+    let words = source.text().split_whitespace().collect::<Vec<_>>();
+    let partition = optimal_paragraph_partition_with_fit(&words, source, fits)?
+        .ok_or(FitPartitionError::NoFittingPartition)?;
 
     let mut words = words.into_iter();
-    partition
+    Ok(partition
         .word_counts
         .into_iter()
         .map(|word_count| {
@@ -487,12 +532,20 @@ fn partition_paragraph(text: &str, layout: TextLayout) -> Vec<String> {
                 .collect::<Vec<_>>()
                 .join(" ")
         })
-        .collect()
+        .collect())
 }
 
-fn optimal_paragraph_partition(words: &[&str], layout: TextLayout) -> Option<ParagraphPartition> {
+fn optimal_paragraph_partition_with_fit<S, E, F>(
+    words: &[&str],
+    source: &S,
+    fits: &mut F,
+) -> Result<Option<ParagraphPartition>, FitPartitionError<E>>
+where
+    S: TextFlowSegment,
+    F: FnMut(&[S]) -> Result<bool, E>,
+{
     if words.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let mut prefixes = vec![BTreeMap::<usize, ParagraphPartition>::new(); words.len()];
@@ -528,7 +581,8 @@ fn optimal_paragraph_partition(words: &[&str], layout: TextLayout) -> Option<Par
             }
             fragment.push_str(word);
             let word_count = end - start;
-            if layout.estimated_lines(&fragment) > layout.max_lines() {
+            let candidate = [source.with_text(fragment.clone())];
+            if !fits(&candidate).map_err(FitPartitionError::Measurement)? {
                 break;
             }
 
@@ -554,13 +608,13 @@ fn optimal_paragraph_partition(words: &[&str], layout: TextLayout) -> Option<Par
         }
     }
 
-    finals.into_iter().reduce(|best, candidate| {
+    Ok(finals.into_iter().reduce(|best, candidate| {
         if candidate.is_better_than(&best, true) {
             candidate
         } else {
             best
         }
-    })
+    }))
 }
 
 fn retain_partition(

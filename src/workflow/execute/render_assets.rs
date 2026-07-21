@@ -1,16 +1,31 @@
 //! Checked configuration and installed assets for one build runtime.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::bible::{BibleCorpusError, BibleVersion};
+use sha2::{Digest, Sha256};
+
+use crate::bible::BibleCorpusError;
 use crate::paths::BuildLocations;
 use crate::project_config::ProjectConfig;
-use crate::propresenter::background::{resolve_background_image, BackgroundImageError};
+use crate::propresenter::audience::{
+    AudienceDestinationError, AudienceLookDestinations, AudienceWorkspaceLoadError,
+};
+use crate::propresenter::background::BackgroundImageError;
 use crate::propresenter::macros::{MacroCache, MacroCacheLoadError};
-use crate::propresenter::resolution::{inspect_slide_size, PresentationSizeError};
+use crate::propresenter::render::TemplateSlotError;
+use crate::propresenter::resolution::PresentationSizeError;
 use crate::propresenter::theme::{ThemeCache, ThemeCacheLoadError, ThemeSlideError};
 use crate::propresenter::PresentationSize;
+
+mod audience;
+mod fingerprint;
+mod validation;
+
+use audience::ConfiguredAudienceDestinations;
+use validation::validate_bindings;
+
+pub use fingerprint::{NativeAssetDigest, RenderAssetFingerprint, RenderAssetFingerprintError};
 
 /// Failure to capture one coherent project/configured-native-asset snapshot.
 #[derive(Debug, thiserror::Error)]
@@ -21,9 +36,53 @@ pub enum RenderAssetSnapshotError {
     /// The native macro document could not be loaded from the snapshot's locations.
     #[error(transparent)]
     Macros(#[from] MacroCacheLoadError),
+    /// The native Workspace could not be loaded for configured macro Looks.
+    #[error(transparent)]
+    AudienceWorkspace(#[from] AudienceWorkspaceLoadError),
+    /// Checked native asset identities could not be encoded canonically.
+    #[error(transparent)]
+    Fingerprint(#[from] RenderAssetFingerprintError),
     /// One or more checked config bindings do not resolve in the installed assets.
     #[error(transparent)]
     Unresolved(#[from] RenderAssetIssues),
+}
+
+/// A native asset used by the immutable render snapshot changed on disk.
+///
+/// `ProPresenter` executes macro and Look references against its live files, not
+/// the cached protobuf objects used while `ProFlow` rendered a preview. Any drift
+/// therefore invalidates the preview and requires a snapshot reload/review.
+#[derive(Debug, thiserror::Error)]
+pub enum RenderAssetFreshnessError {
+    /// One captured native document can no longer be read exactly.
+    #[error(
+        "{kind} asset '{}' cannot be revalidated after preview; reload assets and review again: {source}",
+        path.display()
+    )]
+    Read {
+        /// Operator-facing native asset kind.
+        kind: &'static str,
+        /// Exact path captured by the render snapshot.
+        path: PathBuf,
+        /// Current filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The document is readable but no longer contains the captured bytes.
+    #[error(
+        "{kind} asset '{}' changed after preview (expected SHA-256 {expected}, found {actual}); reload assets and review again",
+        path.display()
+    )]
+    Changed {
+        /// Operator-facing native asset kind.
+        kind: &'static str,
+        /// Exact path captured by the render snapshot.
+        path: PathBuf,
+        /// SHA-256 parsed into the immutable snapshot.
+        expected: String,
+        /// SHA-256 currently stored at the path.
+        actual: String,
+    },
 }
 
 /// One invalid binding between checked project configuration and installed assets.
@@ -60,15 +119,42 @@ pub enum RenderAssetIssue {
         /// Concrete native size failure.
         problem: ThemeSlideSizeProblem,
     },
-    /// A cue role names a macro absent from the installed macro document.
-    #[error("cue role '{role}' references {field} '{name}' which is not installed")]
+    /// A production policy names a macro absent from the installed macro document.
+    #[error("configured macro '{name}' is not installed")]
     MissingMacro {
-        /// Stable cue-role identifier.
-        role: String,
-        /// Config field containing the macro name.
-        field: &'static str,
         /// Exact configured macro name.
         name: String,
+    },
+    /// An installed cue-role macro does not select one valid Audience Look graph.
+    #[error("configured macro '{name}' has no usable Audience Look destination: {source}")]
+    AudienceDestination {
+        /// Exact installed/configured macro name.
+        name: String,
+        /// Native macro-to-Look-to-screen-to-theme resolution failure.
+        #[source]
+        source: AudienceDestinationError,
+    },
+    /// A macro-selected audience theme cannot bind a configured role's text fields.
+    #[error(
+        "cue role '{role}' macro '{name}' cannot bind text on audience screen '{screen_name}' ({screen_uuid}) using theme '{}' slide {slide_uuid}: {source}",
+        theme_path.display()
+    )]
+    AudienceTextBinding {
+        /// Configured semantic cue role.
+        role: String,
+        /// Exact installed/configured macro name.
+        name: String,
+        /// Operator-visible audience-screen name.
+        screen_name: String,
+        /// Stable native audience-screen UUID.
+        screen_uuid: String,
+        /// Exact alternate theme document selected by the Audience Look.
+        theme_path: PathBuf,
+        /// Stable native theme-slide UUID.
+        slide_uuid: String,
+        /// Native template-field incompatibility.
+        #[source]
+        source: TemplateSlotError,
     },
     /// A configured background cannot be resolved inside the project data bundle.
     #[error("background '{id}' at '{}': {source}", path.display())]
@@ -151,6 +237,8 @@ pub struct RenderAssetSnapshot {
     locations: BuildLocations,
     themes: ThemeCache,
     macros: MacroCache,
+    audience_destinations: ConfiguredAudienceDestinations,
+    fingerprint: RenderAssetFingerprint,
 }
 
 impl RenderAssetSnapshot {
@@ -162,12 +250,16 @@ impl RenderAssetSnapshot {
         let themes =
             ThemeCache::load_from_dir(config.defaults().theme.as_deref(), locations.themes())?;
         let macros = MacroCache::load_optional(locations.macros())?;
-        validate_bindings(&config, &locations, &themes, &macros)?;
+        let audience_destinations = validate_bindings(&config, &locations, &themes, &macros)?;
+        let fingerprint =
+            RenderAssetFingerprint::capture(&config, &themes, &macros, &audience_destinations)?;
         Ok(Self {
             config,
             locations,
             themes,
             macros,
+            audience_destinations,
+            fingerprint,
         })
     }
 
@@ -190,115 +282,79 @@ impl RenderAssetSnapshot {
     pub(crate) const fn macros(&self) -> &MacroCache {
         &self.macros
     }
-}
 
-fn validate_bindings(
-    config: &ProjectConfig,
-    locations: &BuildLocations,
-    themes: &ThemeCache,
-    macros: &MacroCache,
-) -> Result<(), RenderAssetIssues> {
-    let mut issues = Vec::new();
-    validate_cue_roles(config, themes, macros, &mut issues);
+    /// Exact screen destinations selected by one configured installed macro.
+    ///
+    /// Absence means the name was not a configured, successfully resolved
+    /// cue-role macro in this snapshot. Construction rejects configured macros
+    /// whose native destination graph is invalid.
+    pub fn audience_destinations_for_macro(
+        &self,
+        macro_name: &str,
+    ) -> Option<&AudienceLookDestinations> {
+        self.audience_destinations.for_macro(macro_name)
+    }
 
-    for (id, relative_path) in config.backgrounds() {
-        if let Err(source) =
-            resolve_background_image(locations.project_data_root(), relative_path.as_path())
-        {
-            issues.push(RenderAssetIssue::Background {
-                id: id.to_string(),
-                path: relative_path.as_path().to_path_buf(),
-                source,
-            });
+    /// Content identity of the exact config, theme, and macro bytes parsed at startup.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &RenderAssetFingerprint {
+        &self.fingerprint
+    }
+
+    /// Re-hash every native document whose content can affect rendered cues or
+    /// the live Audience Look selected by their macros.
+    ///
+    /// This is intentionally cheap and narrower than rebuilding the snapshot:
+    /// the validated graph remains immutable, while exact source bytes prove
+    /// that the graph and templates are still current. The project-config file
+    /// itself is not watched: this snapshot owns the parsed [`ProjectConfig`]
+    /// value, active builds never reread its source file, and config edits take
+    /// effect only when the runtime constructs a new snapshot.
+    pub fn verify_current(&self) -> Result<(), RenderAssetFreshnessError> {
+        if let Some((path, digest)) = self.themes.source_document() {
+            verify_native_source("theme", path, digest)?;
         }
-    }
-
-    let bible_root = locations.project_data_root().join("bibles");
-    if let Err(source) = crate::bible::validate_bible_corpora(&bible_root) {
-        issues.push(RenderAssetIssue::BibleCorpus(source));
-    }
-    if let Some(version) = config.defaults().bible_version {
-        let path = bible_root.join(version.file_name());
-        if !path.is_file() {
-            issues.push(RenderAssetIssue::MissingBibleCorpus {
-                version: BibleVersion::name(version),
-                path,
-            });
+        if let Some((path, digest)) = self.macros.source_document() {
+            verify_native_source("macros", path, digest)?;
         }
-    }
-
-    issues.sort_by_cached_key(ToString::to_string);
-    if issues.is_empty() {
+        if let Some((path, digest)) = self.audience_destinations.workspace_source() {
+            verify_native_source("audience workspace", path, digest)?;
+        }
+        for (path, digest) in self.audience_destinations.theme_sources() {
+            verify_native_source("audience theme", path, digest)?;
+        }
         Ok(())
-    } else {
-        Err(RenderAssetIssues { issues })
     }
 }
 
-fn validate_cue_roles(
-    config: &ProjectConfig,
-    themes: &ThemeCache,
-    macros: &MacroCache,
-    issues: &mut Vec<RenderAssetIssue>,
-) {
-    for (role_id, role) in config.cue_roles() {
-        let resolved = if role.text_slots.is_empty() {
-            themes.text_template(&role.slide).map(|slide| (slide, None))
-        } else {
-            themes
-                .slide_template(&role.slide)
-                .map(|template| (template.slide(), Some(template)))
-        };
-
-        match resolved {
-            Ok((slide, template)) => {
-                if let Some(template) = template {
-                    for (field, native_slot) in &role.text_slots {
-                        if !template.named_slots().any(|name| name == native_slot) {
-                            issues.push(RenderAssetIssue::MissingTextSlot {
-                                role: role_id.clone(),
-                                field: field.clone(),
-                                native_slot: native_slot.clone(),
-                            });
-                        }
-                    }
-                }
-                let expected = config.defaults().presentation_size;
-                match inspect_slide_size(slide) {
-                    Ok(actual) if actual == expected => {}
-                    Ok(actual) => issues.push(RenderAssetIssue::ThemeSlideSize {
-                        role: role_id.clone(),
-                        slide: role.slide.clone(),
-                        expected,
-                        problem: ThemeSlideSizeProblem::Mismatch(actual),
-                    }),
-                    Err(error) => issues.push(RenderAssetIssue::ThemeSlideSize {
-                        role: role_id.clone(),
-                        slide: role.slide.clone(),
-                        expected,
-                        problem: ThemeSlideSizeProblem::Invalid(error),
-                    }),
-                }
-            }
-            Err(source) => issues.push(RenderAssetIssue::ThemeSlide {
-                role: role_id.clone(),
-                source,
-            }),
-        }
-
-        for (field, name) in [
-            ("enter_macro", role.enter_macro.as_deref()),
-            ("leader_enter_macro", role.leader_enter_macro.as_deref()),
-        ] {
-            if let Some(name) = name {
-                if macros.find(name).is_none() {
-                    issues.push(RenderAssetIssue::MissingMacro {
-                        role: role_id.clone(),
-                        field,
-                        name: name.to_string(),
-                    });
-                }
-            }
-        }
+fn verify_native_source(
+    kind: &'static str,
+    path: &Path,
+    expected: [u8; 32],
+) -> Result<(), RenderAssetFreshnessError> {
+    let bytes = std::fs::read(path).map_err(|source| RenderAssetFreshnessError::Read {
+        kind,
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let actual: [u8; 32] = Sha256::digest(bytes).into();
+    if actual == expected {
+        return Ok(());
     }
+    Err(RenderAssetFreshnessError::Changed {
+        kind,
+        path: path.to_path_buf(),
+        expected: digest_hex(&expected),
+        actual: digest_hex(&actual),
+    })
+}
+
+fn digest_hex(digest: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }

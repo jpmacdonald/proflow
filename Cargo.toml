@@ -2,6 +2,8 @@
 name = "proflow"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
+autobins = false
 description = "Planning Center to ProPresenter worship service workflow tool"
 license = "MIT"
 repository = "https://github.com/jimmy/proflow"
@@ -9,12 +11,67 @@ keywords = ["propresenter", "planning-center", "worship"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "dump_pro"
-path = "src/bin/dump_pro.rs"
-
-[[bin]]
 name = "proflow_mcp"
 path = "src/bin/proflow_mcp.rs"
+
+[[bin]]
+name = "build_service"
+path = "src/bin/build_service.rs"
+
+[[bin]]
+name = "dump_macros"
+path = "src/bin/dump_macros.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "dump_plans"
+path = "src/bin/dump_plans.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "dump_playlist_doc"
+path = "src/bin/dump_playlist_doc.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "dump_pro"
+path = "src/bin/dump_pro.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "dump_theme"
+path = "src/bin/dump_theme.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "materialize_real_playlist"
+path = "src/bin/materialize_real_playlist.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "parity_build_live_diff"
+path = "src/bin/parity_build_live_diff.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "parity_diff"
+path = "src/bin/parity_diff.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "parity_live_diff"
+path = "src/bin/parity_live_diff.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "parity_smoke"
+path = "src/bin/parity_smoke.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "summarize_pro"
+path = "src/bin/summarize_pro.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 # ProPresenter integration
@@ -68,6 +125,7 @@ proptest = "1.7"
 
 [features]
 default = []
+dev-tools = []
 integration_test = []
 
 [lints.rust]

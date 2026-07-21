@@ -110,9 +110,15 @@ invariants:
 # exported playlist reconstructed through the production writer.
 parity:
     {{ cargo }} test --test propresenter_codec_fidelity
+    {{ cargo }} test --test propresenter_native_export committed_independent_portable_export_has_complete_media_and_links -- --exact
     {{ cargo }} test --lib propresenter::native_zip::tests::writes_native_forced_zip64_records_and_global_member_order
     {{ cargo }} test --lib propresenter::package::tests::native_package_reconstruction_matches_evidenced_shape
-    {{ cargo }} run --quiet --bin parity_smoke >/dev/null
+    {{ cargo }} test --lib propresenter::render::slide_instance::tests::every_committed_native_template_instantiates_a_closed_local_graph -- --exact
+    {{ cargo }} run --quiet --features dev-tools --bin parity_smoke >/dev/null
+
+# The checked-in prost output must match the authoritative ProPresenter schema.
+proto:
+    {{ cargo }} run --manifest-path tools/proto-gen/Cargo.toml -- --check
 
 # Audit a local directory of independent native exports without making that
 # machine-specific corpus part of the normal repository gate.
@@ -133,4 +139,4 @@ local: fmt check clippy test
 ci: local doctest doc audit deny machete
 
 # Heavy completion gate for invariant-sensitive changes.
-deep: ci parity prop mutants invariants
+deep: ci parity proto prop mutants invariants

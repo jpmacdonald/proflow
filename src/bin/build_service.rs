@@ -17,8 +17,7 @@ use proflow::planning_center::PlanningCenterClient;
 use proflow::project_config::RawProjectConfig;
 use proflow::project_config::{load_project_config, BackgroundId, ProjectConfig};
 use proflow::propresenter::library::LibraryCatalog;
-use proflow::propresenter::package::PlaylistPackageMode;
-use proflow::propresenter::playlist::PlaylistMetadata;
+use proflow::propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode, PlaylistMetadata};
 use proflow::workflow::execute::{
     BuildRequest, EntryOverride, OverrideAction, OverrideSlideType, RenderAssetSnapshot,
     ServiceBuildExecutor,
@@ -73,7 +72,7 @@ struct BuildCliArgs {
     playlist_name: Option<String>,
     skip_output_keys: Vec<String>,
     overrides: Vec<DecisionOverride>,
-    playlist_package_mode: PlaylistPackageMode,
+    playlist_export_mode: PlaylistExportMode,
 }
 
 #[tokio::main]
@@ -85,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
         playlist_name,
         skip_output_keys,
         overrides: pending_overrides,
-        playlist_package_mode,
+        playlist_export_mode,
     } = cli;
 
     let config = Config::load()?;
@@ -123,8 +122,12 @@ async fn main() -> anyhow::Result<()> {
             playlist_name,
             skip_output_keys,
             overrides,
-            playlist_package_mode,
-            media_assets: Vec::new(),
+            playlist_export: match playlist_export_mode {
+                PlaylistExportMode::LibraryLinks => PlaylistExportIntent::library_links(),
+                PlaylistExportMode::PortableImport => {
+                    PlaylistExportIntent::portable_import(Vec::new())
+                }
+            },
         })
         .await?;
 
@@ -143,7 +146,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
     let mut playlist_name: Option<String> = None;
     let mut skip_output_keys = Vec::new();
     let mut overrides = Vec::new();
-    let mut playlist_package_mode = PlaylistPackageMode::default();
+    let mut playlist_export_mode = PlaylistExportMode::default();
     let mut package_mode_was_set = false;
 
     while let Some(arg) = args.next() {
@@ -186,10 +189,10 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
             if package_mode_was_set {
                 anyhow::bail!("package mode may be specified only once");
             }
-            playlist_package_mode = if arg == "--portable" {
-                PlaylistPackageMode::ExportPortable
+            playlist_export_mode = if arg == "--portable" {
+                PlaylistExportMode::PortableImport
             } else {
-                PlaylistPackageMode::LibraryLocal
+                PlaylistExportMode::LibraryLinks
             };
             package_mode_was_set = true;
         } else if playlist_name.is_none() {
@@ -205,7 +208,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
         playlist_name,
         skip_output_keys,
         overrides,
-        playlist_package_mode,
+        playlist_export_mode,
     })
 }
 

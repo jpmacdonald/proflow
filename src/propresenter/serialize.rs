@@ -2,8 +2,6 @@
 //!
 //! Writes protobuf-encoded presentation files to disk.
 
-#![allow(dead_code)]
-
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -30,22 +28,17 @@ pub enum SerializeError {
     MissingDocumentIdentity,
 }
 
-/// Write a presentation to a `ProPresenter` file
+/// Write a raw native presentation for codec-fidelity tooling.
 ///
-/// # Arguments
-///
-/// * `presentation` - The presentation to serialize
-/// * `path` - Path where the .pro file should be written
-///
-/// # Returns
-///
-/// Returns a Result indicating success or containing a `SerializeError`
+/// This intentionally performs only the minimum identity check needed for an
+/// existing native document. Product-generated documents must cross
+/// [`crate::propresenter::generated_document::GeneratedPresentation`] instead.
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use std::path::Path;
-/// use proflow::propresenter::serialize::write_presentation_file;
+/// use proflow::propresenter::serialize::write_presentation_file_for_fidelity;
 /// use proflow::propresenter::generated::rv_data;
 ///
 /// let presentation = rv_data::Presentation {
@@ -54,20 +47,28 @@ pub enum SerializeError {
 ///     ..Default::default()
 /// };
 /// let path = Path::new("example.pro");
-/// match write_presentation_file(&presentation, &path) {
+/// match write_presentation_file_for_fidelity(&presentation, &path) {
 ///     Ok(_) => println!("Successfully wrote presentation"),
 ///     Err(e) => eprintln!("Error writing presentation: {}", e),
 /// }
 /// ```
-pub fn write_presentation_file(
+#[cfg(any(test, feature = "dev-tools"))]
+pub fn write_presentation_file_for_fidelity(
     presentation: &rv_data::Presentation,
     path: impl AsRef<Path>,
 ) -> Result<(), SerializeError> {
-    let path = path.as_ref();
-    let buf = encode_presentation(presentation)?;
+    let buf = encode_existing_presentation(presentation)?;
+    write_presentation_bytes(path.as_ref(), &buf)
+}
 
+/// Write presentation bytes already produced by the checked generated boundary
+/// or [`encode_existing_presentation`].
+///
+/// This keeps the library file and any playlist-embedded copy byte-identical
+/// without encoding or rereading the document a second time.
+pub(crate) fn write_presentation_bytes(path: &Path, bytes: &[u8]) -> Result<(), SerializeError> {
     write_file_atomically(path, |mut file| {
-        file.write_all(&buf)?;
+        file.write_all(bytes)?;
         Ok(file)
     })
 }
@@ -109,8 +110,11 @@ fn temporary_output_path(path: &Path) -> PathBuf {
     path.with_file_name(temporary_name)
 }
 
-/// Encode a presentation to protobuf bytes (for embedding in playlists).
-pub fn encode_presentation(
+/// Encode an existing native presentation after checking its document identity.
+///
+/// This permissive preservation codec is deliberately crate-private. Semantic
+/// renderer output must use the stricter generated-document boundary.
+pub(crate) fn encode_existing_presentation(
     presentation: &rv_data::Presentation,
 ) -> Result<Vec<u8>, SerializeError> {
     if !has_native_document_identity(presentation) {
@@ -146,7 +150,8 @@ mod tests {
         let directory = tempfile::tempdir().expect("create temporary output directory");
         let output_path = directory.path().join(filename);
 
-        write_presentation_file(&original, &output_path).expect("native fixture should serialize");
+        write_presentation_file_for_fidelity(&original, &output_path)
+            .expect("native fixture should serialize");
 
         assert_eq!(
             fs::read(&output_path).expect("read serialized fixture"),
@@ -184,7 +189,8 @@ mod tests {
 
         let directory = tempfile::tempdir().expect("create temporary output directory");
         let output_path = directory.path().join("empty_presentation.pro");
-        write_presentation_file(&empty, &output_path).expect("Failed to write empty presentation");
+        write_presentation_file_for_fidelity(&empty, &output_path)
+            .expect("Failed to write empty presentation");
 
         let round_trip =
             read_presentation_file(&output_path).expect("Failed to read empty presentation");
@@ -201,8 +207,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let output_path = directory.path().join("invalid.pro");
 
-        let error = write_presentation_file(&rv_data::Presentation::default(), &output_path)
-            .expect_err("an unidentified document must not be written");
+        let error =
+            write_presentation_file_for_fidelity(&rv_data::Presentation::default(), &output_path)
+                .expect_err("an unidentified document must not be written");
 
         assert!(matches!(error, SerializeError::MissingDocumentIdentity));
         assert!(!output_path.exists());

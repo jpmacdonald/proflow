@@ -11,12 +11,12 @@ mod model;
 mod presentation;
 mod read;
 
-pub use comparison::{compare_playlist_packages, infer_package_mode};
+pub use comparison::{compare_playlist_packages, infer_archive_shape};
 pub use items::{compare_playlist_items_aligned, presentation_items};
 pub use model::{
     EmbeddedPresentationStructure, EmbeddedPresentationSummary, PackageError, PackageFileSummary,
-    PlaylistItemAlignedDiff, PlaylistItemSummary, PlaylistPackage, PlaylistPackageComparison,
-    PlaylistPackageIssue, PlaylistPackageMode,
+    PlaylistArchiveShape, PlaylistItemAlignedDiff, PlaylistItemSummary, PlaylistPackage,
+    PlaylistPackageComparison, PlaylistPackageIssue,
 };
 pub use presentation::{embedded_presentation_structures, embedded_presentation_summaries};
 pub use read::read_playlist_package;

@@ -5,9 +5,9 @@ use crate::propresenter::generated::rv_data::{self, action, playlist, playlist_i
 use crate::propresenter::inspection::summarize_presentation_structure;
 use crate::propresenter::media::presentation_media_dependencies;
 use crate::propresenter::playlist::{
-    build_playlist, write_playlist_document_file_with_intent,
-    write_playlist_document_for_fidelity, PlaylistEntry, PlaylistExportIntent,
-    PlaylistMediaAsset, PlaylistMetadata, SelectedArrangement,
+    build_playlist, write_playlist_document_file_with_intent, write_playlist_document_for_fidelity,
+    write_playlist_set_file, PlaylistEntry, PlaylistExportIntent, PlaylistMediaAsset,
+    PlaylistMetadata, PlaylistSet, SelectedArrangement,
 };
 use prost::Message;
 use serde::Deserialize;
@@ -28,9 +28,10 @@ struct RealPlaylistFixture {
     path: String,
     provenance: String,
     independent_native_export: bool,
-    mode: PlaylistPackageMode,
+    mode: PlaylistArchiveShape,
     item_count: usize,
     embedded_file_count: usize,
+    media_file_count: usize,
     required_embedded_files: Vec<String>,
 }
 
@@ -280,18 +281,19 @@ fn reads_generated_playlist_package() {
 
     let package = read_playlist_package(&output_path).expect("read package");
     assert_eq!(
-        infer_package_mode(&package),
-        PlaylistPackageMode::LibraryLocal
+        infer_archive_shape(&package),
+        PlaylistArchiveShape::PresentationsOnly
     );
-    assert_eq!(package.embedded_files, vec!["Call to Worship.pro"]);
-    assert_eq!(package.embedded_file_details.len(), 1);
     assert_eq!(
-        package.embedded_file_details[0].basename,
-        "Call to Worship.pro"
+        package.embedded_files().collect::<Vec<_>>(),
+        ["Call to Worship.pro"]
     );
-    assert!(package.embedded_file_details[0].is_presentation);
+    let embedded_details = package.embedded_file_details().collect::<Vec<_>>();
+    assert_eq!(embedded_details.len(), 1);
+    assert_eq!(embedded_details[0].basename, "Call to Worship.pro");
+    assert!(embedded_details[0].is_presentation);
 
-    let items = presentation_items(&package.document);
+    let items = presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "Call to Worship");
     assert_eq!(
@@ -317,12 +319,10 @@ fn reads_native_unflagged_utf8_member_names_without_mojibake() {
     let package = read_playlist_package(output_path).expect("read playlist");
 
     assert_eq!(
-        package.embedded_files,
+        package.embedded_files().collect::<Vec<_>>(),
         ["O Praise The Name (Anástasis).pro"]
     );
-    assert!(package
-        .embedded_file_data
-        .contains_key("O Praise The Name (Anástasis).pro"));
+    assert!(package.has_embedded_file("O Praise The Name (Anástasis).pro"));
 }
 
 #[test]
@@ -382,13 +382,13 @@ fn reads_checked_in_propresenter_fixture() {
     );
 
     let package = read_playlist_package(fixture).expect("read fixture package");
-    assert!(package.document_round_trip_exact);
+    assert!(package.document_round_trip_is_exact());
     assert_eq!(
-        infer_package_mode(&package),
-        PlaylistPackageMode::LibraryLocal
+        infer_archive_shape(&package),
+        PlaylistArchiveShape::PresentationsOnly
     );
     assert_eq!(
-        package.embedded_files,
+        package.embedded_files().collect::<Vec<_>>(),
         vec![
             "__template_info__.pro",
             "__template_scripture__.pro",
@@ -397,8 +397,7 @@ fn reads_checked_in_propresenter_fixture() {
     );
     assert_eq!(
         package
-            .embedded_file_details
-            .iter()
+            .embedded_file_details()
             .map(|file| (file.basename.as_str(), file.size, file.crc32))
             .collect::<Vec<_>>(),
         vec![
@@ -408,7 +407,7 @@ fn reads_checked_in_propresenter_fixture() {
         ]
     );
 
-    let items = presentation_items(&package.document);
+    let items = presentation_items(package.document());
     assert_eq!(items.len(), 3);
     assert_eq!(
         items[0].local_relative_path.as_deref(),
@@ -436,37 +435,46 @@ fn real_fixture_manifest_matches_corpus() {
         }
         let path = fixture_dir.join(&fixture.path);
         let package = read_playlist_package(&path).expect("read real playlist fixture");
-        let items = presentation_items(&package.document);
+        let items = presentation_items(package.document());
 
         assert!(
-            package.document_round_trip_exact,
+            package.document_round_trip_is_exact(),
             "{} playlist data should round-trip byte-for-byte",
             fixture.path
         );
 
         assert_eq!(
-            infer_package_mode(&package),
+            infer_archive_shape(&package),
             fixture.mode,
             "{}",
             fixture.path
         );
         assert_eq!(items.len(), fixture.item_count, "{}", fixture.path);
         assert_eq!(
-            package.embedded_file_details.len(),
+            package.embedded_file_count(),
             fixture.embedded_file_count,
+            "{}",
+            fixture.path
+        );
+        assert_eq!(
+            package
+                .embedded_file_details()
+                .filter(|file| !file.is_presentation)
+                .count(),
+            fixture.media_file_count,
             "{}",
             fixture.path
         );
         for required in &fixture.required_embedded_files {
             assert!(
-                package.embedded_files.contains(required),
+                package.embedded_files().any(|name| name == required),
                 "{} should contain {required}",
                 fixture.path
             );
         }
         assert_eq!(
             embedded_presentation_summaries(&package).len(),
-            fixture.embedded_file_count,
+            fixture.embedded_file_count - fixture.media_file_count,
             "{}",
             fixture.path
         );
@@ -529,7 +537,7 @@ fn native_package_reconstruction_matches_evidenced_shape() {
         "tests/fixtures/propresenter/native/corpus/playlists/native-template-library.proplaylist",
     );
     let expected = read_playlist_package(&expected_path).expect("read native package");
-    let entries = presentation_items(&expected.document)
+    let entries = presentation_items(expected.document())
         .into_iter()
         .map(|item| {
             let relative_path = item
@@ -555,11 +563,10 @@ fn native_package_reconstruction_matches_evidenced_shape() {
                     });
             let path = format!("/Users/test/ProPresenter/{relative_path}");
             let entry = expected
-                .embedded_file_data
-                .get(filename)
+                .embedded_file(filename)
                 .map_or_else(
                     || PlaylistEntry::linked(item.name.clone(), path.clone()),
-                    |data| PlaylistEntry::embedded(item.name.clone(), path.clone(), data.clone()),
+                    |data| PlaylistEntry::embedded(item.name.clone(), path.clone(), data.to_vec()),
                 )
                 .expect("valid reconstructed entry");
             entry
@@ -569,12 +576,17 @@ fn native_package_reconstruction_matches_evidenced_shape() {
         })
         .collect::<Vec<_>>();
     let metadata =
-        PlaylistMetadata::from_document(&expected.document).expect("native playlist metadata");
-    let reconstructed = build_playlist("test", &entries, &metadata);
+        PlaylistMetadata::from_document(expected.document()).expect("native playlist metadata");
+    let reconstructed = PlaylistSet::single("test", entries).expect("valid playlist set");
     let directory = tempdir().expect("tempdir");
     let actual_path = directory.path().join("reconstructed.proplaylist");
-    write_playlist_document_for_fidelity(&reconstructed, &entries, &actual_path)
-        .expect("write reconstruction");
+    write_playlist_set_file(
+        &reconstructed,
+        &metadata,
+        &actual_path,
+        PlaylistExportIntent::portable_import(Vec::new()),
+    )
+    .expect("write reconstruction through the production package boundary");
 
     let comparison =
         compare_playlist_packages(&expected_path, &actual_path).expect("compare packages");
@@ -643,10 +655,9 @@ fn native_playlist_reconstruction_is_not_mislabeled_compatible() {
     {
         let expected_path = fixture_dir.join(&fixture.path);
         let expected = read_playlist_package(&expected_path).expect("read real fixture");
-        let items = presentation_items(&expected.document);
+        let items = presentation_items(expected.document());
         let presentation_files: Vec<_> = expected
-            .embedded_file_details
-            .iter()
+            .embedded_file_details()
             .filter(|file| file.is_presentation)
             .collect();
         assert_eq!(items.len(), presentation_files.len(), "{}", fixture.path);
@@ -683,15 +694,14 @@ fn native_playlist_reconstruction_is_not_mislabeled_compatible() {
                             music_scale,
                         });
                 let entry = expected
-                    .embedded_file_data
-                    .get(&file.name)
+                    .embedded_file(&file.name)
                     .map_or_else(
                         || PlaylistEntry::linked(item.name.clone(), presentation_path.clone()),
                         |data| {
                             PlaylistEntry::embedded(
                                 item.name.clone(),
                                 presentation_path.clone(),
-                                data.clone(),
+                                data.to_vec(),
                             )
                         },
                     )
@@ -703,8 +713,8 @@ fn native_playlist_reconstruction_is_not_mislabeled_compatible() {
             })
             .collect();
 
-        let metadata =
-            PlaylistMetadata::from_document(&expected.document).expect("fixture playlist metadata");
+        let metadata = PlaylistMetadata::from_document(expected.document())
+            .expect("fixture playlist metadata");
         let playlist = build_playlist("Round Trip", &entries, &metadata);
         let dir = tempdir().expect("tempdir");
         let output_name = Path::new(&fixture.path)
@@ -773,10 +783,12 @@ fn compare_reports_media_content_mismatch_at_same_archive_path() {
     let document = build_playlist("Service", &[], &test_metadata());
     let expected_path = dir.path().join("expected.proplaylist");
     let actual_path = dir.path().join("actual.proplaylist");
-    let intent_for = |source_path| PlaylistExportIntent::portable_import(vec![PlaylistMediaAsset {
+    let intent_for = |source_path| {
+        PlaylistExportIntent::portable_import(vec![PlaylistMediaAsset {
             source_path,
             archive_path: Some("media/default.jpg".to_string()),
-        }]);
+        }])
+    };
     write_playlist_document_file_with_intent(
         &document,
         &[],

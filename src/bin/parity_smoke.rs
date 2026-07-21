@@ -1,8 +1,9 @@
 //! Offline `ProPresenter` parity smoke harness.
 //!
-//! This inspects the real fixture corpus, re-emits each playlist through the
-//! `ProFlow` writer, compares the generated package back to the fixture, and
-//! prints a JSON report.
+//! This inspects the real fixture corpus, re-emits presentation-only playlists
+//! through the diagnostic preservation writer, and prints a JSON report.
+//! Media-bearing native packages are audited in place; the parity gate runs a
+//! separate dependency/link integrity test for those fixtures.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -11,13 +12,12 @@ use anyhow::{Context, Result};
 use proflow::propresenter::generated::rv_data::{self, playlist};
 use proflow::propresenter::media::presentation_media_dependencies;
 use proflow::propresenter::package::{
-    compare_playlist_packages, embedded_presentation_summaries, infer_package_mode,
-    presentation_items, read_playlist_package, PlaylistPackageIssue, PlaylistPackageMode,
+    compare_playlist_packages, embedded_presentation_summaries, infer_archive_shape,
+    presentation_items, read_playlist_package, PlaylistArchiveShape, PlaylistPackageIssue,
 };
 use proflow::propresenter::playlist::{
     build_playlist, linked_presentation_filename, write_playlist_document_for_fidelity,
-    PlaylistEntry,
-    PlaylistMetadata, SelectedArrangement,
+    PlaylistEntry, PlaylistMetadata, SelectedArrangement,
 };
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -34,9 +34,10 @@ struct PlaylistFixture {
     path: String,
     provenance: String,
     independent_native_export: bool,
-    mode: PlaylistPackageMode,
+    mode: PlaylistArchiveShape,
     item_count: usize,
     embedded_file_count: usize,
+    media_file_count: usize,
     required_embedded_files: Vec<String>,
 }
 
@@ -71,11 +72,12 @@ struct PlaylistSmokeReport {
     path: String,
     provenance: String,
     independent_native_export: bool,
-    mode: PlaylistPackageMode,
+    mode: PlaylistArchiveShape,
     item_count: usize,
     embedded_file_count: usize,
+    media_file_count: usize,
     embedded_presentation_count: usize,
-    round_trip_compatible: bool,
+    round_trip_compatible: Option<bool>,
     issues: Vec<PlaylistPackageIssue>,
 }
 
@@ -136,7 +138,9 @@ fn run() -> Result<SmokeReport> {
     let compatible = playlists
         .iter()
         .filter(|playlist| playlist.independent_native_export)
-        .all(|playlist| playlist.round_trip_compatible)
+        .all(|playlist| {
+            playlist.issues.is_empty() && playlist.round_trip_compatible != Some(false)
+        })
         && presentations
             .iter()
             .all(|presentation| presentation.matches_manifest);
@@ -167,24 +171,35 @@ fn inspect_playlist_fixture(
     let path = fixture_root.join(&fixture.path);
     let package = read_playlist_package(&path)
         .with_context(|| format!("read playlist package {}", path.display()))?;
-    let items = presentation_items(&package.document);
+    let items = presentation_items(package.document());
     let embedded_presentations = embedded_presentation_summaries(&package);
-    let mut issues = match round_trip_compare(&path, &package) {
-        Ok(comparison) => comparison.issues,
-        Err(error) => vec![PlaylistPackageIssue {
-            kind: "round_trip_reconstruction_error".to_string(),
-            index: None,
-            message: format!("{error:#}"),
-        }],
+    let mut issues = Vec::new();
+    let round_trip_compatible = match fixture.mode {
+        PlaylistArchiveShape::PresentationsOnly => match round_trip_compare(&path, &package) {
+            Ok(comparison) => {
+                let compatible = comparison.issues.is_empty();
+                issues.extend(comparison.issues);
+                Some(compatible)
+            }
+            Err(error) => {
+                issues.push(PlaylistPackageIssue {
+                    kind: "round_trip_reconstruction_error".to_string(),
+                    index: None,
+                    message: format!("{error:#}"),
+                });
+                Some(false)
+            }
+        },
+        PlaylistArchiveShape::ContainsMedia => None,
     };
-    if infer_package_mode(&package) != fixture.mode {
+    if infer_archive_shape(&package) != fixture.mode {
         issues.push(PlaylistPackageIssue {
             kind: "fixture_mode_mismatch".to_string(),
             index: None,
             message: format!(
                 "manifest expected {:?}, package is {:?}",
                 fixture.mode,
-                infer_package_mode(&package)
+                infer_archive_shape(&package)
             ),
         });
     }
@@ -199,19 +214,33 @@ fn inspect_playlist_fixture(
             ),
         });
     }
-    if package.embedded_file_details.len() != fixture.embedded_file_count {
+    if package.embedded_file_count() != fixture.embedded_file_count {
         issues.push(PlaylistPackageIssue {
             kind: "fixture_embedded_count_mismatch".to_string(),
             index: None,
             message: format!(
                 "manifest expected {}, found {}",
                 fixture.embedded_file_count,
-                package.embedded_file_details.len()
+                package.embedded_file_count()
+            ),
+        });
+    }
+    let media_file_count = package
+        .embedded_file_details()
+        .filter(|file| !file.is_presentation)
+        .count();
+    if media_file_count != fixture.media_file_count {
+        issues.push(PlaylistPackageIssue {
+            kind: "fixture_media_count_mismatch".to_string(),
+            index: None,
+            message: format!(
+                "manifest expected {}, found {}",
+                fixture.media_file_count, media_file_count
             ),
         });
     }
     for required in &fixture.required_embedded_files {
-        if !package.embedded_file_data.contains_key(required) {
+        if !package.has_embedded_file(required) {
             issues.push(PlaylistPackageIssue {
                 kind: "fixture_required_embedded_file_missing".to_string(),
                 index: None,
@@ -224,11 +253,12 @@ fn inspect_playlist_fixture(
         path: fixture.path.clone(),
         provenance: fixture.provenance.clone(),
         independent_native_export: fixture.independent_native_export,
-        mode: infer_package_mode(&package),
+        mode: infer_archive_shape(&package),
         item_count: items.len(),
-        embedded_file_count: package.embedded_file_details.len(),
+        embedded_file_count: package.embedded_file_count(),
+        media_file_count,
         embedded_presentation_count: embedded_presentations.len(),
-        round_trip_compatible: issues.is_empty(),
+        round_trip_compatible,
         issues,
     })
 }
@@ -237,14 +267,16 @@ fn round_trip_compare(
     expected_path: &Path,
     package: &proflow::propresenter::package::PlaylistPackage,
 ) -> Result<proflow::propresenter::package::PlaylistPackageComparison> {
-    let items = presentation_items(&package.document);
+    let items = presentation_items(package.document());
     let entries = items
         .iter()
         .map(|item| -> Result<PlaylistEntry> {
             let embedded_filename = linked_presentation_filename(item).with_context(|| {
                 format!("playlist item {:?} has no document filename", item.name)
             })?;
-            let embedded_data = package.embedded_file_data.get(&embedded_filename).cloned();
+            let embedded_data = package
+                .embedded_file(&embedded_filename)
+                .map(<[u8]>::to_vec);
             let selected_arrangement = selected_arrangement(item, embedded_data.as_deref())?;
             let presentation_path = item
                 .local_relative_path
@@ -271,7 +303,7 @@ fn round_trip_compare(
         .collect::<Result<Vec<_>>>()?;
 
     let playlist_name = package
-        .document
+        .document()
         .root_node
         .as_ref()
         .and_then(|root| match &root.children_type {
@@ -280,7 +312,7 @@ fn round_trip_compare(
         })
         .map(|playlist| playlist.name.as_str())
         .context("fixture is missing its primary child playlist")?;
-    let metadata = PlaylistMetadata::from_document(&package.document)
+    let metadata = PlaylistMetadata::from_document(package.document())
         .context("fixture playlist is missing producer metadata")?;
     let playlist = build_playlist(playlist_name, &entries, &metadata);
     let actual_path =
