@@ -1,7 +1,7 @@
 //! Debug tool to dump a raw `ProPresenter` playlist document.
 //!
 //! Usage:
-//!   `cargo run --bin dump_playlist_doc -- <Playlists/Library>`
+//!   `cargo run --features dev-tools --bin dump_playlist_doc -- <Playlists/Library>`
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -18,7 +18,7 @@ fn main() {
             let data = fs::read(path).expect("read playlist document");
             rv_data::PlaylistDocument::decode(data.as_slice()).expect("decode PlaylistDocument")
         },
-        |package| package.document,
+        proflow::propresenter::package::PlaylistPackage::into_document,
     );
 
     println!(

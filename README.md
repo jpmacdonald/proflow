@@ -12,7 +12,7 @@ Planning Center plan
     -> resolved / needs-review / skip
     -> materialize exact native artifacts into a sealed preview transaction
     -> operator resolves uncertainty and confirms the preview
-    -> revalidate sources, outputs, and staged bytes, then atomically commit
+    -> revalidate sources, outputs, and staged bytes, then commit playlist-last
 ```
 
 There is no hidden runtime inference. If an item, background, theme slide,
@@ -141,6 +141,7 @@ configuration looks like this:
     "background": "default",
     "days_ahead": 14,
     "bible_version": "NRSVue",
+    "speaker_fallback_rule": "lords_prayer",
     "presentation_size": { "width": 1920, "height": 1080 }
   },
   "backgrounds": {
@@ -231,6 +232,7 @@ configuration looks like this:
   "item_rules": [
     {
       "id": "all_songs",
+      "tier": "catch_all",
       "match": { "category": "song" },
       "use_type": "song"
     },
@@ -256,8 +258,10 @@ The complete top-level contract contains:
 - `metadata`: descriptive project information.
 - `defaults`: exact registered library, default theme, background ID,
   lookahead window, expected presentation size, and optional Bible translation
-  for scripture items that do not name one. Without an explicit item translation or
-  `defaults.bible_version`, scripture requires review.
+  for scripture items that do not name one. `speaker_fallback_rule` optionally
+  names the item rule whose explicit speaker is used only after an item supplies
+  no speaker. Without an explicit item translation or `defaults.bible_version`,
+  scripture requires review.
 - `service_groups`: reusable sets of Planning Center service types.
 - `required_playlist_items`: exact reusable presentations that must occur once
   at the configured start or end of each matching service group. If Planning
@@ -267,9 +271,10 @@ The complete top-level contract contains:
 - `cue_roles`: semantic cue regions bound to exact ProPresenter assets.
 - `presentation_types`: content source, output strategy, display binding, and
   optional style values.
-- `item_rules`: ordered classification rules with exactly one outcome each;
-  manual-only material is an ordinary explicit `skip` rule placed before
-  broader matches.
+- `item_rules`: deterministic classification rules with exactly one outcome
+  each. Rules use explicit `primary` (default), `fallback`, or `catch_all`
+  tiers. The highest matching tier wins; multiple matches in that tier require
+  review. Array position never decides classification.
 - `people`: known-person and nametag metadata.
 - `overrides`: service-group, service-type, or presentation-type style
   overrides. Overlapping rules may set different fields or the same value, but
@@ -558,12 +563,23 @@ there is no visible-text or filename inference in the presentation rewrite.
 
 Scripture rendering keeps the source verse number beside every text fragment.
 A deterministic global partitioner evaluates every fitting boundary, caps each
-slide at seven estimated lines (or a lower configured/template limit), and
-prioritizes sentence, clause, and verse boundaries over a mid-sentence word
-break. It rejects tiny tails, favors nonincreasing front-loaded word counts,
-and may use an extra slide when that avoids an unnatural split. Every produced
-slide satisfies the same estimated geometry bound used to pack it; source
-character order and verse provenance are regression-tested.
+slide at the configured line maximum, and prioritizes sentence, clause, and
+verse boundaries over a mid-sentence word break. It rejects tiny tails, favors
+nonincreasing front-loaded word counts, and may use an extra slide when that
+avoids an unnatural split. Production fit decisions use a persistent native
+macOS TextKit oracle over the exact final RTF, text-box bounds, margins,
+paragraph settings, fonts, and supported scale behavior. Every generated text
+cue is measured again after rendering, for both its source theme and every
+macro-selected Audience Look screen theme, before it can be staged. Restyled
+existing text cues are likewise measured from their exact retained RTF and
+source geometry, then against every active macro destination. Paint-only run
+changes such as leader/audience color cannot change textbox fit. Multiple
+metric-affecting runs—font, bold/italic, superscript, kerning, baseline, or
+paragraph geometry—require review when an Audience Look replaces the source
+theme, because `ProPresenter`'s private inline-style remapping cannot be proved
+by flattening them. An ambiguous source or destination text-slot mapping
+likewise requires review instead of being guessed. Source character order and
+verse provenance remain independently regression-tested.
 
 A single terminal partial reference such as `Exodus 16:1-4a` may use the
 Planning Center description to prove its exact endpoint. ProFlow compares the
@@ -580,11 +596,24 @@ book, chapter, and the exact verses represented on that slide, for example
 and blank-divider cues remain unlabeled, and combined readings use the correct
 book/chapter prefix for each passage.
 
-The line model intentionally remains an approximation based on text-box bounds
-and font metrics rather than a second font-shaping engine. ProFlow intentionally
-does not synthesize ProPresenter Bible-UI metadata: scripture identity is owned
-by the reviewed source request, native cue labels, preserved verse provenance,
-and the rendered superscript verse numbers.
+The fit oracle is compiled into the ProFlow binary and materialized from
+content-addressed bytes at runtime; an installed build does not depend on a
+development `OUT_DIR`. Missing fonts, malformed RTF, unsupported native text
+modes, helper failure, physical overflow, or a line-count violation are typed
+build failures. There is deliberately no production fallback to character
+counts. The oracle also reports metric-style boundaries, the exact CoreText
+font programs, and the operating-system/AppKit/CoreText versions that shaped
+the text. Every font explicitly selected by a visible RTF run is preflighted;
+unused font-table entries and normal glyph-level system fallback are not
+mistaken for authored dependencies. A visible superscript run from an older
+document must carry ProPresenter's standardized-superscript marker, because an
+unstandardized run may be migrated when the application opens it. TextKit
+proves the native attributed-text layout that ProFlow can
+reproduce; ProPresenter itself remains the independent oracle for any
+proprietary compositor behavior. ProFlow intentionally does not synthesize
+ProPresenter Bible-UI metadata: scripture identity is owned by the reviewed
+source request, native cue labels, preserved verse provenance, and the rendered
+superscript verse numbers.
 
 ## File Naming And Rendering Ownership
 
@@ -663,6 +692,19 @@ installed names, and presentations contain only native macro references. The
 asset catalog now reports each installed macro's actions in native execution
 order—including Stage Layout, Audience Look, and Clear Group targets—so an
 operator can inspect behavior without ProFlow duplicating macro authoring.
+
+At startup, every macro that configuration can apply—cue-role macros and
+presentation-type transition macros alike—is resolved through the native
+Audience Look graph by UUID. Each enabled audience screen then resolves either
+to the source presentation or to one exact theme document and slide UUID.
+ProFlow does not guess from Look, screen, theme, or file names. Snapshot loading
+also proves that every configured cue role can bind its text fields on every
+macro-selected destination theme. The Workspace, macro document, source theme,
+and destination theme documents are parsed once and included in the immutable
+render-asset fingerprint; their exact bytes are rehashed before review, after
+materialization, and immediately before commit. A dangling Look, theme, screen,
+or text-slot reference therefore fails before preview instead of producing a
+plausible editor view whose projector or stream output is wrong.
 
 ## Output Strategies
 
@@ -774,7 +816,11 @@ operator surface.
 
 `preview_playlist` resolves the plan title, date, and service type from Planning
 Center; an optional caller-supplied `service_name` is only an exact assertion
-and a mismatch is rejected. A fully resolved preview renders every presentation,
+and a mismatch is rejected. Because Planning Center offers no transactional
+snapshot endpoint, ProFlow requires two consecutive direct normalized reads to
+match before it accepts either the preview source or the pre-commit freshness
+check. A changing plan fails for retry rather than producing a torn snapshot.
+A fully resolved preview renders every presentation,
 constructs the playlist package, prepares the future library-catalog update,
 and seals the exact staged bytes before it returns a revision. Source payloads
 exist only during this preparation; the revision retains their hashes, the
@@ -782,8 +828,9 @@ classified plans, final playlist identity, package policy, and sealed native
 artifacts. An unresolved preview retains only diagnostic plans and cannot be
 executed.
 
-`build_service` atomically consumes a matching revision before committing it. A
-revision is therefore one-time even when commit fails: run `preview_playlist`
+`build_service` consumes a matching revision exactly once, then performs a
+checked process transaction. A revision is therefore one-time even when commit
+fails: run `preview_playlist`
 again before every retry. Missing, stale, and mismatched revisions are rejected
 without consuming the current preview. Immediately before commit, ProFlow
 revalidates source hashes, the reviewed present/absent state of every output,
@@ -794,6 +841,25 @@ one-off overrides have been applied. Use the stable `output_key` from preview
 results for skips and overrides. Keys are derived from
 the Planning Center item ID plus the expansion step, never its mutable service
 position.
+
+Every successful build also commits
+`<playlist>.proflow-build.json` beside the playlist. This deterministic receipt
+records the complete normalized Planning Center snapshot and revision, exact
+playlist-producer metadata, render-asset fingerprint, reviewed source digests,
+final artifact digests, effective playlist arrangement traversal, presentation
+structure, every portable media reference/member/unresolved decision and
+warning, and native text-fit evidence for generated text cues and safely
+measurable restyled text cues. Font evidence includes the exact CoreText-resolved
+local program path and SHA-256; those bytes are rehashed at the commit boundary.
+The receipt is reviewed and committed in the same process transaction as the
+presentations and playlist; the playlist is the final commit artifact, so a
+reported commit failure rolls the installed prefix back before returning.
+
+Each individual replacement is an atomic filesystem rename, but the complete
+multi-file build is not power-loss atomic or durable. ProFlow has no journal or
+startup recovery protocol. The playlist-last commit marker prevents a normal
+process failure from advertising an incomplete build; power-loss guarantees
+would require filesystem sync plus a recovery journal.
 
 Planning Center item order comes from each item's required `attributes.sequence`,
 not HTTP response or pagination order. Missing, invalid, or duplicate sequences
@@ -860,6 +926,9 @@ execution then validates the resolved file with the same rules as MCP builds.
 
 ## Architecture
 
+The unattended-rendering acceptance criteria and delivery order live in the
+[rendering reliability roadmap](docs/reliability-roadmap.md).
+
 The code follows compiler-like, one-directional boundaries:
 
 ```text
@@ -903,9 +972,12 @@ fall back to the current directory, reread environment variables, or combine
 assets loaded for a different config.
 
 Native producer metadata has one source as well. At startup, ProFlow reads the
-current `Playlists/Library` document under the active ProPresenter show. New playlist
-documents and newly saved presentations receive that current application and
-platform metadata; an older theme file is never treated as the producer.
+current `Playlists/Library` document under the active ProPresenter show. New
+playlist documents and newly saved presentations receive that captured
+application and platform metadata; its exact protobuf bytes and digest are
+recorded in the build receipt. A later library edit does not silently mutate the
+active runtime snapshot, and an older theme file is never treated as the
+producer.
 
 ## Native Fidelity Contract
 
@@ -951,16 +1023,21 @@ materializations, not independent native exports. They remain diagnostic and
 expose legacy defects such as incomplete arrangement metadata and pre-native ZIP
 ordering; they are not counted as parity proof. The checked-in
 `tests/fixtures/propresenter/native/corpus/playlists/native-template-library.proplaylist`
-package is the independent native export used to prove reconstruction compatibility,
-and the parity smoke harness must reconstruct it successfully.
+package is the independent native export reconstructed through the production
+`PlaylistSet` writer. The separate
+`native-easter-portable-media.proplaylist` fixture is an independent native
+portable export with actual media; the parity gate checks its package links,
+dependency coverage, member shape, and protobuf round trips without depending
+on the original workstation paths.
 Portable media packaging uses the canonical absolute source path observed in
-native exports and rejects unresolved dependencies. Relocatable import behavior
-remains experimental until an import/save-back round trip in ProPresenter proves
-that URL contract. Native exports also show that older presentations may retain
-Windows or another user's absolute URL while the package rebases the media entry
-by filename. ProFlow does not guess that mapping: faithful portable export of
-such presentations needs an explicit, uniquely reviewed media catalog/relink
-contract.
+native exports. It embeds every available reviewed dependency, while preserving
+unresolved external references and sealing their warnings into the build
+receipt. Relocatable import behavior remains experimental until an
+import/save-back round trip in ProPresenter proves that URL contract. Native
+exports also show that older presentations may retain Windows or another user's
+absolute URL while the package rebases the media entry by filename. ProFlow does
+not guess that mapping: faithful portable export of such presentations needs an
+explicit, uniquely reviewed media catalog/relink contract.
 
 Current native exports deliberately use a nonstandard forced-ZIP64 envelope.
 The writer reproduces it for ProPresenter fidelity; some generic ZIP tools warn
@@ -983,15 +1060,19 @@ just pco-smoke
 
 Use the narrowest relevant command while debugging, then rerun the enclosing
 `just` target. Invariant-heavy changes should finish with `just deep`; the
-focused `just parity` gate covers byte-exact codecs and independent native
-package reconstruction. `just parity-corpus <directory>` additionally audits a
-local, read-only directory of independent exports; it is intentionally not part
-of `just deep` because that corpus is machine-specific. `just parity-library`
-does the same for an installed presentation library and raw playlist document.
-`just pco-smoke` is the
-explicit live-network gate: it runs the Planning Center integration tests
-serially and requires valid credentials, while the deterministic gates only
-compile those tests.
+focused `just parity` gate covers byte-exact codecs and reconstructs the
+independent native template-library package through the production writer. The
+separate committed Easter export is an archive, link, and media-dependency shape
+oracle; it does not by itself prove exact production-writer reconstruction,
+relocation, application import, or pixel output. `just deep` also verifies that
+checked-in protobuf bindings are fresh against the authoritative schema.
+`just parity-corpus <directory>` additionally audits a local, read-only directory
+of independent exports; it is intentionally not part of `just deep` because
+that corpus is machine-specific.
+`just parity-library` does the same for an installed presentation library and
+raw playlist document. `just pco-smoke` is the explicit live-network gate: it
+runs the Planning Center integration tests serially and requires valid
+credentials, while the deterministic gates only compile those tests.
 
 ## License
 

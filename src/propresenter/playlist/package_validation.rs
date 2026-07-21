@@ -7,26 +7,33 @@ use super::domain::{
 use super::naming::{document_path_for_presentation_path, linked_presentation_filename};
 use crate::propresenter::generated::rv_data::{self, url};
 use crate::propresenter::media::presentation_media_dependencies_from_bytes;
+use crate::propresenter::native_url;
 use crate::propresenter::package::presentation_items;
 
 pub(super) fn read_playlist_media_assets(
     media_assets: &[PlaylistMediaAsset],
-) -> Result<Vec<ReviewedPlaylistMediaAsset>, PlaylistError> {
+) -> Result<Vec<ReviewedPlaylistMediaAsset<'static>>, PlaylistError> {
     let mut archive_paths = HashSet::from(["data".to_string()]);
-    let mut reviewed = Vec::with_capacity(media_assets.len());
+    let mut validated_paths = Vec::with_capacity(media_assets.len());
     for asset in media_assets {
-        let bound = asset.bind_reviewed(&[])?;
-        reject_presentation_media_path(&bound.archive_path)?;
-        reserve_archive_path(&mut archive_paths, &bound.archive_path)?;
-        reviewed.push(bound);
+        let archive_path = media_archive_path(asset)?;
+        reject_presentation_media_path(&archive_path)?;
+        reserve_archive_path(&mut archive_paths, &archive_path)?;
+        validated_paths.push(archive_path);
     }
 
     // Read only after every archive identity has passed validation. This keeps
     // malformed package requests from partially observing source files.
-    for (bound, asset) in reviewed.iter_mut().zip(media_assets) {
-        bound.data = std::fs::read(&asset.source_path)?;
-    }
-    Ok(reviewed)
+    validated_paths
+        .into_iter()
+        .zip(media_assets)
+        .map(|(archive_path, asset)| {
+            Ok(ReviewedPlaylistMediaAsset {
+                archive_path,
+                data: std::borrow::Cow::Owned(std::fs::read(&asset.source_path)?),
+            })
+        })
+        .collect()
 }
 
 pub(super) fn validate_playlist_matches_entries(
@@ -49,8 +56,15 @@ pub(super) fn validate_playlist_matches_entries(
         .zip(embedded_filenames)
         .enumerate()
     {
-        let (absolute_file_url, relative_path) =
-            document_path_for_presentation_path(entry.presentation_path());
+        let mismatch = |field| PlaylistError::PackageItemMismatch {
+            index,
+            name: entry.name().to_string(),
+            field,
+        };
+        let document_path = document_path_for_presentation_path(entry.presentation_path());
+        let Some(url::Storage::AbsoluteString(absolute_file_url)) = &document_path.storage else {
+            return Err(mismatch(PlaylistItemContractField::AbsoluteFileUrl));
+        };
         let arrangement_uuid = entry
             .selected_arrangement()
             .map(|arrangement| arrangement.uuid().to_string());
@@ -60,21 +74,16 @@ pub(super) fn validate_playlist_matches_entries(
         let user_music_key = entry
             .user_music_key()
             .map(|key| (key.music_key, key.music_scale));
-        let (local_relative_path, local_root, external_relative_path) = match &relative_path {
-            Some(url::RelativeFilePath::Local(local)) => {
-                (Some(local.path.as_str()), Some(local.root), None)
-            }
-            Some(url::RelativeFilePath::External(external)) => {
-                (None, None, Some(external.path.as_str()))
-            }
-            None => (None, None, None),
-        };
-        let mismatch = |field| PlaylistError::PackageItemMismatch {
-            index,
-            name: entry.name().to_string(),
-            field,
-        };
-
+        let (local_relative_path, local_root, external_relative_path) =
+            match &document_path.relative_file_path {
+                Some(url::RelativeFilePath::Local(local)) => {
+                    (Some(local.path.as_str()), Some(local.root), None)
+                }
+                Some(url::RelativeFilePath::External(external)) => {
+                    (None, None, Some(external.path.as_str()))
+                }
+                None => (None, None, None),
+            };
         if item.name != entry.name() {
             return Err(mismatch(PlaylistItemContractField::Name));
         }
@@ -175,19 +184,23 @@ fn append_discovered_media_assets(
                 reason,
             }
         })?;
+        let show_root = native_url::propresenter_root_from_library_path(entry.presentation_path());
         for dependency in dependencies {
-            let path = dependency
-                .path
-                .ok_or_else(|| PlaylistError::UnresolvedMediaDependency {
-                    name: entry.name().to_string(),
-                    reference: dependency.source.clone(),
-                })?;
-            if !path.is_file() {
-                return Err(PlaylistError::MissingMediaDependency {
-                    name: entry.name().to_string(),
-                    path,
-                });
-            }
+            let path = match dependency.resolve(show_root.as_deref()) {
+                crate::propresenter::media::MediaDependencyResolution::Available(path) => path,
+                crate::propresenter::media::MediaDependencyResolution::Missing(path) => {
+                    return Err(PlaylistError::MissingMediaDependency {
+                        name: entry.name().to_string(),
+                        path,
+                    });
+                }
+                crate::propresenter::media::MediaDependencyResolution::Unresolved => {
+                    return Err(PlaylistError::UnresolvedMediaDependency {
+                        name: entry.name().to_string(),
+                        reference: dependency.source().to_string(),
+                    });
+                }
+            };
             let path = path.canonicalize().map_err(PlaylistError::Io)?;
             let mut already_included = false;
             for asset in media_assets.iter() {

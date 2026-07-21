@@ -1,5 +1,4 @@
 use super::*;
-use crate::propresenter::playlist::package_validation::media_archive_path;
 
 #[test]
 fn writes_library_local_playlist_file() {
@@ -28,13 +27,16 @@ fn embedded_archive_identity_comes_from_source_not_display_name() {
     write_playlist_document_for_fidelity(&document, &entries, &output).expect("write playlist");
     let package =
         crate::propresenter::package::read_playlist_package(&output).expect("read playlist");
-    let items = presentation_items(&package.document);
+    let items = presentation_items(package.document());
     assert_eq!(items[0].name, "Display Alias");
     assert_eq!(
         items[0].local_relative_path.as_deref(),
         Some("Libraries/Default/Actual File.pro")
     );
-    assert_eq!(package.embedded_files, vec!["Actual File.pro"]);
+    assert_eq!(
+        package.embedded_files().collect::<Vec<_>>(),
+        ["Actual File.pro"]
+    );
 }
 
 #[test]
@@ -52,8 +54,11 @@ fn repeated_source_entries_share_one_embedded_presentation() {
     write_playlist_document_for_fidelity(&document, &entries, &output).expect("write playlist");
     let package =
         crate::propresenter::package::read_playlist_package(&output).expect("read playlist");
-    let items = presentation_items(&package.document);
-    assert_eq!(package.embedded_files, vec!["Shared Source.pro"]);
+    let items = presentation_items(package.document());
+    assert_eq!(
+        package.embedded_files().collect::<Vec<_>>(),
+        ["Shared Source.pro"]
+    );
     assert_eq!(items.len(), 2);
     assert_eq!(items[1].local_relative_path, items[0].local_relative_path);
 }
@@ -86,6 +91,72 @@ fn repeated_source_entries_reject_conflicting_embedded_bytes() {
 }
 
 #[test]
+fn distinct_sources_with_the_same_basename_require_manual_resolution() {
+    let entries = vec![
+        PlaylistEntry::embedded(
+            "First",
+            "/Libraries/First/Shared.pro",
+            presentation_bytes("First"),
+        )
+        .expect("valid first"),
+        PlaylistEntry::embedded(
+            "Second",
+            "/Libraries/Second/Shared.pro",
+            presentation_bytes("Second"),
+        )
+        .expect("valid second"),
+    ];
+    let document = build_playlist("Service", &entries, &test_metadata());
+    let directory = tempfile::tempdir().expect("tempdir");
+
+    let error = write_playlist_document_for_fidelity(
+        &document,
+        &entries,
+        directory.path().join("collision.proplaylist"),
+    )
+    .expect_err("native basename collision must not silently rewrite links");
+
+    assert!(matches!(
+        error,
+        PlaylistError::DuplicateEmbeddedPresentationBasename {
+            basename,
+            first_presentation_path,
+            conflicting_presentation_path,
+        } if basename == "Shared.pro"
+            && first_presentation_path == "/Libraries/First/Shared.pro"
+            && conflicting_presentation_path == "/Libraries/Second/Shared.pro"
+    ));
+}
+
+#[test]
+fn library_link_export_does_not_embed_available_presentation_bytes() {
+    let playlist_set = PlaylistSet::new(vec![NamedPlaylist::new(
+        "Service",
+        vec![embedded_entry(
+            "Installed",
+            "/Libraries/Default/Installed.pro",
+        )],
+    )
+    .expect("named playlist")])
+    .expect("playlist set");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let output = directory.path().join("links.proplaylist");
+
+    write_playlist_set_file(
+        &playlist_set,
+        &test_metadata(),
+        &output,
+        PlaylistExportIntent::library_links(),
+    )
+    .expect("write library links");
+
+    let package =
+        crate::propresenter::package::read_playlist_package(output).expect("read package");
+    assert_eq!(package.embedded_file_count(), 0);
+    assert_eq!(presentation_items(package.document()).len(), 1);
+}
+
+#[test]
 fn portable_write_embeds_media_assets() {
     let directory = tempfile::tempdir().expect("tempdir");
     let media_path = directory.path().join("default.jpg");
@@ -97,19 +168,26 @@ fn portable_write_embeds_media_assets() {
         .to_string();
     let output = directory.path().join("portable.proplaylist");
     let entries = vec![linked_entry("Test Song", "/Libraries/Default/Test.pro")];
-    let document = build_playlist("Test Playlist", &entries, &test_metadata());
+    let playlist_set = PlaylistSet::new(vec![
+        NamedPlaylist::new("Test Playlist", entries).expect("named playlist")
+    ])
+    .expect("playlist set");
     let intent = PlaylistExportIntent::portable_import(vec![PlaylistMediaAsset::new(media_path)]);
-    write_playlist_document_file_with_intent(&document, &entries, &output, intent)
+    write_playlist_set_file(&playlist_set, &test_metadata(), &output, intent)
         .expect("write portable playlist");
     let package =
         crate::propresenter::package::read_playlist_package(&output).expect("read package");
     assert_eq!(
-        crate::propresenter::package::infer_package_mode(&package),
-        PlaylistPackageMode::ExportPortable
+        crate::propresenter::package::infer_archive_shape(&package),
+        PlaylistArchiveShape::ContainsMedia
     );
-    assert_eq!(package.embedded_files, vec![native_archive_path]);
-    assert_eq!(package.embedded_file_details[0].basename, "default.jpg");
-    assert!(!package.embedded_file_details[0].is_presentation);
+    assert_eq!(
+        package.embedded_files().collect::<Vec<_>>(),
+        [native_archive_path]
+    );
+    let embedded_details = package.embedded_file_details().collect::<Vec<_>>();
+    assert_eq!(embedded_details[0].basename, "default.jpg");
+    assert!(!embedded_details[0].is_presentation);
 }
 
 #[test]
@@ -123,7 +201,9 @@ fn reviewed_portable_write_uses_captured_media_bytes() {
             .canonicalize()
             .expect("canonical reviewed media path"),
     );
-    let archive_path = media_archive_path(&asset).expect("native archive path");
+    let archive_path = asset
+        .resolved_archive_path()
+        .expect("native archive path exposed to receipt evidence");
     let reviewed_asset = asset
         .bind_reviewed(&reviewed_bytes)
         .expect("bind reviewed bytes");
@@ -144,10 +224,9 @@ fn reviewed_portable_write_uses_captured_media_bytes() {
         crate::propresenter::package::read_playlist_package(&output).expect("read package");
     assert_eq!(
         package
-            .embedded_file_data
-            .get(&archive_path)
+            .embedded_file(&archive_path)
             .expect("reviewed archive member"),
-        &reviewed_bytes
+        reviewed_bytes
     );
 }
 
@@ -381,21 +460,94 @@ fn portable_write_embeds_discovered_media_assets() {
         media_presentation("With Media", &media_path, directory.path()),
     )
     .expect("valid media presentation")];
-    let document = build_playlist("Test Playlist", &entries, &test_metadata());
+    let playlist_set = PlaylistSet::new(vec![
+        NamedPlaylist::new("Test Playlist", entries).expect("named playlist")
+    ])
+    .expect("playlist set");
     let output = directory.path().join("portable-discovered.proplaylist");
-    write_playlist_document_file_with_intent(
-        &document,
-        &entries,
+    write_playlist_set_file(
+        &playlist_set,
+        &test_metadata(),
         &output,
         PlaylistExportIntent::portable_import(Vec::new()),
     )
     .expect("write portable playlist");
     let package =
         crate::propresenter::package::read_playlist_package(&output).expect("read package");
-    assert!(package
-        .embedded_files
-        .iter()
-        .any(|file| file == &native_archive_path));
+    assert!(package.has_embedded_file(&native_archive_path));
+}
+
+#[test]
+fn portable_write_falls_back_to_show_relative_media_when_absolute_storage_is_stale() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let media_path = directory.path().join("Media/current.png");
+    std::fs::create_dir_all(media_path.parent().expect("media parent")).expect("create media");
+    std::fs::write(&media_path, b"current image").expect("write media");
+    let media_url = rv_data::Url {
+        storage: Some(rv_data::url::Storage::AbsoluteString(
+            "file:///stale-machine/Media/current.png".to_string(),
+        )),
+        relative_file_path: Some(rv_data::url::RelativeFilePath::Local(
+            rv_data::url::LocalRelativePath {
+                root: rv_data::url::local_relative_path::Root::Show as i32,
+                path: "Media/current.png".to_string(),
+            },
+        )),
+        ..rv_data::Url::default()
+    };
+    let presentation = rv_data::Presentation {
+        name: "Relative Media".to_string(),
+        uuid: Some(rv_data::Uuid {
+            string: Uuid::new_v4().to_string(),
+        }),
+        cues: vec![rv_data::Cue {
+            actions: vec![rv_data::Action {
+                action_type_data: Some(rv_data::action::ActionTypeData::Media(
+                    rv_data::action::MediaType {
+                        element: Some(rv_data::Media {
+                            url: Some(media_url),
+                            ..rv_data::Media::default()
+                        }),
+                        ..rv_data::action::MediaType::default()
+                    },
+                )),
+                ..rv_data::Action::default()
+            }],
+            ..rv_data::Cue::default()
+        }],
+        ..rv_data::Presentation::default()
+    };
+    let presentation_path = directory
+        .path()
+        .join("Libraries/Default/Relative Media.pro");
+    let entries = vec![PlaylistEntry::embedded(
+        "Relative Media",
+        presentation_path.display().to_string(),
+        presentation.encode_to_vec(),
+    )
+    .expect("valid presentation")];
+    let playlist_set = PlaylistSet::new(vec![
+        NamedPlaylist::new("Service", entries).expect("named playlist")
+    ])
+    .expect("playlist set");
+    let output = directory.path().join("relative-media.proplaylist");
+
+    write_playlist_set_file(
+        &playlist_set,
+        &test_metadata(),
+        &output,
+        PlaylistExportIntent::portable_import(Vec::new()),
+    )
+    .expect("write portable playlist");
+
+    let package =
+        crate::propresenter::package::read_playlist_package(output).expect("read package");
+    let canonical_media = media_path
+        .canonicalize()
+        .expect("canonical media")
+        .display()
+        .to_string();
+    assert!(package.has_embedded_file(&canonical_media));
 }
 
 #[test]
@@ -465,7 +617,7 @@ fn portable_write_embeds_native_local_file_carriers() {
             .display()
             .to_string();
         assert!(
-            package.embedded_files.contains(&expected),
+            package.has_embedded_file(&expected),
             "missing native dependency {expected}"
         );
     }

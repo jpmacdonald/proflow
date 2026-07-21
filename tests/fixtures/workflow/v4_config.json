@@ -15,7 +15,13 @@
   },
   "cue_roles": {
     "call_to_worship": {
-      "slide": "Call to Worship"
+      "slide": "Call to Worship",
+      "enter_macro": "Scripture/Prayer",
+      "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+      "speaker_colors": {
+        "leader": "#FEDB4F",
+        "audience": "#FFFFFF"
+      }
     },
     "scripture": {
       "slide": "Scripture",

@@ -3,13 +3,12 @@ use std::{num::NonZeroUsize, path::Path};
 use super::support::*;
 use crate::planning_center::types::{Category, Item};
 use crate::project_config::{
-    parse_project_config_str, validate_project_config, DecisionChoiceConfig, DescriptionParserKind,
+    parse_project_config_str, validate_project_config, DescriptionParserKind,
 };
 use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify::{
     build_plan, build_preview, render_preview, PreviewEntry, PreviewStatus, PreviewSummary,
 };
-use crate::workflow::classify_matching::decision_choice_matches;
 use crate::workflow::description_parser::parse_description;
 use crate::workflow::plan::{
     BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, OutputKey,
@@ -56,7 +55,7 @@ fn generated_name_that_normalizes_to_empty_requires_review() {
     super::super::audit_mutable_presentation_target_collisions(&mut plans);
 
     assert!(matches!(
-        plans[0].disposition,
+        plans[0].disposition(),
         PlanDisposition::NeedsReview(_)
     ));
     assert!(plans[0]
@@ -94,6 +93,10 @@ fn build_preview_uses_fixture_rules_for_library_scripture_and_skip() {
     assert_eq!(
         call_to_worship.content_slide.as_deref(),
         Some("Call to Worship")
+    );
+    assert_eq!(
+        call_to_worship.classification_rule.as_deref(),
+        Some("call_to_worship")
     );
 
     let song = entries
@@ -158,7 +161,7 @@ fn output_keys_follow_pco_item_ids_when_plan_positions_change() {
 }
 
 #[test]
-fn ordered_skip_rule_precedes_a_broader_fallback() {
+fn primary_rule_wins_even_when_fallback_is_listed_first() {
     let config = parse_project_config_str(
         r#"
             {
@@ -172,17 +175,18 @@ fn ordered_skip_rule_precedes_a_broader_fallback() {
               },
               "item_rules": [
                 {
+                  "id": "wrong_sermon_fallback",
+                  "tier": "fallback",
+                  "match": { "title_prefix": ["sermon"] },
+                  "use_type": "song"
+                },
+                {
                   "id": "sermon_manual_only",
                   "match": { "title_prefix": ["sermon"] },
                   "action": {
                     "kind": "skip",
                     "reason": "Sermon slides are added manually after ProFlow builds"
                   }
-                },
-                {
-                  "id": "wrong_sermon_fallback",
-                  "match": { "title_prefix": ["sermon"] },
-                  "use_type": "song"
                 }
               ]
             }
@@ -209,6 +213,140 @@ fn ordered_skip_rule_precedes_a_broader_fallback() {
         "Sermon slides are added manually after ProFlow builds"
     );
     assert!(entries[0].item_type.is_none());
+}
+
+#[test]
+fn matching_rules_in_the_same_fallback_tier_require_review() {
+    let config = parse_project_config_str(
+        r#"
+            {
+              "version": 4,
+              "item_rules": [
+                {
+                  "id": "first_catch_all",
+                  "tier": "fallback",
+                  "match": { "title_prefix": ["sermon"] },
+                  "action": { "kind": "skip", "reason": "first fallback" }
+                },
+                {
+                  "id": "second_catch_all",
+                  "tier": "fallback",
+                  "match": { "title_prefix": ["sermon"] },
+                  "action": { "kind": "skip", "reason": "second fallback" }
+                }
+              ]
+            }
+            "#,
+    )
+    .expect("config should parse");
+    let item = Item {
+        id: "1".to_string(),
+        position: 1,
+        title: "Sermon".to_string(),
+        description: None,
+        category: Category::Text,
+        note: None,
+        song: None,
+        scripture: None,
+    };
+
+    let entries = build_preview(&[item], &config, None, Some("Sunday Morning"));
+
+    assert_eq!(entries.len(), 1);
+    assert!(matches!(entries[0].status, PreviewStatus::Uncertain));
+    assert!(entries[0].reason.contains("fallback"));
+    assert!(entries[0].reason.contains("first_catch_all"));
+    assert!(entries[0].reason.contains("second_catch_all"));
+}
+
+#[test]
+fn fallback_tier_wins_over_catch_all_regardless_of_array_order() {
+    let config = parse_project_config_str(
+        r#"
+            {
+              "version": 4,
+              "item_rules": [
+                {
+                  "id": "generic_song",
+                  "tier": "catch_all",
+                  "match": { "category": "song" },
+                  "action": { "kind": "skip", "reason": "generic" }
+                },
+                {
+                  "id": "traditional_song",
+                  "tier": "fallback",
+                  "match": {
+                    "category": "song",
+                    "service_type": ["10:30am Traditional"]
+                  },
+                  "action": { "kind": "skip", "reason": "traditional" }
+                }
+              ]
+            }
+            "#,
+    )
+    .expect("tiered config should parse");
+    let item = Item {
+        id: "1".to_string(),
+        position: 1,
+        title: "Hymn".to_string(),
+        description: None,
+        category: Category::Song,
+        note: None,
+        song: None,
+        scripture: None,
+    };
+
+    let entries = build_preview(&[item], &config, None, Some("10:30am Traditional"));
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].reason, "traditional");
+    assert_eq!(
+        entries[0].classification_rule.as_deref(),
+        Some("traditional_song")
+    );
+}
+
+#[test]
+fn multiple_matching_primary_rules_require_review_with_rule_ids() {
+    let config = parse_project_config_str(
+        r#"
+            {
+              "version": 4,
+              "item_rules": [
+                {
+                  "id": "sermon_by_title",
+                  "match": { "title_prefix": ["sermon"] },
+                  "action": { "kind": "skip", "reason": "title match" }
+                },
+                {
+                  "id": "sermon_by_description",
+                  "match": { "description_contains": ["preacher"] },
+                  "action": { "kind": "skip", "reason": "description match" }
+                }
+              ]
+            }
+            "#,
+    )
+    .expect("config should parse");
+    let item = Item {
+        id: "1".to_string(),
+        position: 1,
+        title: "Sermon".to_string(),
+        description: Some("Preacher: Robert Austell".to_string()),
+        category: Category::Text,
+        note: None,
+        song: None,
+        scripture: None,
+    };
+
+    let entries = build_preview(&[item], &config, None, Some("Sunday Morning"));
+
+    assert_eq!(entries.len(), 1);
+    assert!(matches!(entries[0].status, PreviewStatus::Uncertain));
+    assert!(entries[0].reason.contains("primary"));
+    assert!(entries[0].reason.contains("sermon_by_title"));
+    assert!(entries[0].reason.contains("sermon_by_description"));
 }
 
 #[test]
@@ -286,32 +424,6 @@ fn v4_contextual_baptism_decision_selects_allowed_file() {
         .and_then(Path::to_str)
         .is_some_and(|path| path.ends_with("Baptism Him.pro")));
     assert!(plans[0].render_style().is_none());
-}
-
-#[test]
-fn contextual_choice_supports_all_only_and_none_only_matchers() {
-    let all_only = DecisionChoiceConfig {
-        match_spec: crate::project_config::DecisionChoiceMatch {
-            all: vec!["child".to_string(), "baptism".to_string()],
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let none_only = DecisionChoiceConfig {
-        match_spec: crate::project_config::DecisionChoiceMatch {
-            none: vec!["private".to_string()],
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    assert!(decision_choice_matches(
-        &all_only,
-        "child baptism during worship"
-    ));
-    assert!(!decision_choice_matches(&all_only, "child dedication"));
-    assert!(decision_choice_matches(&none_only, "public baptism"));
-    assert!(!decision_choice_matches(&none_only, "private baptism"));
 }
 
 #[test]

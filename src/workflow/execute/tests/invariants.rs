@@ -76,10 +76,9 @@ fn render_asset_snapshot_owns_all_configured_asset_validation() {
         .any(|issue| issue.contains("theme slide 'Scripture' was not found")));
     assert!(messages
         .iter()
-        .any(|issue| issue.contains("enter_macro 'Scripture/Prayer'")));
-    assert!(messages
-        .iter()
-        .any(|issue| { issue.contains("leader_enter_macro 'Scripture/Prayer (Highlighted)'") }));
+        .any(|issue| issue.contains("configured macro 'Scripture/Prayer' is not installed")));
+    assert!(messages.iter().any(|issue| issue
+        .contains("configured macro 'Scripture/Prayer (Highlighted)' is not installed")));
     assert!(messages
         .iter()
         .any(|issue| issue.contains("background 'default'") && issue.contains("empty")));
@@ -139,6 +138,109 @@ fn render_asset_snapshot_rejects_theme_slide_canvas_mismatch() {
             && actual.width() == 1280
             && actual.height() == 720
     )));
+}
+
+#[test]
+fn render_asset_snapshot_rejects_changed_native_theme_bytes() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_fixture_theme(&mut runtime);
+    let theme = runtime
+        .locations()
+        .themes()
+        .join("Execution Test Theme/Theme");
+
+    std::fs::write(&theme, b"changed after snapshot").expect("replace native theme");
+    let error = runtime
+        .render_assets
+        .verify_current()
+        .expect_err("changed theme must invalidate the render snapshot");
+
+    assert!(matches!(
+        error,
+        RenderAssetFreshnessError::Changed { kind: "theme", path, .. } if path == theme
+    ));
+}
+
+#[tokio::test]
+async fn review_rejects_render_asset_drift_before_staging_outputs() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_fixture_theme(&mut runtime);
+    let theme = runtime
+        .locations()
+        .themes()
+        .join("Execution Test Theme/Theme");
+    std::fs::write(&theme, b"changed before review").expect("replace native theme");
+
+    let error = runtime
+        .executor()
+        .review_build_request(
+            reviewed_request("Stale Review"),
+            &[],
+            crate::propresenter::PresentationSize::FULL_HD,
+        )
+        .await
+        .expect_err("stale native assets must fail before review staging");
+
+    assert!(matches!(
+        error,
+        BuildServiceError::RenderAssetFreshness(RenderAssetFreshnessError::Changed {
+            kind: "theme",
+            path,
+            ..
+        }) if path == theme
+    ));
+    assert!(std::fs::read_dir(runtime.locations().playlist_output())
+        .expect("read output directory")
+        .all(|entry| !entry
+            .expect("output entry")
+            .file_name()
+            .to_string_lossy()
+            .contains("proflow-stage")));
+}
+
+#[tokio::test]
+async fn prepared_build_rejects_render_asset_drift_before_commit() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_fixture_theme(&mut runtime);
+    let prepared = expect_prepared(
+        runtime
+            .executor()
+            .review_build_request(
+                reviewed_request("Stale Assets"),
+                &[generate_title_plan("pco:item:generated", test_style(None))],
+                crate::propresenter::PresentationSize::FULL_HD,
+            )
+            .await
+            .expect("prepare reviewed build"),
+    );
+    let theme = runtime
+        .locations()
+        .themes()
+        .join("Execution Test Theme/Theme");
+    std::fs::write(&theme, b"changed after preview").expect("replace native theme");
+
+    let error = runtime
+        .executor()
+        .build_prepared_request(prepared)
+        .await
+        .expect_err("stale native assets must not commit prepared artifacts");
+
+    assert!(matches!(
+        error,
+        BuildServiceError::RenderAssetFreshness(RenderAssetFreshnessError::Changed {
+            kind: "theme",
+            path,
+            ..
+        }) if path == theme
+    ));
+    assert!(!runtime
+        .locations()
+        .playlist_output()
+        .join("Stale Assets.proplaylist")
+        .exists());
 }
 
 #[test]

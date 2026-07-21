@@ -67,7 +67,7 @@ async fn generated_item_keeps_reviewed_display_name_separate_from_native_filenam
 
     let package = crate::propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read generated playlist");
-    let items = crate::propresenter::package::presentation_items(&package.document);
+    let items = crate::propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "Call to Worship (Leader)");
     assert_eq!(
@@ -76,7 +76,7 @@ async fn generated_item_keeps_reviewed_display_name_separate_from_native_filenam
     );
 
     assert!(
-        package.embedded_file_data.is_empty(),
+        package.embedded_file_count() == 0,
         "library-local packages link to the presentation already installed by the transaction"
     );
     let presentation = rv_data::Presentation::decode(

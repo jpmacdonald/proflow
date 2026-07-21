@@ -8,8 +8,9 @@ use super::generated::rv_data;
 use super::groups::GroupCatalog;
 use super::presentation_spec::{CueContent, CueRoleId, GroupId, PresentationSpec, TextField};
 use super::rtf::{extract_text_options, rtf_to_text, segments_to_rtf_bytes, StyledSegment};
+use super::text_fit::CueTextFitSummary;
 
-mod slide_instance;
+pub(crate) mod slide_instance;
 
 use slide_instance::instantiate_template_slide;
 
@@ -70,9 +71,18 @@ pub enum TemplateSlotError {
 /// Failure to clone a native theme slide into an independent cue-local graph.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SlideInstantiationError {
+    /// A rendered presentation slide has no local slide graph.
+    #[error("rendered presentation slide has no base slide")]
+    MissingBaseSlide,
+    /// A rendered local object has no stable native UUID.
+    #[error("rendered {kind} has no native UUID")]
+    MissingIdentity {
+        /// Local object missing its identity.
+        kind: &'static str,
+    },
     /// One source UUID identifies more than one local slide object, making
     /// reference rewriting ambiguous.
-    #[error("template reuses local UUID '{uuid}' for both {first_kind} and {duplicate_kind}")]
+    #[error("local slide reuses UUID '{uuid}' for both {first_kind} and {duplicate_kind}")]
     DuplicateIdentity {
         /// Reused source UUID.
         uuid: String,
@@ -82,7 +92,7 @@ pub enum SlideInstantiationError {
         duplicate_kind: &'static str,
     },
     /// A local reference does not resolve inside the source slide graph.
-    #[error("template {relation} references missing local UUID '{uuid}'")]
+    #[error("local slide {relation} references missing UUID '{uuid}'")]
     DanglingReference {
         /// Native relationship containing the unresolved UUID.
         relation: &'static str,
@@ -90,7 +100,7 @@ pub enum SlideInstantiationError {
         uuid: String,
     },
     /// A build is present without a graphics element that can own it.
-    #[error("template {build_kind} has no graphics element to target")]
+    #[error("local slide {build_kind} has no graphics element to target")]
     BuildWithoutElement {
         /// Native build field missing its owner.
         build_kind: &'static str,
@@ -148,6 +158,52 @@ pub enum RenderError {
         /// Number of rendered cues with semantic role metadata.
         cue_count: usize,
     },
+    /// A post-render transform changed cue identity, count, or storage order
+    /// while semantic role indexes were still live.
+    #[error("post-render transform changed the cue sequence bound to semantic roles")]
+    RoleCueSequenceChanged,
+    /// A post-render transform changed the selected/default operator traversal
+    /// while semantic role indexes were still live.
+    #[error("post-render transform changed operator traversal bound to semantic roles")]
+    RoleOperatorTraversalChanged,
+    /// A post-render transform changed text whose native fit evidence is live.
+    #[error("post-render transform changed measured text at cue {cue_index}")]
+    MeasuredCueTextChanged {
+        /// Cue whose retained native measurement became stale.
+        cue_index: usize,
+    },
+    /// A post-render transform changed native geometry or styling that formed
+    /// part of a retained text-fit request.
+    #[error("post-render transform changed measured text layout at cue {cue_index}")]
+    MeasuredCueLayoutChanged {
+        /// Cue whose retained native measurement became stale.
+        cue_index: usize,
+    },
+    /// A post-measurement transform changed the macro selecting an audience
+    /// destination, invalidating the retained output-screen proof.
+    #[error("post-render transform changed measured audience routing at cue {cue_index}")]
+    MeasuredCueDestinationChanged {
+        /// Cue whose retained destination evidence became stale.
+        cue_index: usize,
+    },
+    /// Native fit evidence referenced a cue absent from the rendered document.
+    #[error("native text-fit evidence references unavailable cue {cue_index}")]
+    TextFitEvidenceCueUnavailable {
+        /// Invalid rendered cue index.
+        cue_index: usize,
+    },
+    /// Native layout evidence repeats or reorders a cue identity.
+    #[error("native text-fit summaries must have unique ascending cue indexes")]
+    InvalidTextFitEvidenceOrder,
+    /// A measured text cue has no rendering destination evidence.
+    #[error("native text-fit summary for cue {cue_index} has no destinations")]
+    MissingTextFitDestinationEvidence {
+        /// Cue missing its source or output destination proof.
+        cue_index: usize,
+    },
+    /// The rendered selected/default arrangement could not be traversed safely.
+    #[error(transparent)]
+    OperatorTraversal(#[from] super::arrangement::OperatorTraversalError),
     /// A template field could not be inspected or bound.
     #[error(transparent)]
     Template(#[from] TemplateSlotError),
@@ -206,6 +262,29 @@ impl<'a> SlideTemplate<'a> {
     /// Return the number of meaningful candidates for an implicit body field.
     pub fn default_candidate_count(&self) -> usize {
         self.default_candidates().len()
+    }
+
+    /// Prove that an audience theme can bind a configured role on this exact
+    /// slide.
+    ///
+    /// `ProPresenter` theme application does not require a single source text
+    /// element and its destination element to share a name. A zero- or
+    /// one-field role therefore binds the one meaningful destination text
+    /// element. Multi-field roles retain exact native-name binding because
+    /// choosing their destination order would otherwise be ambiguous.
+    pub(crate) fn validate_native_bindings<'slot>(
+        &self,
+        native_slots: impl IntoIterator<Item = &'slot str>,
+    ) -> Result<(), TemplateSlotError> {
+        let native_slots = native_slots.into_iter().collect::<Vec<_>>();
+        if native_slots.len() <= 1 {
+            self.default_slot()?;
+            return Ok(());
+        }
+        for native_slot in native_slots {
+            self.named_index(native_slot)?;
+        }
+        Ok(())
     }
 
     fn default_slot(&self) -> Result<usize, TemplateSlotError> {
@@ -380,7 +459,7 @@ impl<'a> RenderAssets<'a> {
         self
     }
 
-    fn role(&self, id: &CueRoleId) -> Result<&ResolvedCueRole<'a>, RenderError> {
+    pub(crate) fn role(&self, id: &CueRoleId) -> Result<&ResolvedCueRole<'a>, RenderError> {
         self.roles
             .iter()
             .find(|role| role.id() == id)
@@ -454,7 +533,7 @@ impl RenderedCueRoles {
         cue_roles: &[CueRoleId],
     ) -> Result<Self, RenderError> {
         let mut rendered = Self::default();
-        for cue_index in super::arrangement::operator_cue_indices(presentation) {
+        for cue_index in super::arrangement::checked_operator_cue_indices(presentation)? {
             let role = cue_roles
                 .get(cue_index)
                 .ok_or(RenderError::MissingRenderedCueRole {
@@ -474,9 +553,122 @@ impl RenderedCueRoles {
 /// boundary may add those fields once it knows which producer it represents.
 pub struct RenderedPresentation {
     /// Valid, producer-neutral `ProPresenter` document.
-    pub presentation: rv_data::Presentation,
+    presentation: rv_data::Presentation,
     /// Actual role-entry cue indexes derived during rendering.
-    pub cue_roles: RenderedCueRoles,
+    cue_roles: RenderedCueRoles,
+    /// Stable source and macro-selected output-screen layout evidence.
+    text_fit_summary: Vec<CueTextFitSummary>,
+}
+
+impl RenderedPresentation {
+    /// Producer-neutral native document produced by the semantic renderer.
+    #[must_use]
+    pub const fn presentation(&self) -> &rv_data::Presentation {
+        &self.presentation
+    }
+
+    /// Semantic role transitions bound to the current cue order.
+    #[must_use]
+    pub const fn cue_roles(&self) -> &RenderedCueRoles {
+        &self.cue_roles
+    }
+
+    /// Stable receipt-ready native layout evidence for every rendered text cue.
+    #[must_use]
+    pub fn text_fit_summary(&self) -> &[CueTextFitSummary] {
+        &self.text_fit_summary
+    }
+
+    /// Retain complete native summaries after every rendered text cue has
+    /// passed its source and output-destination postconditions.
+    pub(crate) fn retain_text_fit_summary(
+        &mut self,
+        summaries: Vec<CueTextFitSummary>,
+    ) -> Result<(), RenderError> {
+        if summaries
+            .windows(2)
+            .any(|pair| pair[0].cue_index() >= pair[1].cue_index())
+        {
+            return Err(RenderError::InvalidTextFitEvidenceOrder);
+        }
+        if let Some(summary) = summaries
+            .iter()
+            .find(|summary| summary.cue_index() >= self.presentation.cues.len())
+        {
+            return Err(RenderError::TextFitEvidenceCueUnavailable {
+                cue_index: summary.cue_index(),
+            });
+        }
+        if let Some(summary) = summaries
+            .iter()
+            .find(|summary| summary.destination_count() == 0)
+        {
+            return Err(RenderError::MissingTextFitDestinationEvidence {
+                cue_index: summary.cue_index(),
+            });
+        }
+        self.text_fit_summary = summaries;
+        Ok(())
+    }
+
+    /// Atomically replace the native document only when its semantic role
+    /// mapping remains valid.
+    ///
+    /// A detached candidate lets fallible transforms complete before this
+    /// boundary. Cue identity/order and the checked operator traversal must
+    /// remain exact while [`RenderedCueRoles`] is live.
+    pub(crate) fn replace_preserving_role_mapping(
+        &mut self,
+        candidate: rv_data::Presentation,
+    ) -> Result<(), RenderError> {
+        let cue_sequence = |presentation: &rv_data::Presentation| {
+            presentation
+                .cues
+                .iter()
+                .map(|cue| cue.uuid.as_ref().map(|uuid| uuid.string.clone()))
+                .collect::<Vec<_>>()
+        };
+        if cue_sequence(&self.presentation) != cue_sequence(&candidate) {
+            return Err(RenderError::RoleCueSequenceChanged);
+        }
+        let current_traversal =
+            super::arrangement::checked_operator_cue_indices(&self.presentation)?;
+        let candidate_traversal = super::arrangement::checked_operator_cue_indices(&candidate)?;
+        if current_traversal != candidate_traversal {
+            return Err(RenderError::RoleOperatorTraversalChanged);
+        }
+        for cue_index in self
+            .text_fit_summary
+            .iter()
+            .map(CueTextFitSummary::cue_index)
+        {
+            let current = self
+                .presentation
+                .cues
+                .get(cue_index)
+                .ok_or(RenderError::TextFitEvidenceCueUnavailable { cue_index })?;
+            let replacement = candidate
+                .cues
+                .get(cue_index)
+                .ok_or(RenderError::TextFitEvidenceCueUnavailable { cue_index })?;
+            if cue_text_payloads(current) != cue_text_payloads(replacement) {
+                return Err(RenderError::MeasuredCueTextChanged { cue_index });
+            }
+            if cue_text_elements(current) != cue_text_elements(replacement) {
+                return Err(RenderError::MeasuredCueLayoutChanged { cue_index });
+            }
+            if cue_macro_payloads(current) != cue_macro_payloads(replacement) {
+                return Err(RenderError::MeasuredCueDestinationChanged { cue_index });
+            }
+        }
+        self.presentation = candidate;
+        Ok(())
+    }
+
+    /// Consume the role-indexed render after all role transitions are applied.
+    pub(crate) fn into_presentation(self) -> rv_data::Presentation {
+        self.presentation
+    }
 }
 
 /// Render one checked specification from immutable reviewed assets.
@@ -558,7 +750,49 @@ pub fn render_presentation(
     Ok(RenderedPresentation {
         presentation,
         cue_roles,
+        text_fit_summary: Vec::new(),
     })
+}
+
+fn cue_text_payloads(cue: &rv_data::Cue) -> Vec<Vec<u8>> {
+    cue_text_elements(cue)
+        .into_iter()
+        .filter_map(|element| element.text.as_ref())
+        .map(|text| text.rtf_data.clone())
+        .collect()
+}
+
+fn cue_text_elements(cue: &rv_data::Cue) -> Vec<&rv_data::graphics::Element> {
+    cue.actions
+        .iter()
+        .filter_map(|action| match action.action_type_data.as_ref() {
+            Some(rv_data::action::ActionTypeData::Slide(slide)) => match slide.slide.as_ref() {
+                Some(rv_data::action::slide_type::Slide::Presentation(slide)) => Some(slide),
+                _ => None,
+            },
+            _ => None,
+        })
+        .flat_map(|slide| {
+            slide
+                .base_slide
+                .iter()
+                .flat_map(|base| base.elements.iter())
+                .filter_map(|element| element.element.as_ref())
+                .filter(|element| element.text.is_some())
+        })
+        .collect()
+}
+
+fn cue_macro_payloads(cue: &rv_data::Cue) -> Vec<Option<rv_data::CollectionElementType>> {
+    cue.actions
+        .iter()
+        .filter_map(|action| match action.action_type_data.as_ref() {
+            Some(rv_data::action::ActionTypeData::Macro(macro_action)) => {
+                Some(macro_action.identification.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn native_empty_timeline() -> rv_data::presentation::Timeline {

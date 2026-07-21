@@ -9,7 +9,7 @@ use std::{
 };
 
 use super::generated::rv_data::{
-    self, action, graphics, media, url, AlphaType, FileProperties, Media, Url, Uuid,
+    self, action, graphics, media, url, AlphaType, FileProperties, Media, Uuid,
 };
 use action::LayerType;
 use image::ImageFormat;
@@ -18,6 +18,9 @@ use sha2::{Digest, Sha256};
 /// Failure to resolve a configured background image inside the project bundle.
 #[derive(Debug, thiserror::Error)]
 pub enum BackgroundImageError {
+    /// The selected/default operator traversal was unsafe for mutation.
+    #[error(transparent)]
+    OperatorTraversal(#[from] crate::propresenter::arrangement::OperatorTraversalError),
     /// The project data root could not be canonicalized.
     #[error("failed to resolve project data root {path}: {source}")]
     DataRoot {
@@ -94,6 +97,9 @@ pub enum OperatorEntryBackgroundError {
     /// The reviewed image bytes were not a usable background.
     #[error(transparent)]
     Image(#[from] BackgroundImageError),
+    /// The arrangement-less cue-group traversal was unsafe for mutation.
+    #[error(transparent)]
+    OperatorTraversal(#[from] crate::propresenter::arrangement::OperatorTraversalError),
     /// The presentation had native arrangements and requires exact selection.
     #[error("arrangement-less background update received {count} native arrangements")]
     HasArrangements {
@@ -209,13 +215,7 @@ fn make_background_media_action_with_dimensions(
     dimensions: (u32, u32),
     propresenter_root: &Path,
 ) -> rv_data::Action {
-    let abs_string = background_file_url(image_path);
-    let relative_file_path = propresenter_relative_file_path(image_path, propresenter_root);
-    let media_url = Url {
-        platform: rv_data::url::Platform::Macos as i32,
-        storage: Some(url::Storage::AbsoluteString(abs_string)),
-        relative_file_path,
-    };
+    let media_url = super::native_url::local_file_url(image_path, propresenter_root);
     let filename = image_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -318,10 +318,11 @@ pub(crate) fn add_reviewed_background_to_first_cue(
     propresenter_root: &Path,
 ) -> Result<(), BackgroundImageError> {
     let dimensions = validate_background_image_bytes(image_path, image_data)?;
-    let cue_idx = first_operator_cue_index(presentation).unwrap_or(0);
-    let Some(first_cue) = presentation.cues.get_mut(cue_idx) else {
-        return Ok(());
-    };
+    let cue_idx = crate::propresenter::arrangement::checked_operator_cue_indices(presentation)?
+        .first()
+        .copied()
+        .ok_or(crate::propresenter::arrangement::OperatorTraversalError::EmptyTraversal)?;
+    let first_cue = &mut presentation.cues[cue_idx];
     ensure_background_on_cue_with_dimensions(first_cue, image_path, dimensions, propresenter_root);
     Ok(())
 }
@@ -385,7 +386,8 @@ pub(crate) fn replace_arrangement_entry_backgrounds(
 ///
 /// This is deliberately separate from [`replace_arrangement_entry_backgrounds`]
 /// so callers cannot silently discard an available native arrangement. A stale
-/// selected-arrangement reference is cleared because no valid selection exists.
+/// selected-arrangement reference is rejected rather than interpreted as raw
+/// cue order.
 /// Existing background wrappers retain their identity and position; insertion
 /// is deterministic and the operation is copy-on-write.
 pub(crate) fn replace_operator_entry_background(
@@ -400,8 +402,10 @@ pub(crate) fn replace_operator_entry_background(
         });
     }
     let dimensions = validate_background_image_bytes(image_path, image_data)?;
-    let cue_index = first_operator_cue_index(presentation)
-        .ok_or(OperatorEntryBackgroundError::MissingOperatorCue)?;
+    let cue_index = crate::propresenter::arrangement::checked_operator_cue_indices(presentation)?
+        .first()
+        .copied()
+        .ok_or(crate::propresenter::arrangement::OperatorTraversalError::EmptyTraversal)?;
     let cue_uuid = presentation
         .cues
         .get(cue_index)
@@ -441,48 +445,40 @@ fn checked_arrangement_entries(
 
     let mut entries = Vec::new();
     for (arrangement_index, arrangement) in presentation.arrangements.iter().enumerate() {
-        let Some(native_uuid) = arrangement
-            .uuid
-            .as_ref()
-            .and_then(|native| uuid::Uuid::parse_str(&native.string).ok())
-        else {
-            return Err(ArrangementBackgroundError::UnresolvedArrangementEntry {
-                index: arrangement_index,
-                name: arrangement.name.clone(),
-            });
-        };
-        if presentation
-            .arrangements
-            .iter()
-            .filter_map(|candidate| candidate.uuid.as_ref())
-            .filter_map(|candidate| uuid::Uuid::parse_str(&candidate.string).ok())
-            .filter(|candidate| *candidate == native_uuid)
-            .count()
-            != 1
-        {
-            return Err(ArrangementBackgroundError::AmbiguousArrangement {
-                uuid: native_uuid,
-                name: arrangement.name.clone(),
-            });
-        }
-        if crate::propresenter::arrangement::selectable_arrangement_uuid(presentation, arrangement)
-            .is_none()
-        {
-            return Err(ArrangementBackgroundError::UnresolvedArrangementEntry {
-                index: arrangement_index,
-                name: arrangement.name.clone(),
-            });
-        }
-        let Some(cue_index) = crate::propresenter::arrangement::resolved_arrangement_cue_indices(
+        let resolved = match crate::propresenter::arrangement::selectable_arrangement(
             presentation,
             arrangement,
-        )
-        .and_then(|indices| indices.first().copied()) else {
-            return Err(ArrangementBackgroundError::UnresolvedArrangementEntry {
-                index: arrangement_index,
-                name: arrangement.name.clone(),
-            });
+        ) {
+            Ok(resolved) => resolved,
+            Err(crate::propresenter::arrangement::ArrangementSelectionError::Ambiguous {
+                ..
+            }) => {
+                let Some(uuid) = arrangement
+                    .uuid
+                    .as_ref()
+                    .and_then(|native| uuid::Uuid::parse_str(&native.string).ok())
+                else {
+                    return Err(ArrangementBackgroundError::UnresolvedArrangementEntry {
+                        index: arrangement_index,
+                        name: arrangement.name.clone(),
+                    });
+                };
+                return Err(ArrangementBackgroundError::AmbiguousArrangement {
+                    uuid,
+                    name: arrangement.name.clone(),
+                });
+            }
+            Err(
+                crate::propresenter::arrangement::ArrangementSelectionError::Unavailable
+                | crate::propresenter::arrangement::ArrangementSelectionError::Incomplete,
+            ) => {
+                return Err(ArrangementBackgroundError::UnresolvedArrangementEntry {
+                    index: arrangement_index,
+                    name: arrangement.name.clone(),
+                });
+            }
         };
+        let cue_index = resolved.entry_cue_index();
         let Some(cue_uuid) = presentation
             .cues
             .get(cue_index)
@@ -516,46 +512,31 @@ fn checked_selected_native_uuid(
     selected_uuid: &uuid::Uuid,
     selected_name: &str,
 ) -> Result<rv_data::Uuid, ArrangementBackgroundError> {
-    let mut matches = presentation.arrangements.iter().filter(|arrangement| {
-        arrangement
-            .uuid
-            .as_ref()
-            .and_then(|native| uuid::Uuid::parse_str(&native.string).ok())
-            .as_ref()
-            == Some(selected_uuid)
-    });
-    let selected = match (matches.next(), matches.next()) {
-        (None, _) => {
-            return Err(ArrangementBackgroundError::UnavailableArrangement {
-                uuid: *selected_uuid,
-                name: selected_name.to_string(),
-            });
-        }
-        (Some(arrangement), None) => arrangement,
-        (Some(_), Some(_)) => {
-            return Err(ArrangementBackgroundError::AmbiguousArrangement {
-                uuid: *selected_uuid,
-                name: selected_name.to_string(),
-            });
-        }
+    use crate::propresenter::arrangement::{
+        selectable_arrangement_by_identity, ArrangementSelectionError,
     };
-    if selected.name != selected_name
-        || crate::propresenter::arrangement::selectable_arrangement_uuid(presentation, selected)
-            .as_ref()
-            != Some(selected_uuid)
-    {
-        return Err(ArrangementBackgroundError::UnavailableArrangement {
+
+    let resolved = selectable_arrangement_by_identity(presentation, selected_uuid, selected_name)
+        .map_err(|error| match error {
+        ArrangementSelectionError::Ambiguous { .. } => {
+            ArrangementBackgroundError::AmbiguousArrangement {
+                uuid: *selected_uuid,
+                name: selected_name.to_string(),
+            }
+        }
+        ArrangementSelectionError::Unavailable | ArrangementSelectionError::Incomplete => {
+            ArrangementBackgroundError::UnavailableArrangement {
+                uuid: *selected_uuid,
+                name: selected_name.to_string(),
+            }
+        }
+    })?;
+    resolved.native_uuid().cloned().ok_or_else(|| {
+        ArrangementBackgroundError::UnavailableArrangement {
             uuid: *selected_uuid,
             name: selected_name.to_string(),
-        });
-    }
-    selected
-        .uuid
-        .clone()
-        .ok_or_else(|| ArrangementBackgroundError::UnavailableArrangement {
-            uuid: *selected_uuid,
-            name: selected_name.to_string(),
-        })
+        }
+    })
 }
 
 fn replace_backgrounds_on_cue(
@@ -600,7 +581,7 @@ fn canonical_replacement_action(
     dimensions: (u32, u32),
     propresenter_root: &Path,
 ) -> rv_data::Action {
-    let desired_url = background_file_url(image_path);
+    let desired_url = super::native_url::canonical_file_url(image_path);
     let mut canonical =
         make_background_media_action_with_dimensions(image_path, dimensions, propresenter_root);
     let action_uuid = deterministic_background_uuid(cue_uuid, &desired_url, b"action");
@@ -655,8 +636,10 @@ fn deterministic_background_uuid(cue_uuid: &str, image_url: &str, role: &[u8]) -
     }
 }
 
-/// Return the cue index `ProPresenter` operators see first for the selected/default
-/// arrangement, falling back to the first grouped cue.
+/// Return the cue index `ProPresenter` operators appear to see first.
+///
+/// This is best-effort inspection. Native mutation must use
+/// `arrangement::checked_operator_cue_indices` instead.
 pub fn first_operator_cue_index(presentation: &rv_data::Presentation) -> Option<usize> {
     crate::propresenter::arrangement::operator_cue_indices(presentation)
         .into_iter()
@@ -680,7 +663,7 @@ fn ensure_background_on_cue_with_dimensions(
     dimensions: (u32, u32),
     propresenter_root: &Path,
 ) -> bool {
-    let desired_url = background_file_url(image_path);
+    let desired_url = super::native_url::canonical_file_url(image_path);
     let existing: Vec<_> = cue
         .actions
         .iter()
@@ -701,49 +684,6 @@ fn ensure_background_on_cue_with_dimensions(
         make_background_media_action_with_dimensions(image_path, dimensions, propresenter_root);
     cue.actions.push(bg_action);
     true
-}
-
-fn background_file_url(image_path: &Path) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let abs_path = image_path
-        .canonicalize()
-        .unwrap_or_else(|_| image_path.to_path_buf());
-    let mut encoded = String::with_capacity(abs_path.as_os_str().len() + 16);
-    for byte in abs_path.to_string_lossy().bytes() {
-        match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'/'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'~'
-            | b','
-            | b'('
-            | b')'
-            | b'\'' => encoded.push(char::from(byte)),
-            _ => {
-                encoded.push('%');
-                encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-                encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-            }
-        }
-    }
-    format!("file://{encoded}")
-}
-
-fn propresenter_relative_file_path(
-    image_path: &Path,
-    propresenter_root: &Path,
-) -> Option<url::RelativeFilePath> {
-    let root = propresenter_root.canonicalize().ok()?;
-    let image = image_path.canonicalize().ok()?;
-    let relative = image.strip_prefix(root).ok()?;
-    Some(url::RelativeFilePath::Local(url::LocalRelativePath {
-        root: url::local_relative_path::Root::Show as i32,
-        path: relative.to_string_lossy().replace('\\', "/"),
-    }))
 }
 
 fn background_media_url(action: &rv_data::Action) -> Option<&str> {
@@ -986,6 +926,38 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_background_rejects_malformed_selected_arrangement_atomically() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("background.png");
+        let reviewed = encoded_image(ImageFormat::Png, 3, 2);
+        std::fs::write(&path, &reviewed).expect("write image");
+        let selected = "11111111-1111-4111-8111-111111111111";
+        let mut presentation = rv_data::Presentation {
+            selected_arrangement: Some(native_uuid(selected)),
+            arrangements: vec![arrangement(selected, "Default", "missing-group")],
+            cues: vec![cue("cue")],
+            ..rv_data::Presentation::default()
+        };
+        let original = presentation.clone();
+
+        let error = add_reviewed_background_to_first_cue(
+            &mut presentation,
+            &path,
+            &reviewed,
+            directory.path(),
+        )
+        .expect_err("background mutation must not use inspection fallback order");
+
+        assert!(matches!(
+            error,
+            BackgroundImageError::OperatorTraversal(
+                crate::propresenter::arrangement::OperatorTraversalError::SelectedArrangementIncomplete { ref name }
+            ) if name == "Default"
+        ));
+        assert_eq!(presentation, original);
+    }
+
+    #[test]
     fn fully_decodable_backgrounds_report_nonzero_dimensions() {
         for (path, bytes, expected) in [
             (
@@ -1051,13 +1023,14 @@ mod tests {
 
     #[test]
     fn adds_background_to_arrangement_first_cue_not_raw_first_cue() {
+        const ARRANGEMENT_UUID: &str = "11111111-1111-4111-8111-111111111111";
         let mut presentation = rv_data::Presentation {
             selected_arrangement: Some(rv_data::Uuid {
-                string: "arr".to_string(),
+                string: ARRANGEMENT_UUID.to_string(),
             }),
             arrangements: vec![rv_data::presentation::Arrangement {
                 uuid: Some(rv_data::Uuid {
-                    string: "arr".to_string(),
+                    string: ARRANGEMENT_UUID.to_string(),
                 }),
                 name: "Default".to_string(),
                 group_identifiers: vec![
@@ -1200,7 +1173,7 @@ mod tests {
             assert_eq!(backgrounds.len(), 1);
             assert_eq!(
                 background_media_url(backgrounds[0]),
-                Some(background_file_url(&image).as_str())
+                Some(crate::propresenter::native_url::canonical_file_url(&image).as_str())
             );
         }
 
@@ -1372,7 +1345,6 @@ mod tests {
             ),
         ];
         let mut presentation = rv_data::Presentation {
-            selected_arrangement: Some(native_uuid("stale-selection")),
             cue_groups: vec![
                 group("Entry", "entry-group", "operator-entry"),
                 group("Other", "other-group", "raw-first"),
@@ -1402,7 +1374,7 @@ mod tests {
         assert_eq!(action_ids[2], "operator-macro");
         assert_eq!(
             background_media_url(background_actions(&presentation.cues[1])[0]),
-            Some(background_file_url(&image).as_str())
+            Some(crate::propresenter::native_url::canonical_file_url(&image).as_str())
         );
 
         let once = presentation.clone();
@@ -1414,6 +1386,33 @@ mod tests {
         )
         .expect("reapplying is valid"));
         assert_eq!(presentation, once);
+    }
+
+    #[test]
+    fn arrangementless_restyle_rejects_a_stale_selection_atomically() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut presentation = rv_data::Presentation {
+            selected_arrangement: Some(native_uuid("stale-selection")),
+            cues: vec![cue("operator-entry")],
+            ..rv_data::Presentation::default()
+        };
+        let before = presentation.clone();
+
+        let error = replace_operator_entry_background(
+            &mut presentation,
+            &directory.path().join("new.png"),
+            &encoded_image(ImageFormat::Png, 3, 2),
+            directory.path(),
+        )
+        .expect_err("stale selected identity must not fall through to raw cue order");
+
+        assert!(matches!(
+            error,
+            OperatorEntryBackgroundError::OperatorTraversal(
+                crate::propresenter::arrangement::OperatorTraversalError::SelectedArrangementUnavailable { ref identifier }
+            ) if identifier == "stale-selection"
+        ));
+        assert_eq!(presentation, before);
     }
 
     #[test]

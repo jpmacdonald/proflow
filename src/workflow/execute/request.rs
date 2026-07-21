@@ -2,20 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::planning_center::types::{Plan, Service};
-use crate::propresenter::package::PlaylistPackageMode;
-use crate::propresenter::playlist::PlaylistMediaAsset;
+use crate::planning_center::PlanSnapshot;
+use crate::propresenter::playlist::PlaylistExportIntent;
 
 use super::overrides::{validate_request_edits, EntryOverride};
 use super::{BuildServiceError, ServiceBuildExecutor};
-
-const PLAN_METADATA_LOOKAHEAD_DAYS: i64 = 60;
-
-#[derive(Debug, PartialEq, Eq)]
-struct ResolvedPlanIdentity {
-    service_name: String,
-    default_playlist_name: String,
-}
 
 /// Input arguments for the shared service build workflow.
 ///
@@ -34,10 +25,8 @@ pub struct BuildRequest {
     pub skip_output_keys: Vec<String>,
     /// Reviewed per-entry decisions keyed by stable plan output identity.
     pub overrides: Vec<EntryOverride>,
-    /// Whether the playlist references library files or embeds portable assets.
-    pub playlist_package_mode: PlaylistPackageMode,
-    /// Explicit media sources to embed in portable exports.
-    pub media_assets: Vec<PlaylistMediaAsset>,
+    /// Complete linked-library or portable-import intent.
+    pub playlist_export: PlaylistExportIntent,
 }
 
 /// Fully resolved request identity accepted by the review phase.
@@ -46,8 +35,7 @@ pub(super) struct BoundBuildRequest {
     pub(super) plan_id: String,
     pub(super) service_name: String,
     pub(super) playlist_name: String,
-    pub(super) playlist_package_mode: PlaylistPackageMode,
-    pub(super) media_assets: Vec<PlaylistMediaAsset>,
+    pub(super) playlist_export: PlaylistExportIntent,
 }
 
 impl TryFrom<BuildRequest> for BoundBuildRequest {
@@ -72,29 +60,25 @@ impl TryFrom<BuildRequest> for BoundBuildRequest {
                     field: "playlist_name",
                 })?,
         )?;
-        if matches!(
-            request.playlist_package_mode,
-            PlaylistPackageMode::LibraryLocal
-        ) && !request.media_assets.is_empty()
-        {
-            return Err(BuildServiceError::message(
-                "media_assets require export_portable package mode",
-            ));
-        }
-        let media_assets = request
-            .media_assets
-            .into_iter()
-            .map(|mut asset| {
-                asset.source_path = canonical_media_source(&asset.source_path)?;
-                Ok(asset)
-            })
-            .collect::<Result<Vec<_>, BuildServiceError>>()?;
+        let playlist_export = match request.playlist_export {
+            PlaylistExportIntent::LibraryLinks => PlaylistExportIntent::LibraryLinks,
+            PlaylistExportIntent::PortableImport {
+                additional_media_assets,
+            } => PlaylistExportIntent::portable_import(
+                additional_media_assets
+                    .into_iter()
+                    .map(|mut asset| {
+                        asset.source_path = canonical_media_source(&asset.source_path)?;
+                        Ok(asset)
+                    })
+                    .collect::<Result<Vec<_>, BuildServiceError>>()?,
+            ),
+        };
         Ok(Self {
             plan_id,
             service_name,
             playlist_name,
-            playlist_package_mode: request.playlist_package_mode,
-            media_assets,
+            playlist_export,
         })
     }
 }
@@ -148,27 +132,6 @@ pub(super) fn canonical_media_source(path: &Path) -> Result<PathBuf, BuildServic
     }
 }
 
-/// Resolve a presentation's media locator for a portable export.
-///
-/// Copied native libraries retain absolute paths from their source workstation.
-/// When that path is unavailable, the active workspace's canonical Media/Assets
-/// file with the exact same filename supplies the bytes embedded in the package.
-pub(super) fn portable_media_source(
-    path: &Path,
-    propresenter_root: &Path,
-) -> Result<PathBuf, BuildServiceError> {
-    match canonical_media_source(path) {
-        Ok(path) => return Ok(path),
-        Err(BuildServiceError::MediaSource { .. }) => {}
-        Err(error) => return Err(error),
-    }
-    let Some(file_name) = path.file_name() else {
-        return canonical_media_source(path);
-    };
-    let workspace_asset = propresenter_root.join("Media/Assets").join(file_name);
-    canonical_media_source(&workspace_asset).or_else(|_| canonical_media_source(path))
-}
-
 pub(super) fn canonical_presentation_source(path: &Path) -> Result<PathBuf, BuildServiceError> {
     let canonical =
         path.canonicalize()
@@ -190,204 +153,37 @@ pub(super) fn canonical_presentation_source(path: &Path) -> Result<PathBuf, Buil
 }
 
 impl ServiceBuildExecutor<'_> {
-    pub(super) async fn resolve_request_identity(
-        &self,
-        request: &BuildRequest,
+    pub(super) fn bind_request_identity(
+        request: BuildRequest,
+        source: &PlanSnapshot,
     ) -> Result<BuildRequest, BuildServiceError> {
         validate_request_edits(&request.skip_output_keys, &request.overrides)?;
-        let mut resolved = request.clone();
-        let plan_id = required_identity("plan_id", resolved.plan_id.clone())?;
-        let (services, plans) = self
-            .pco_client
-            .get_upcoming_services(PLAN_METADATA_LOOKAHEAD_DAYS)
-            .await
-            .map_err(|error| {
-                BuildServiceError::message(format!(
-                    "could not resolve metadata for plan {plan_id}: {error}"
-                ))
-            })?;
-        let identity = resolve_plan_identity(
-            &services,
-            &plans,
-            &plan_id,
-            resolved.service_name.as_deref(),
-        )?;
-        let playlist_name = if let Some(name) = resolved.playlist_name.clone() {
-            required_identity("playlist_name", name)?
-        } else {
-            identity.default_playlist_name
-        };
-        resolved.plan_id = plan_id;
-        resolved.service_name = Some(identity.service_name);
-        resolved.playlist_name = Some(playlist_name);
-        Ok(resolved)
-    }
-}
-
-fn resolve_plan_identity(
-    services: &[Service],
-    plans: &[Plan],
-    plan_id: &str,
-    supplied_service_name: Option<&str>,
-) -> Result<ResolvedPlanIdentity, BuildServiceError> {
-    let plan = plans
-        .iter()
-        .find(|plan| plan.id == plan_id)
-        .ok_or_else(|| BuildServiceError::PlanNotFound {
-            plan_id: plan_id.to_string(),
-            days_ahead: PLAN_METADATA_LOOKAHEAD_DAYS,
-        })?;
-    let service_name = services
-        .iter()
-        .find(|service| service.id == plan.service_id)
-        .map_or_else(|| plan.service_name.clone(), |service| service.name.clone());
-    if let Some(supplied) = supplied_service_name {
-        required_identity("service_name", supplied.to_string())?;
-        if supplied != service_name {
-            return Err(BuildServiceError::ServiceNameMismatch {
-                plan_id: plan_id.to_string(),
-                supplied: supplied.to_string(),
-                actual: service_name,
+        let mut resolved = request;
+        let plan_id = required_identity("plan_id", resolved.plan_id)?;
+        if plan_id != source.plan_id() {
+            return Err(BuildServiceError::PlanningCenterSnapshotIdentity {
+                requested: plan_id,
+                captured: source.plan_id().to_string(),
             });
         }
-    }
-    Ok(ResolvedPlanIdentity {
-        default_playlist_name: format!(
-            "{} - {}",
-            plan.date.format("%B %-d, %Y"),
-            playlist_service_label(&service_name)
-        ),
-        service_name,
-    })
-}
-
-fn playlist_service_label(service_name: &str) -> String {
-    let Some((time, description)) = service_name.split_once(char::is_whitespace) else {
-        return service_name.to_string();
-    };
-    let Some((clock, period)) = time
-        .strip_suffix("am")
-        .map(|clock| (clock, "am"))
-        .or_else(|| time.strip_suffix("pm").map(|clock| (clock, "pm")))
-    else {
-        return service_name.to_string();
-    };
-    let Some((hour, minute)) = clock.split_once(':') else {
-        return service_name.to_string();
-    };
-    let Ok(hour) = hour.parse::<u8>() else {
-        return service_name.to_string();
-    };
-    if !(1..=12).contains(&hour)
-        || minute.len() != 2
-        || !minute.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return service_name.to_string();
-    }
-    let compact_time = if minute == "00" {
-        format!("{hour}{period}")
-    } else {
-        format!("{hour}{minute}{period}")
-    };
-    let description = description.trim();
-    if description.is_empty() {
-        return compact_time;
-    }
-    let mut characters = description.chars();
-    let Some(first) = characters.next() else {
-        return compact_time;
-    };
-    format!(
-        "{compact_time} {}{}",
-        first.to_uppercase(),
-        characters.as_str()
-    )
-}
-
-#[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
-mod tests {
-    use chrono::{TimeZone, Utc};
-
-    use super::*;
-    use tempfile::tempdir;
-
-    fn plan() -> Plan {
-        Plan {
-            id: "plan-1".to_string(),
-            service_id: "service-1".to_string(),
-            service_name: "stale fallback".to_string(),
-            date: Utc
-                .with_ymd_and_hms(2026, 7, 19, 14, 0, 0)
-                .single()
-                .expect("valid date"),
-            title: "July 19".to_string(),
-            items: Vec::new(),
+        if let Some(supplied) = resolved.service_name.as_deref() {
+            validate_identity("service_name", supplied)?;
+            if supplied != source.service_name() {
+                return Err(BuildServiceError::ServiceNameMismatch {
+                    plan_id: source.plan_id().to_string(),
+                    supplied: supplied.to_string(),
+                    actual: source.service_name().to_string(),
+                });
+            }
         }
-    }
-
-    #[test]
-    fn plan_identity_comes_from_planning_center_catalog() {
-        let services = [Service {
-            id: "service-1".to_string(),
-            name: "Sunday Morning".to_string(),
-        }];
-        let identity =
-            resolve_plan_identity(&services, &[plan()], "plan-1", None).expect("catalog identity");
-
-        assert_eq!(identity.service_name, "Sunday Morning");
-        assert_eq!(
-            identity.default_playlist_name,
-            "July 19, 2026 - Sunday Morning"
-        );
-    }
-
-    #[test]
-    fn caller_service_name_is_only_an_exact_assertion() {
-        let services = [Service {
-            id: "service-1".to_string(),
-            name: "Sunday Morning".to_string(),
-        }];
-        let error = resolve_plan_identity(&services, &[plan()], "plan-1", Some("Sunday Mornng"))
-            .expect_err("typo cannot select service-group policy");
-
-        assert!(matches!(
-            error,
-            BuildServiceError::ServiceNameMismatch { actual, .. }
-                if actual == "Sunday Morning"
-        ));
-    }
-
-    #[test]
-    fn playlist_service_labels_match_the_operator_naming_convention() {
-        assert_eq!(
-            playlist_service_label("9:00am contemporary"),
-            "9am Contemporary"
-        );
-        assert_eq!(
-            playlist_service_label("10:30am traditional"),
-            "1030am Traditional"
-        );
-        assert_eq!(playlist_service_label("Sunday Morning"), "Sunday Morning");
-    }
-
-    #[test]
-    fn portable_media_rebases_a_stale_workstation_path_to_the_active_workspace() {
-        let root = tempdir().expect("workspace root");
-        let assets = root.path().join("Media/Assets");
-        std::fs::create_dir_all(&assets).expect("media assets directory");
-        let local = assets.join("Announcement.jpg");
-        std::fs::write(&local, b"image").expect("local media");
-
-        let resolved = portable_media_source(
-            Path::new("/Users/another/ProPresenter/Media/Assets/Announcement.jpg"),
-            root.path(),
-        )
-        .expect("exact active-workspace asset should resolve");
-
-        assert_eq!(
-            resolved,
-            local.canonicalize().expect("canonical local media")
-        );
+        let playlist_name = if let Some(name) = resolved.playlist_name.take() {
+            required_identity("playlist_name", name)?
+        } else {
+            source.default_playlist_name().to_string()
+        };
+        resolved.plan_id = source.plan_id().to_string();
+        resolved.service_name = Some(source.service_name().to_string());
+        resolved.playlist_name = Some(playlist_name);
+        Ok(resolved)
     }
 }

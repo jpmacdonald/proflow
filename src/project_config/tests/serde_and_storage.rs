@@ -118,9 +118,9 @@ fn parse_v4_config() {
         .presentation_types
         .contains_key("liturgical_weekly"));
     assert!(config.people().contains_key("Robert"));
-    assert_eq!(config.item_rules().len(), 2);
-    assert_eq!(config.item_rules()[0].id, "call_to_worship");
-    let target_file = match &config.item_rules()[0].outcome {
+    assert_eq!(config.as_raw().item_rules.len(), 2);
+    assert_eq!(config.as_raw().item_rules[0].id, "call_to_worship");
+    let target_file = match &config.as_raw().item_rules[0].outcome {
         ItemRuleOutcome::UseType { target, .. } => {
             target.as_ref().and_then(TargetSpec::library_file)
         }
@@ -199,7 +199,7 @@ fn target_spec_requires_exactly_one_target_kind() {
 
 #[test]
 fn parses_tagged_single_and_split_display_bindings() {
-    let json = r#"
+    let json = r##"
         {
           "version": 4,
           "cue_roles": {
@@ -207,7 +207,13 @@ fn parses_tagged_single_and_split_display_bindings() {
               "slide": "Information (Projectors)"
             },
             "content": {
-              "slide": "Scripture (Projectors)"
+              "slide": "Scripture (Projectors)",
+              "enter_macro": "Scripture/Prayer",
+              "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+              "speaker_colors": {
+                "leader": "#FEDB4F",
+                "audience": "#FFFFFF"
+              }
             }
           },
           "presentation_types": {
@@ -233,7 +239,7 @@ fn parses_tagged_single_and_split_display_bindings() {
             }
           }
         }
-        "#;
+        "##;
 
     let config = parse_project_config_str(json).expect("tagged bindings should parse");
     assert!(matches!(
@@ -412,15 +418,15 @@ fn typed_rule_outcomes_round_trip_through_flat_json() {
         .expect("starter config should parse");
 
     assert!(matches!(
-        &config.item_rules()[0].outcome,
+        &config.as_raw().item_rules[0].outcome,
         ItemRuleOutcome::Action(RuleAction::Skip { .. })
     ));
     assert!(matches!(
-        &config.item_rules()[1].outcome,
+        &config.as_raw().item_rules[1].outcome,
         ItemRuleOutcome::UseType { type_key, .. } if type_key == "song"
     ));
     assert!(matches!(
-        &config.item_rules()[3].outcome,
+        &config.as_raw().item_rules[3].outcome,
         ItemRuleOutcome::Expand(expansion) if expansion.iter().count() == 2
     ));
 
@@ -435,6 +441,36 @@ fn typed_rule_outcomes_round_trip_through_flat_json() {
     );
 
     parse_project_config_str(&serialized).expect("serialized config should parse again");
+}
+
+#[test]
+fn item_rule_tier_is_explicit_and_primary_is_omitted() {
+    let config = parse_project_config_str(
+        r#"{
+          "version": 4,
+          "item_rules": [
+            {
+              "id": "specific",
+              "match": { "title_prefix": ["sermon"] },
+              "action": { "kind": "skip", "reason": "specific" }
+            },
+            {
+              "id": "catch_all",
+              "tier": "catch_all",
+              "match": { "category": "text" },
+              "action": { "kind": "skip", "reason": "fallback" }
+            }
+          ]
+        }"#,
+    )
+    .expect("tiered rules should parse");
+
+    assert_eq!(config.as_raw().item_rules[0].tier, RuleTier::Primary);
+    assert_eq!(config.as_raw().item_rules[1].tier, RuleTier::CatchAll);
+
+    let value = serde_json::to_value(config.as_raw()).expect("config should serialize");
+    assert!(value["item_rules"][0].get("tier").is_none());
+    assert_eq!(value["item_rules"][1]["tier"], "catch_all");
 }
 
 #[test]

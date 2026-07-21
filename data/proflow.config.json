@@ -10,6 +10,7 @@
     "theme": "VPC Theme",
     "background": "default",
     "bible_version": "NRSVue",
+    "speaker_fallback_rule": "lords_prayer",
     "presentation_size": {
       "width": 1920,
       "height": 1080
@@ -85,6 +86,24 @@
         ]
       },
       "description": "Graphic presentation: preserve native media/backgrounds and enforce Graphics on entry"
+    },
+    "communion_graphic_static": {
+      "kind": "graphic",
+      "content_source": "static",
+      "output_strategy": "restyle_existing",
+      "arrangement": "Simple",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": {
+              "kind": "operator_cue",
+              "index": 0
+            },
+            "enter_macro": "Graphics"
+          }
+        ]
+      },
+      "description": "One-slide Communion graphic selected from the native Simple arrangement"
     },
     "content_nametag": {
       "kind": "nametag",
@@ -172,6 +191,13 @@
       },
       "description": "Single native title cue with the managed background"
     },
+    "multi_nametag_static": {
+      "kind": "nametag",
+      "content_source": "static",
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "description": "Native multi-slide nametag presentation with existing title macro transitions preserved"
+    },
     "leader_liturgy_static": {
       "kind": "liturgy",
       "content_source": "static",
@@ -235,6 +261,32 @@
         ]
       },
       "description": "Arrangementless native song with a title cue followed by lyrics"
+    },
+    "titled_anthem_static": {
+      "kind": "song",
+      "content_source": "static",
+      "output_strategy": "restyle_existing",
+      "background": "default",
+      "arrangement": "[Anthem]",
+      "macro_transitions": {
+        "regions": [
+          {
+            "selector": {
+              "kind": "operator_cue",
+              "index": 0
+            },
+            "enter_macro": "Name Tag/Title"
+          },
+          {
+            "selector": {
+              "kind": "operator_cue",
+              "index": 1
+            },
+            "enter_macro": "Song"
+          }
+        ]
+      },
+      "description": "Native anthem arrangement with a title cue followed by lyrics"
     },
     "doxology_with_prayer": {
       "kind": "song",
@@ -402,9 +454,33 @@
           "#356 come, thou fount of every blessing"
         ]
       },
-      "use_type": "hymn",
+      "use_type": "titled_song_static",
       "target": {
         "library_file": "[Hymn] Come, Thou Fount of Every Blessing.pro"
+      }
+    },
+    {
+      "id": "hymn_384_o_love_that_wilt_not_let_me_go",
+      "match": {
+        "title_prefix": [
+          "#384 o love that wilt not let me go"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "target": {
+        "library_file": "[Hymn] O Love That Wilt Not Let Me Go.pro"
+      }
+    },
+    {
+      "id": "hymn_428_i_need_thee_every_hour_hwc",
+      "match": {
+        "title_prefix": [
+          "hwc #428 i need thee every hour"
+        ]
+      },
+      "use_type": "hymn",
+      "target": {
+        "library_file": "[Hymn] I Need Thee Every Hour (HWC).pro"
       }
     },
     {
@@ -430,6 +506,32 @@
       }
     },
     {
+      "id": "skip_invitation_to_worship",
+      "match": {
+        "title_prefix": [
+          "[invitation to worship]",
+          "invitation to worship"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Spoken invitation to worship - no slide"
+      }
+    },
+    {
+      "id": "skip_invitation_to_prepare",
+      "match": {
+        "title_prefix": [
+          "[invitation to prepare for worship",
+          "invitation to prepare for worship"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Spoken invitation to prepare for worship - no slide"
+      }
+    },
+    {
       "id": "post_service",
       "match": {
         "title_prefix": [
@@ -451,6 +553,18 @@
       "use_type": "title_static",
       "target": {
         "library_file": "Greeting.pro"
+      }
+    },
+    {
+      "id": "nextgen_summer_missions_commissioning",
+      "match": {
+        "title_prefix": [
+          "commissioning of nextgen summer missions"
+        ]
+      },
+      "use_type": "preserved_liturgy_static",
+      "target": {
+        "library_file": "Commissioning of NextGen Summer Missions.pro"
       }
     },
     {
@@ -524,6 +638,33 @@
       }
     },
     {
+      "id": "communion_contemporary",
+      "match": {
+        "title_prefix": [
+          "communion"
+        ],
+        "service_type": [
+          "9:00am contemporary"
+        ]
+      },
+      "use_type": "communion_graphic_static",
+      "target": {
+        "library_file": "Communion.pro"
+      }
+    },
+    {
+      "id": "communion_traditional",
+      "match": {
+        "title_prefix": [
+          "communion"
+        ],
+        "service_type": [
+          "10:30am traditional"
+        ]
+      },
+      "use_type": "liturgical_generated"
+    },
+    {
       "id": "gloria_patri",
       "match": {
         "title_prefix": [
@@ -534,6 +675,18 @@
       "use_type": "titled_song_static",
       "target": {
         "library_file": "Gloria Patri.pro"
+      }
+    },
+    {
+      "id": "nineveh_titled_song",
+      "match": {
+        "title_prefix": [
+          "nineveh"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "target": {
+        "library_file": "Nineveh (Ligertwood).pro"
       }
     },
     {
@@ -595,13 +748,26 @@
           "offertory: o, the depth of the love of god"
         ]
       },
-      "use_type": "song",
+      "use_type": "titled_song_static",
       "target": {
         "library_file": "O, The Depth of the Love of God - Tunny.pro"
       }
     },
     {
+      "id": "offertory_hes_always_been_faithful",
+      "match": {
+        "title_prefix": [
+          "offertory: he's always been faithful"
+        ]
+      },
+      "use_type": "titled_anthem_static",
+      "target": {
+        "library_file": "He's Always Been Faithful - Sara Groves.pro"
+      }
+    },
+    {
       "id": "offertory_detail_music",
+      "tier": "fallback",
       "match": {
         "title_prefix": [
           "offertory:"
@@ -664,6 +830,7 @@
     },
     {
       "id": "affirmation_of_faith",
+      "tier": "fallback",
       "match": {
         "title_prefix": [
           "affirmation of faith"
@@ -745,6 +912,7 @@
     },
     {
       "id": "organ_prelude",
+      "tier": "fallback",
       "match": {
         "title_prefix": [
           "prelude",
@@ -758,6 +926,7 @@
     },
     {
       "id": "organ_postlude",
+      "tier": "fallback",
       "match": {
         "title_prefix": [
           "postlude",
@@ -767,6 +936,18 @@
       "use_type": "content_nametag",
       "target": {
         "library_file": "Postlude Nametag.pro"
+      }
+    },
+    {
+      "id": "music_during_distribution",
+      "match": {
+        "title_prefix": [
+          "music during distribution"
+        ]
+      },
+      "use_type": "multi_nametag_static",
+      "target": {
+        "library_file": "Music during distribution nametag.pro"
       }
     },
     {
@@ -783,6 +964,7 @@
     },
     {
       "id": "welcome_bundle",
+      "tier": "fallback",
       "match": {
         "title_prefix": [
           "welcome"
@@ -803,15 +985,17 @@
     },
     {
       "id": "traditional_hymns",
+      "tier": "fallback",
       "match": {
         "category": "song",
         "service_type": ["10:30am traditional"]
       },
       "use_type": "hymn",
-      "notes": "Fallback for otherwise-unclassified traditional congregational songs; named exceptions and choir rules must remain above it"
+      "notes": "Fallback for otherwise-unclassified traditional congregational songs; primary rules win regardless of array position"
     },
     {
       "id": "all_songs",
+      "tier": "catch_all",
       "match": {
         "category": "song"
       },

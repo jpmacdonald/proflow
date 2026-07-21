@@ -1,7 +1,7 @@
 //! Compare a generated `ProPresenter` playlist package against a live playlist.
 //!
 //! Usage:
-//!   `cargo run --bin parity_live_diff -- <ProPresenter root> <playlist name> <generated.proplaylist>`
+//!   `cargo run --features dev-tools --bin parity_live_diff -- <ProPresenter root> <playlist name> <generated.proplaylist>`
 
 #![allow(clippy::print_stdout)]
 
@@ -12,8 +12,8 @@ use anyhow::{Context, Result};
 use proflow::propresenter::live::{materialize_live_playlist, LivePlaylistMaterializeReport};
 use proflow::propresenter::package::{
     compare_playlist_items_aligned, compare_playlist_packages, embedded_presentation_structures,
-    infer_package_mode, presentation_items, read_playlist_package, EmbeddedPresentationStructure,
-    PlaylistItemAlignedDiff, PlaylistItemSummary, PlaylistPackageComparison, PlaylistPackageMode,
+    infer_archive_shape, presentation_items, read_playlist_package, EmbeddedPresentationStructure,
+    PlaylistArchiveShape, PlaylistItemAlignedDiff, PlaylistItemSummary, PlaylistPackageComparison,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -31,8 +31,8 @@ struct ParityLiveDiffReport {
     expected_path: String,
     actual_path: String,
     compatible: bool,
-    expected_mode: PlaylistPackageMode,
-    actual_mode: PlaylistPackageMode,
+    expected_shape: PlaylistArchiveShape,
+    actual_shape: PlaylistArchiveShape,
     package: PlaylistPackageComparison,
     expected_items: Vec<PlaylistItemSummary>,
     actual_items: Vec<PlaylistItemSummary>,
@@ -104,8 +104,8 @@ fn run() -> Result<ParityLiveDiffReport> {
             actual_path.display()
         )
     })?;
-    let expected_items = presentation_items(&expected.document);
-    let actual_items = presentation_items(&actual.document);
+    let expected_items = presentation_items(expected.document());
+    let actual_items = presentation_items(actual.document());
     let (manual_expected_items, expected_items_for_alignment) =
         split_manual_expected_items(&expected_items);
     let aligned_item_diffs =
@@ -116,8 +116,8 @@ fn run() -> Result<ParityLiveDiffReport> {
         expected_path: expected_path.display().to_string(),
         actual_path: actual_path.display().to_string(),
         compatible: package.compatible,
-        expected_mode: infer_package_mode(&expected),
-        actual_mode: infer_package_mode(&actual),
+        expected_shape: infer_archive_shape(&expected),
+        actual_shape: infer_archive_shape(&actual),
         expected_items,
         actual_items,
         manual_expected_items,

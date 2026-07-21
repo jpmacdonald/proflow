@@ -25,8 +25,8 @@ fn restyle(
     else {
         panic!("{type_key} must compile to a native restyle policy");
     };
-    assert_eq!(*kind, expected_kind, "wrong kind for {type_key}");
-    assert_eq!(*source, expected_source, "wrong source for {type_key}");
+    assert_eq!(kind, expected_kind, "wrong kind for {type_key}");
+    assert_eq!(source, expected_source, "wrong source for {type_key}");
     (transform.for_service(None), arrangement.for_service(None))
 }
 
@@ -59,8 +59,8 @@ fn description_style(
         ) => (kind, parser, render),
         _ => panic!("wrong description strategy for {type_key}"),
     };
-    assert_eq!(*kind, expected_kind, "wrong kind for {type_key}");
-    assert_eq!(*parser, expected_parser, "wrong parser for {type_key}");
+    assert_eq!(kind, expected_kind, "wrong kind for {type_key}");
+    assert_eq!(parser, expected_parser, "wrong parser for {type_key}");
     render.for_service(None)
 }
 
@@ -328,7 +328,8 @@ fn assert_generated_recipes(config: &ProjectConfig) {
 fn assert_required_graphics(config: &ProjectConfig) {
     assert_eq!(
         config
-            .required_playlist_items()
+            .as_raw()
+            .required_playlist_items
             .iter()
             .map(|item| (
                 item.id.as_str(),
@@ -361,6 +362,37 @@ fn assert_required_graphics(config: &ProjectConfig) {
 fn repo_config_compiles_to_the_reviewed_presentation_contract() {
     let config = production_config();
     assert_eq!(config.as_raw().version, 4);
+    assert_eq!(
+        config.defaults().speaker_fallback_rule.as_deref(),
+        Some("lords_prayer")
+    );
+    assert_eq!(
+        config
+            .as_raw()
+            .item_rules
+            .iter()
+            .filter(|rule| rule.tier != RuleTier::Primary)
+            .map(|rule| rule.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "offertory_detail_music",
+            "affirmation_of_faith",
+            "organ_prelude",
+            "organ_postlude",
+            "welcome_bundle",
+            "traditional_hymns",
+            "all_songs",
+        ]
+    );
+    assert_eq!(
+        config
+            .as_raw()
+            .item_rules
+            .iter()
+            .find(|rule| rule.id == "all_songs")
+            .map(|rule| rule.tier),
+        Some(RuleTier::CatchAll)
+    );
     assert!(validate_project_config(config.as_raw()).is_empty());
     assert_static_recipes(&config);
     assert_song_recipes(&config);

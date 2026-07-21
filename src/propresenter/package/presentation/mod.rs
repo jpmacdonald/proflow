@@ -13,14 +13,13 @@ pub fn embedded_presentation_summaries(
 ) -> Vec<EmbeddedPresentationSummary> {
     let mut summaries = Vec::new();
     for file in package
-        .embedded_file_details
-        .iter()
+        .embedded_file_details()
         .filter(|file| file.is_presentation)
     {
-        let Some(data) = package.embedded_file_data.get(&file.name) else {
+        let Some(data) = package.embedded_file(&file.name) else {
             continue;
         };
-        let Ok(presentation) = rv_data::Presentation::decode(data.as_slice()) else {
+        let Ok(presentation) = rv_data::Presentation::decode(data) else {
             continue;
         };
         summaries.push(EmbeddedPresentationSummary {
@@ -47,14 +46,13 @@ pub fn embedded_presentation_structures(
 ) -> Vec<EmbeddedPresentationStructure> {
     let mut structures = Vec::new();
     for file in package
-        .embedded_file_details
-        .iter()
+        .embedded_file_details()
         .filter(|file| file.is_presentation)
     {
-        let Some(data) = package.embedded_file_data.get(&file.name) else {
+        let Some(data) = package.embedded_file(&file.name) else {
             continue;
         };
-        let Ok(presentation) = rv_data::Presentation::decode(data.as_slice()) else {
+        let Ok(presentation) = rv_data::Presentation::decode(data) else {
             continue;
         };
         structures.push(EmbeddedPresentationStructure {

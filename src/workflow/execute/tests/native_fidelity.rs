@@ -1,5 +1,6 @@
 use super::super::presentation_output::ReviewedRenderTarget;
 use super::*;
+use crate::propresenter::SlideType;
 use std::num::NonZeroUsize;
 
 #[test]
@@ -34,6 +35,32 @@ fn existing_preparation_uses_approved_bytes_and_checks_size() {
 }
 
 #[test]
+fn existing_without_arrangements_clears_stale_native_selection() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let source = root.path().join("existing.pro");
+    let mut presentation = presentation_with_size("Existing", 1920.0, 1080.0);
+    presentation.selected_arrangement = Some(rv_data::Uuid {
+        string: Uuid::new_v4().to_string(),
+    });
+    let source_bytes = presentation.encode_to_vec();
+
+    let prepared = ServiceBuildExecutor::prepare_existing_presentation(
+        "pco:item:main",
+        &source,
+        None,
+        &source_bytes,
+        crate::propresenter::PresentationSize::FULL_HD,
+    )
+    .expect("stale selection without arrangements is mechanically repairable");
+    let embedded = rv_data::Presentation::decode(prepared.embedded_data.as_slice())
+        .expect("decode prepared presentation");
+
+    assert!(prepared.selected_arrangement.is_none());
+    assert!(embedded.selected_arrangement.is_none());
+    assert!(presentation.selected_arrangement.is_some());
+}
+
+#[test]
 fn existing_arrangement_resolves_native_identity() {
     let root = tempfile::tempdir().expect("temporary root");
     let source = root.path().join("existing.pro");
@@ -50,6 +77,9 @@ fn existing_arrangement_resolves_native_identity() {
             .and_then(|group| group.uuid.clone())
             .expect("fixture group identity")],
     }];
+    presentation.selected_arrangement = Some(rv_data::Uuid {
+        string: Uuid::new_v4().to_string(),
+    });
     let bytes = presentation.encode_to_vec();
 
     let prepared = ServiceBuildExecutor::prepare_existing_presentation(
@@ -60,10 +90,19 @@ fn existing_arrangement_resolves_native_identity() {
         crate::propresenter::PresentationSize::FULL_HD,
     )
     .expect("arrangement resolves case-insensitively");
+    let embedded = rv_data::Presentation::decode(prepared.embedded_data.as_slice())
+        .expect("decode prepared presentation");
     let selected = prepared.selected_arrangement.expect("selected arrangement");
 
     assert_eq!(selected.uuid(), &arrangement_uuid);
     assert_eq!(selected.name(), "Default");
+    assert_eq!(
+        embedded
+            .selected_arrangement
+            .expect("prepared native selection")
+            .string,
+        arrangement_uuid.to_string()
+    );
 }
 
 #[test]
@@ -119,6 +158,62 @@ fn existing_arrangement_rejects_duplicate_case_insensitive_names() {
         ),
         Err(BuildServiceError::ArrangementAmbiguous { matches: 2, .. })
     ));
+}
+
+#[test]
+fn arrangement_group_macro_policy_resolves_to_native_entry_cues() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_named_macros(&mut runtime, &["NameTag", "Song"]);
+    let (mut presentation, _) = arranged_presentation("Hymn", 2);
+    presentation.cue_groups[0]
+        .group
+        .as_mut()
+        .expect("title group")
+        .name = "Title".to_string();
+    presentation.cue_groups[1]
+        .group
+        .as_mut()
+        .expect("verse group")
+        .name = "Verse 1".to_string();
+    let policy = arrangement_group_macro_policy(&[
+        (0, &["Title"], "NameTag"),
+        (1, &["Verse", "Verse 1"], "Song"),
+    ]);
+
+    super::super::presentation_output::apply_restyle_macro_policy(
+        &mut presentation,
+        &policy,
+        runtime.render_assets.macros(),
+    )
+    .expect("resolve checked group selectors");
+
+    assert_eq!(macro_names(&presentation.cues[0]), vec!["NameTag"]);
+    assert_eq!(macro_names(&presentation.cues[1]), vec!["Song"]);
+}
+
+#[test]
+fn arrangement_group_macro_policy_rejects_unexpected_name_atomically() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_named_macros(&mut runtime, &["Song"]);
+    let (presentation, _) = arranged_presentation("Song", 1);
+    let original = presentation.clone();
+    let policy = arrangement_group_macro_policy(&[(0, &["Background"], "Song")]);
+    let mut presentation = presentation;
+
+    let error = super::super::presentation_output::apply_restyle_macro_policy(
+        &mut presentation,
+        &policy,
+        runtime.render_assets.macros(),
+    )
+    .expect_err("exact group evidence must match");
+
+    assert!(matches!(
+        error,
+        crate::propresenter::macros::MacroApplyError::UnexpectedGroup { .. }
+    ));
+    assert_eq!(presentation, original);
 }
 
 #[test]
@@ -257,6 +352,12 @@ fn styled_cue_orders_slide_macro_then_background() {
     let background_path = root.path().join("styled.png");
     let background_bytes = minimal_png(1, 1);
 
+    crate::workflow::presentation_render::apply_role_macros(
+        &mut rendered,
+        &style,
+        runtime.render_assets.macros(),
+    )
+    .expect("apply role macro before final style transforms");
     executor
         .apply_style(
             &mut rendered,
@@ -268,7 +369,7 @@ fn styled_cue_orders_slide_macro_then_background() {
         )
         .expect("apply style");
 
-    let cue = rendered.presentation.cues.first().expect("content cue");
+    let cue = rendered.presentation().cues.first().expect("content cue");
     assert_eq!(
         cue.actions
             .iter()
@@ -316,6 +417,28 @@ fn macro_only_graphics_transform_preserves_native_background_action_bytes() {
 }
 
 #[test]
+fn restyle_without_arrangements_clears_stale_native_selection_before_traversal() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_named_macros(&mut runtime, &["Graphics"]);
+    let mut source = presentation_with_size("Stale Selection", 1920.0, 1080.0);
+    source.selected_arrangement = Some(rv_data::Uuid {
+        string: Uuid::new_v4().to_string(),
+    });
+    let transform = crate::workflow::plan::ExistingTransform::new(
+        crate::workflow::plan::BackgroundTransform::Preserve,
+        crate::workflow::plan::MacroTransform::Enforce(operator_macro_policy(&[(0, "Graphics")])),
+        crate::workflow::plan::CueTransform::Preserve,
+    )
+    .expect("macro-only transform");
+
+    let managed = run_native_transform(&runtime, root.path(), &source, None, &transform, None);
+
+    assert!(managed.selected_arrangement.is_none());
+    assert_eq!(macro_names(&managed.cues[0]), vec!["Graphics"]);
+}
+
+#[test]
 fn background_only_transform_preserves_baptism_macro_action_bytes() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -328,7 +451,7 @@ fn background_only_transform_preserves_baptism_macro_action_bytes() {
         ],
     );
     let mut source = presentation_with_cue_count("Baptism Him", 5);
-    crate::propresenter::macros::apply_operator_macro_policy(
+    crate::workflow::execute::presentation_output::apply_restyle_macro_policy(
         &mut source,
         &operator_macro_policy(&[
             (0, "NameTag"),
@@ -451,6 +574,26 @@ fn operator_macro_policy(regions: &[(usize, &str)]) -> crate::workflow::plan::Re
                     (*name).to_string(),
                 )
                 .expect("valid macro region")
+            })
+            .collect(),
+    )
+    .expect("nonempty macro policy")
+}
+
+fn arrangement_group_macro_policy(
+    regions: &[(usize, &[&str], &str)],
+) -> crate::workflow::plan::RestyleMacroPolicy {
+    crate::workflow::plan::RestyleMacroPolicy::new(
+        regions
+            .iter()
+            .map(|(index, names, macro_name)| {
+                let selector = crate::workflow::plan::RestyleMacroSelector::arrangement_group(
+                    *index,
+                    names.iter().map(|name| (*name).to_string()).collect(),
+                )
+                .expect("nonempty exact group names");
+                crate::workflow::plan::RestyleMacroRegion::new(selector, (*macro_name).to_string())
+                    .expect("valid macro region")
             })
             .collect(),
     )
@@ -758,7 +901,8 @@ fn restyle_fixture() -> RestyleFixture {
             transform: test_transform(),
         }),
     );
-    plan.item_kind = ItemKind::Song;
+    plan.set_slide_type(SlideType::Lyrics)
+        .expect("song slide type is compatible with restyle");
     plan.playlist_name = "Faithful Song".to_string();
     RestyleFixture {
         _root: root,
@@ -790,7 +934,7 @@ fn source_song(runtime: &TestRuntime, root: &Path) -> (rv_data::Presentation, Uu
         })
         .collect();
     source.selected_arrangement = Some(rv_data::Uuid {
-        string: Uuid::new_v4().to_string(),
+        string: default_uuid.to_string(),
     });
     source.ccli = Some(rv_data::presentation::Ccli {
         song_title: "Faithful Song".to_string(),
@@ -832,7 +976,7 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
         "Default",
     )
     .expect("apply expected background transform");
-    crate::propresenter::macros::apply_operator_macro_policy(
+    crate::workflow::execute::presentation_output::apply_restyle_macro_policy(
         &mut expected,
         &test_macro_transitions(),
         fixture.runtime.render_assets.macros(),
@@ -879,7 +1023,7 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
             .expect("inspect managed media");
     let dependency_names = dependencies
         .iter()
-        .filter_map(|dependency| dependency.path.as_deref().and_then(Path::file_name))
+        .filter_map(|dependency| dependency.stored_absolute_path()?.file_name())
         .collect::<Vec<_>>();
     assert!(dependency_names.iter().any(|name| *name == "default.png"));
     assert!(!dependency_names
@@ -890,8 +1034,8 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
 fn assert_local_playlist_link(playlist_path: &str, managed_path: &Path, arrangement_uuid: Uuid) {
     let package = crate::propresenter::package::read_playlist_package(playlist_path)
         .expect("read local playlist");
-    assert!(package.embedded_file_data.is_empty());
-    let items = crate::propresenter::package::presentation_items(&package.document);
+    assert_eq!(package.embedded_file_count(), 0);
+    let items = crate::propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].arrangement_name, "Default");
     assert_eq!(

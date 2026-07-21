@@ -383,6 +383,28 @@ pub enum ReadyAction {
 }
 
 impl ReadyAction {
+    const fn required_slide_type(&self) -> Option<SlideType> {
+        match self {
+            Self::GenerateScripture { .. } => Some(SlideType::Scripture),
+            Self::GenerateTitle { .. } => Some(SlideType::Title),
+            Self::UseExisting { .. }
+            | Self::RestyleExisting { .. }
+            | Self::EditDescription { .. }
+            | Self::GenerateDescription { .. } => None,
+        }
+    }
+
+    const fn operation_name(&self) -> &'static str {
+        match self {
+            Self::UseExisting { .. } => "use-existing",
+            Self::RestyleExisting { .. } => "restyle-existing",
+            Self::EditDescription { .. } => "edit-description",
+            Self::GenerateDescription { .. } => "generated-description",
+            Self::GenerateScripture { .. } => "generated-scripture",
+            Self::GenerateTitle { .. } => "generated-title",
+        }
+    }
+
     /// Return the existing presentation read by this action, when any.
     pub fn file_path(&self) -> Option<&Path> {
         match self {
@@ -508,6 +530,163 @@ pub enum PlanDisposition {
     NeedsReview(ReviewContext),
 }
 
+/// Incompatible output semantics rejected before a plan can be reviewed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PlanSemanticsError {
+    /// An operator-selected native slide type contradicts the content carried
+    /// by the executable action.
+    #[error("{action} content requires the {required} slide type, not {requested}")]
+    IncompatibleSlideType {
+        /// Content operation whose native representation is fixed.
+        action: &'static str,
+        /// Native slide type required by that operation.
+        required: &'static str,
+        /// Conflicting operator-selected native slide type.
+        requested: &'static str,
+    },
+}
+
+/// Single owner of the semantic properties that determine native output.
+///
+/// Classification provenance (`item_kind` and `item_type`), an optional
+/// operator-selected native slide type, and executable disposition move
+/// together through checked transitions. Callers cannot update one while
+/// leaving the others in a contradictory state.
+#[derive(Debug, Clone, Serialize)]
+struct PlannedOutput {
+    item_kind: ItemKind,
+    #[serde(rename = "item_type")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    configured_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slide_type_override: Option<SlideType>,
+    disposition: PlanDisposition,
+}
+
+impl PlannedOutput {
+    fn new(
+        item_kind: ItemKind,
+        configured_type: Option<String>,
+        disposition: PlanDisposition,
+    ) -> Self {
+        let mut output = Self {
+            item_kind,
+            configured_type,
+            slide_type_override: None,
+            disposition,
+        };
+        output.normalize_action_defined_kind();
+        output
+    }
+
+    const fn action(&self) -> Option<&ReadyAction> {
+        match &self.disposition {
+            PlanDisposition::Ready(action) => Some(action),
+            PlanDisposition::NeedsReview(context) => context.proposed_action(),
+            PlanDisposition::Skip => None,
+        }
+    }
+
+    fn slide_type(&self) -> SlideType {
+        if let Some(slide_type) = self.slide_type_override {
+            return slide_type;
+        }
+        if let Some(required) = self.action().and_then(ReadyAction::required_slide_type) {
+            return required;
+        }
+        default_slide_type(self.item_kind)
+    }
+
+    fn set_slide_type(&mut self, slide_type: SlideType) -> Result<(), PlanSemanticsError> {
+        if let Some(action) = self.action() {
+            if let Some(required) = action.required_slide_type() {
+                if slide_type != required {
+                    return Err(PlanSemanticsError::IncompatibleSlideType {
+                        action: action.operation_name(),
+                        required: required.name(),
+                        requested: slide_type.name(),
+                    });
+                }
+            }
+        }
+        self.item_kind = kind_for_slide_type(self.item_kind, slide_type);
+        self.slide_type_override = Some(slide_type);
+        Ok(())
+    }
+
+    fn replace_disposition(
+        &mut self,
+        disposition: PlanDisposition,
+    ) -> Result<(), PlanSemanticsError> {
+        if let (Some(selected), Some(action)) =
+            (self.slide_type_override, disposition_action(&disposition))
+        {
+            if let Some(required) = action.required_slide_type() {
+                if selected != required {
+                    return Err(PlanSemanticsError::IncompatibleSlideType {
+                        action: action.operation_name(),
+                        required: required.name(),
+                        requested: selected.name(),
+                    });
+                }
+            }
+        }
+        self.disposition = disposition;
+        self.normalize_action_defined_kind();
+        Ok(())
+    }
+
+    fn normalize_action_defined_kind(&mut self) {
+        match self.action().and_then(ReadyAction::required_slide_type) {
+            Some(SlideType::Scripture) => self.item_kind = ItemKind::Scripture,
+            Some(SlideType::Title) => self.item_kind = ItemKind::Nametag,
+            Some(SlideType::Text | SlideType::Lyrics | SlideType::Graphic) | None => {}
+        }
+    }
+}
+
+const fn disposition_action(disposition: &PlanDisposition) -> Option<&ReadyAction> {
+    match disposition {
+        PlanDisposition::Ready(action) => Some(action),
+        PlanDisposition::NeedsReview(context) => context.proposed_action(),
+        PlanDisposition::Skip => None,
+    }
+}
+
+const fn default_slide_type(item_kind: ItemKind) -> SlideType {
+    match item_kind {
+        ItemKind::Song => SlideType::Lyrics,
+        ItemKind::Scripture => SlideType::Scripture,
+        ItemKind::Nametag => SlideType::Title,
+        ItemKind::Announcement | ItemKind::Graphic => SlideType::Graphic,
+        ItemKind::Liturgy | ItemKind::Other => SlideType::Text,
+    }
+}
+
+const fn kind_for_slide_type(current: ItemKind, slide_type: SlideType) -> ItemKind {
+    match slide_type {
+        SlideType::Lyrics => ItemKind::Song,
+        SlideType::Scripture => ItemKind::Scripture,
+        SlideType::Title => ItemKind::Nametag,
+        SlideType::Graphic => match current {
+            ItemKind::Announcement | ItemKind::Graphic => current,
+            ItemKind::Song
+            | ItemKind::Scripture
+            | ItemKind::Nametag
+            | ItemKind::Liturgy
+            | ItemKind::Other => ItemKind::Graphic,
+        },
+        SlideType::Text => match current {
+            ItemKind::Liturgy | ItemKind::Other => current,
+            ItemKind::Song
+            | ItemKind::Scripture
+            | ItemKind::Nametag
+            | ItemKind::Announcement
+            | ItemKind::Graphic => ItemKind::Other,
+        },
+    }
+}
+
 /// Shared typed plan used by preview/build workflow stages.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedItemPlan {
@@ -517,13 +696,37 @@ pub struct ResolvedItemPlan {
     pub pco_title: String,
     pub playlist_name: String,
     pub reason: String,
-    pub item_kind: ItemKind,
+    /// Configured classification rule that produced this output, when any.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub item_type: Option<String>,
-    pub disposition: PlanDisposition,
+    classification_rule: Option<String>,
+    #[serde(flatten)]
+    output: PlannedOutput,
 }
 
 impl ResolvedItemPlan {
+    /// Construct one plan while normalizing content-defined output semantics.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        output_key: OutputKey,
+        position: usize,
+        pco_title: String,
+        playlist_name: String,
+        reason: String,
+        item_kind: ItemKind,
+        configured_type: Option<String>,
+        disposition: PlanDisposition,
+    ) -> Self {
+        Self {
+            output_key,
+            position,
+            pco_title,
+            playlist_name,
+            reason,
+            classification_rule: None,
+            output: PlannedOutput::new(item_kind, configured_type, disposition),
+        }
+    }
+
     /// Return the stable key for this planned output.
     pub fn output_key(&self) -> &str {
         self.output_key.as_str()
@@ -546,7 +749,7 @@ impl ResolvedItemPlan {
 
     /// Return the action that can execute without further review.
     pub const fn ready_action(&self) -> Option<&ReadyAction> {
-        match &self.disposition {
+        match &self.output.disposition {
             PlanDisposition::Ready(action) => Some(action),
             PlanDisposition::Skip | PlanDisposition::NeedsReview(_) => None,
         }
@@ -557,7 +760,7 @@ impl ResolvedItemPlan {
     /// Review items retain a complete proposal after collision and size audits,
     /// so previews can keep showing the exact file/content/style being reviewed.
     pub const fn preview_action(&self) -> Option<&ReadyAction> {
-        match &self.disposition {
+        match &self.output.disposition {
             PlanDisposition::Ready(action) => Some(action),
             PlanDisposition::NeedsReview(context) => context.proposed_action(),
             PlanDisposition::Skip => None,
@@ -566,12 +769,73 @@ impl ResolvedItemPlan {
 
     /// Return whether this plan is intentionally excluded from the playlist.
     pub const fn is_skipped(&self) -> bool {
-        matches!(self.disposition, PlanDisposition::Skip)
+        matches!(self.output.disposition, PlanDisposition::Skip)
     }
 
     /// Return whether this plan still requires an explicit human decision.
     pub const fn needs_review(&self) -> bool {
-        matches!(self.disposition, PlanDisposition::NeedsReview(_))
+        matches!(self.output.disposition, PlanDisposition::NeedsReview(_))
+    }
+
+    /// Domain classification used for reporting and policy diagnostics.
+    pub const fn item_kind(&self) -> ItemKind {
+        self.output.item_kind
+    }
+
+    /// Configured presentation type that selected this plan, when any.
+    pub fn item_type(&self) -> Option<&str> {
+        self.output.configured_type.as_deref()
+    }
+
+    /// Configured classification rule that produced this output, when any.
+    pub fn classification_rule(&self) -> Option<&str> {
+        self.classification_rule.as_deref()
+    }
+
+    /// Retain the selected rule on every direct or expanded output it produces.
+    pub(crate) fn set_classification_rule(&mut self, rule_id: &str) {
+        self.classification_rule = Some(rule_id.to_string());
+    }
+
+    /// Current readiness state for preview and execution.
+    pub const fn disposition(&self) -> &PlanDisposition {
+        &self.output.disposition
+    }
+
+    /// Apply an operator-selected native slide type after checking it against
+    /// action-defined content such as scripture and title generation.
+    pub(crate) fn set_slide_type(
+        &mut self,
+        slide_type: SlideType,
+    ) -> Result<(), PlanSemanticsError> {
+        self.output.set_slide_type(slide_type)
+    }
+
+    /// Replace this plan with one complete executable action.
+    pub(crate) fn set_ready_action(
+        &mut self,
+        action: ReadyAction,
+    ) -> Result<(), PlanSemanticsError> {
+        self.output
+            .replace_disposition(PlanDisposition::Ready(action))
+    }
+
+    /// Mark this output as deliberately omitted.
+    pub(crate) fn skip(&mut self) {
+        self.output.disposition = PlanDisposition::Skip;
+    }
+
+    /// Promote a complete reviewed proposal into executable state.
+    pub(crate) fn approve_proposed_action(&mut self) -> Result<bool, PlanSemanticsError> {
+        if !self.needs_review() {
+            return Ok(false);
+        }
+        let Some(action) = self.preview_action().cloned() else {
+            return Ok(false);
+        };
+        self.output
+            .replace_disposition(PlanDisposition::Ready(action))?;
+        Ok(true)
     }
 
     /// Return the existing presentation shown by this plan, when any.
@@ -621,7 +885,7 @@ impl ResolvedItemPlan {
     /// proposed resolution.
     pub fn require_review(&mut self, reason: String) {
         let previous = std::mem::replace(
-            &mut self.disposition,
+            &mut self.output.disposition,
             PlanDisposition::NeedsReview(ReviewContext::new(None)),
         );
         let proposed_action = match previous {
@@ -629,18 +893,12 @@ impl ResolvedItemPlan {
             PlanDisposition::NeedsReview(context) => context.into_proposed_action(),
             PlanDisposition::Skip => None,
         };
-        self.disposition = PlanDisposition::NeedsReview(ReviewContext::new(proposed_action));
+        self.output.disposition = PlanDisposition::NeedsReview(ReviewContext::new(proposed_action));
         self.reason = reason;
     }
 
     /// Resolve the `ProPresenter` slide type for the plan.
-    pub const fn slide_type(&self) -> SlideType {
-        match self.item_kind {
-            ItemKind::Song => SlideType::Lyrics,
-            ItemKind::Scripture => SlideType::Scripture,
-            ItemKind::Nametag => SlideType::Title,
-            ItemKind::Announcement | ItemKind::Graphic => SlideType::Graphic,
-            ItemKind::Liturgy | ItemKind::Other => SlideType::Text,
-        }
+    pub fn slide_type(&self) -> SlideType {
+        self.output.slide_type()
     }
 }

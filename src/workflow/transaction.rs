@@ -2,7 +2,9 @@
 //!
 //! Rendering writes only sibling staging files. Commit atomically replaces each
 //! target and writes the playlist last, so a failed render never changes live
-//! library state and a commit failure can restore already-replaced targets.
+//! library state and a reported commit failure can restore already-replaced
+//! targets. The multi-file operation is process-transactional, not power-loss
+//! atomic or durable: it has no fsync journal or startup recovery protocol.
 //!
 //! Each target is compared with its staged-time snapshot immediately before its
 //! rename. Filesystems do not provide a portable compare-and-rename operation,
@@ -11,7 +13,7 @@
 //! an advisory lock above this transaction boundary to eliminate that race.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -61,6 +63,31 @@ pub(crate) struct BuildFileTransaction {
 #[derive(Debug)]
 pub(crate) struct PreparedFileTransaction {
     files: Vec<StagedFile>,
+}
+
+/// Immutable evidence for one currently staged reviewed output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StagedArtifact {
+    target: PathBuf,
+    length: u64,
+    sha256: [u8; 32],
+}
+
+impl StagedArtifact {
+    /// Final reviewed target represented by the staging file.
+    pub(crate) fn target(&self) -> &Path {
+        &self.target
+    }
+
+    /// Exact staged byte length.
+    pub(crate) const fn length(&self) -> u64 {
+        self.length
+    }
+
+    /// SHA-256 of the exact staged bytes.
+    pub(crate) const fn sha256(&self) -> [u8; 32] {
+        self.sha256
+    }
 }
 
 impl BuildFileTransaction {
@@ -132,6 +159,37 @@ impl BuildFileTransaction {
         Ok(staged)
     }
 
+    /// Snapshot exact staged bytes in reservation order without consuming or
+    /// mutating the transaction.
+    pub(crate) fn staged_artifacts(&self) -> io::Result<Vec<StagedArtifact>> {
+        let mut artifacts = self
+            .outputs
+            .iter()
+            .map(|reviewed| {
+                let staged = reviewed.staged.as_ref().ok_or_else(|| {
+                    io::Error::other(format!(
+                        "reviewed output has not been staged: {}",
+                        reviewed.output.path().requested_path().display()
+                    ))
+                })?;
+                let fingerprint = fingerprint_regular_file(&staged.path)?;
+                Ok((
+                    staged.ordinal,
+                    StagedArtifact {
+                        target: reviewed.output.path().requested_path().to_path_buf(),
+                        length: fingerprint.length,
+                        sha256: fingerprint.sha256,
+                    },
+                ))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        artifacts.sort_by_key(|(ordinal, _)| *ordinal);
+        Ok(artifacts
+            .into_iter()
+            .map(|(_, artifact)| artifact)
+            .collect())
+    }
+
     /// Freeze the exact staged bytes and transition into the only committable
     /// transaction state.
     pub(crate) fn seal(mut self) -> Result<PreparedFileTransaction, OutputReviewError> {
@@ -183,6 +241,23 @@ impl BuildFileTransaction {
 }
 
 impl PreparedFileTransaction {
+    /// Exact target fingerprints captured by [`BuildFileTransaction::seal`].
+    ///
+    /// This deliberately reports the frozen `prepared` values instead of
+    /// rereading staging paths. Receipt verification can therefore prove that
+    /// the committable transaction is the same artifact set whose evidence was
+    /// serialized, without opening another time-of-check/time-of-use window.
+    pub(crate) fn sealed_artifacts(&self) -> Vec<StagedArtifact> {
+        self.files
+            .iter()
+            .map(|file| StagedArtifact {
+                target: file.reviewed_path.requested_path().to_path_buf(),
+                length: file.prepared.length,
+                sha256: file.prepared.sha256,
+            })
+            .collect()
+    }
+
     /// Read exact sealed bytes for native presentation targets.
     ///
     /// The returned bytes are fingerprint-checked against the sealed state.
@@ -385,16 +460,8 @@ fn rollback_file(file: &StagedFile) -> io::Result<()> {
 
 fn fingerprint_file(path: &Path) -> io::Result<FileFingerprint> {
     let mut file = File::open(path)?;
-    let length = file.metadata()?.len();
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 16_384];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
+    let length = io::copy(&mut file, &mut hasher)?;
     Ok(FileFingerprint {
         length,
         sha256: hasher.finalize().into(),

@@ -1,6 +1,6 @@
 //! Dump upcoming plan items from Planning Center for analysis.
 //!
-//! Usage: `cargo run --bin dump_plans [-- --days 60] [--past]`
+//! Usage: `cargo run --features dev-tools --bin dump_plans [-- --days 60] [--past]`
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -84,8 +84,15 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_default();
 
             println!(
-                "  {:>2}. [{:<8}] {}{}{}{}{}",
-                item.position, cat, item.title, song_info, scripture_info, note_info, desc_info
+                "  {:>2}. [{:<8}] {} [id={}]{}{}{}{}",
+                item.position,
+                cat,
+                item.title,
+                item.id,
+                song_info,
+                scripture_info,
+                note_info,
+                desc_info
             );
         }
         println!();

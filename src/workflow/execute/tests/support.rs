@@ -66,16 +66,16 @@ pub(super) fn parsed_content() -> ParsedContent {
 }
 
 pub(super) fn test_plan(output_key: &str, disposition: PlanDisposition) -> ResolvedItemPlan {
-    ResolvedItemPlan {
-        output_key: OutputKey::new(output_key.to_string()).expect("valid test output key"),
-        position: 1,
-        pco_title: "Test item".to_string(),
-        playlist_name: "Test item".to_string(),
-        reason: "Test fixture".to_string(),
-        item_kind: ItemKind::Other,
-        item_type: None,
+    ResolvedItemPlan::new(
+        OutputKey::new(output_key.to_string()).expect("valid test output key"),
+        1,
+        "Test item".to_string(),
+        "Test item".to_string(),
+        "Test fixture".to_string(),
+        ItemKind::Other,
+        None,
         disposition,
-    }
+    )
 }
 
 pub(super) fn use_existing_plan(output_key: &str, file_path: PathBuf) -> ResolvedItemPlan {
@@ -185,6 +185,27 @@ pub(super) struct TestRuntime {
 
 impl TestRuntime {
     pub(super) fn new(root: &Path) -> Self {
+        let pco_client = PlanningCenterClient::new(&crate::config::Config {
+            pco_app_id: "test-app".to_string(),
+            pco_secret: "test-secret".to_string(),
+        })
+        .expect("test Planning Center client settings are valid");
+        Self::with_pco_client(root, pco_client)
+    }
+
+    pub(super) fn new_with_pco_base_url(root: &Path, base_url: String) -> Self {
+        let pco_client = PlanningCenterClient::new_with_base_url(
+            &crate::config::Config {
+                pco_app_id: "test-app".to_string(),
+                pco_secret: "test-secret".to_string(),
+            },
+            base_url,
+        )
+        .expect("test Planning Center client settings are valid");
+        Self::with_pco_client(root, pco_client)
+    }
+
+    fn with_pco_client(root: &Path, pco_client: PlanningCenterClient) -> Self {
         let data = root.join("data");
         let output = root.join("output");
         let propresenter = root.join("ProPresenter");
@@ -200,11 +221,6 @@ impl TestRuntime {
             macros: propresenter.join("Configuration/Macros"),
         })
         .expect("checked test locations");
-        let pco_client = PlanningCenterClient::new(&crate::config::Config {
-            pco_app_id: "test-app".to_string(),
-            pco_secret: "test-secret".to_string(),
-        })
-        .expect("test Planning Center client settings are valid");
         let render_assets = RenderAssetSnapshot::load(
             ProjectConfig::try_from(crate::project_config::RawProjectConfig::default())
                 .expect("valid empty project config"),
@@ -266,7 +282,7 @@ pub(super) fn reviewed_request(playlist_name: &str) -> BuildRequest {
         playlist_name: Some(playlist_name.to_string()),
         // Most execution tests isolate presentation or transaction behavior.
         // Portable-package tests opt in explicitly below their own fixtures.
-        playlist_package_mode: PlaylistPackageMode::LibraryLocal,
+        playlist_export: PlaylistExportIntent::library_links(),
         ..BuildRequest::default()
     }
 }

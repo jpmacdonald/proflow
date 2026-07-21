@@ -43,6 +43,9 @@ pub struct PreviewEntry {
     pub status: PreviewStatus,
     /// Human-readable explanation for the proposed disposition.
     pub reason: String,
+    /// Configured classification rule that produced this output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification_rule: Option<String>,
     /// Normalized configured item type, when classification found one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_type: Option<String>,
@@ -216,12 +219,14 @@ impl From<ResolvedItemPlan> for PreviewEntry {
                 .map(|binding| binding.select(starts_with_leader).to_string())
         });
         let file_path = plan.file_path().map(|path| path.display().to_string());
-        let status = PreviewStatus::from(&plan.disposition);
+        let status = PreviewStatus::from(plan.disposition());
         let background = plan.background().map(|background| background.id().clone());
         let arrangement = plan.arrangement().map(str::to_string);
         let content_slide = style.map(|style| style.content().slide().to_string());
         let title_slide =
             style.and_then(|style| style.title().map(|title| title.slide().to_string()));
+        let item_type = plan.item_type().map(str::to_string);
+        let classification_rule = plan.classification_rule().map(str::to_string);
 
         Self {
             output_key: plan.output_key.to_string(),
@@ -231,7 +236,8 @@ impl From<ResolvedItemPlan> for PreviewEntry {
             file_path,
             status,
             reason: plan.reason,
-            item_type: plan.item_type,
+            classification_rule,
+            item_type,
             parsed_content,
             background,
             arrangement,

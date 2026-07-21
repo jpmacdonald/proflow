@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use httptest::{
     matchers::request,
     matchers::{all_of, contains, url_decoded},
@@ -57,6 +57,18 @@ fn join_base_and_path_normalizes_slashes() {
     assert_eq!(
         join_base_and_path("https://example.test", "plans/123/items"),
         "https://example.test/plans/123/items"
+    );
+}
+
+#[test]
+fn resource_url_treats_identifiers_as_single_encoded_path_segments() {
+    assert_eq!(
+        resource_url(
+            "https://api.example.test/services/v2",
+            &["service_types", "service/id", "plans", "plan id"],
+        )
+        .expect("resource URL"),
+        "https://api.example.test/services/v2/service_types/service%2Fid/plans/plan%20id"
     );
 }
 
@@ -401,4 +413,255 @@ async fn get_service_items_rejects_an_entry_without_a_stable_id() {
     assert!(error
         .to_string()
         .contains("response index 0 is missing required field 'id'"));
+}
+
+#[tokio::test]
+async fn capture_plan_snapshot_by_service_name_supports_historical_plans() {
+    let server = Server::run();
+    let base_url = server.url_str("/").trim_end_matches('/').to_string();
+
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/service_types"),
+        ])
+        .respond_with(json_encoded(json!({
+            "data": [{
+                "id": "service-1",
+                "attributes": { "name": "9:00am contemporary" }
+            }],
+            "links": { "next": null }
+        }))),
+    );
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/service_types/service-1"),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": {
+                "id": "service-1",
+                "attributes": { "name": "9:00am contemporary" }
+            }
+        }))),
+    );
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/service_types/service-1/plans/plan-1"),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": {
+                "id": "plan-1",
+                "attributes": {
+                    "sort_date": "2026-07-05T13:00:00Z",
+                    "title": "July 5"
+                }
+            }
+        }))),
+    );
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/plans/plan-1/items"),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": [{
+                "id": "item-1",
+                "attributes": { "title": "Welcome", "sequence": 10 },
+                "relationships": {}
+            }],
+            "included": [],
+            "links": { "next": null }
+        }))),
+    );
+
+    let snapshot = test_client(base_url)
+        .capture_plan_snapshot("plan-1", "9:00am contemporary")
+        .await
+        .expect("historical exact plan snapshot");
+
+    assert_eq!(snapshot.plan_id(), "plan-1");
+    assert_eq!(snapshot.service_id(), "service-1");
+    assert_eq!(
+        snapshot.default_playlist_name(),
+        "July 5, 2026 - 9am Contemporary"
+    );
+    assert_eq!(snapshot.items().len(), 1);
+}
+
+#[tokio::test]
+async fn refresh_plan_snapshot_refetches_stable_resources_without_an_upcoming_window() {
+    let server = Server::run();
+    let base_url = server.url_str("/").trim_end_matches('/').to_string();
+
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/service_types/service-1"),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": {
+                "id": "service-1",
+                "attributes": { "name": "9:00am contemporary" }
+            }
+        }))),
+    );
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/service_types/service-1/plans/plan-1"),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": {
+                "id": "plan-1",
+                "attributes": {
+                    "sort_date": "2026-07-26T13:00:00Z",
+                    "title": "July 26"
+                }
+            }
+        }))),
+    );
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/plans/plan-1/items"),
+            request::query(url_decoded(contains(("include", "song,arrangement")))),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": [{
+                "id": "item-1",
+                "attributes": {
+                    "title": "Welcome",
+                    "description": "Good morning",
+                    "sequence": 10
+                },
+                "relationships": {}
+            }],
+            "included": [],
+            "links": { "next": null }
+        }))),
+    );
+
+    let reviewed = PlanSnapshot::from_resolved(
+        crate::planning_center::identity::ResolvedPlanIdentity {
+            plan_id: "plan-1".to_string(),
+            service_id: "service-1".to_string(),
+            service_name: "9:00am contemporary".to_string(),
+            plan_title: "July 26".to_string(),
+            date: Utc
+                .with_ymd_and_hms(2026, 7, 26, 13, 0, 0)
+                .single()
+                .expect("valid date"),
+            default_playlist_name: "July 26, 2026 - 9am Contemporary".to_string(),
+        },
+        Vec::new(),
+    );
+
+    let current = test_client(base_url)
+        .refresh_plan_snapshot(&reviewed)
+        .await
+        .expect("direct freshness refetch");
+
+    assert_eq!(current.plan_id(), "plan-1");
+    assert_eq!(current.service_id(), "service-1");
+    assert_eq!(
+        current.default_playlist_name(),
+        reviewed.default_playlist_name()
+    );
+    assert_eq!(current.items().len(), 1);
+    assert_eq!(current.items()[0].id, "item-1");
+    assert_eq!(current.items()[0].position, 10);
+}
+
+#[tokio::test]
+async fn refresh_plan_snapshot_rejects_two_different_consecutive_reads() {
+    let server = Server::run();
+    let base_url = server.url_str("/").trim_end_matches('/').to_string();
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/service_types/service-1"),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": {
+                "id": "service-1",
+                "attributes": { "name": "Sunday Morning" }
+            }
+        }))),
+    );
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/service_types/service-1/plans/plan-1"),
+        ])
+        .times(2)
+        .respond_with(json_encoded(json!({
+            "data": {
+                "id": "plan-1",
+                "attributes": {
+                    "sort_date": "2026-07-26T13:00:00Z",
+                    "title": "July 26"
+                }
+            }
+        }))),
+    );
+    server.expect(
+        Expectation::matching(all_of![
+            request::method("GET"),
+            request::path("/plans/plan-1/items"),
+        ])
+        .times(2)
+        .respond_with(httptest::cycle![
+            json_encoded(json!({
+                "data": [{
+                    "id": "item-1",
+                    "attributes": { "title": "Before", "sequence": 10 },
+                    "relationships": {}
+                }],
+                "included": [],
+                "links": { "next": null }
+            })),
+            json_encoded(json!({
+                "data": [{
+                    "id": "item-1",
+                    "attributes": { "title": "After", "sequence": 10 },
+                    "relationships": {}
+                }],
+                "included": [],
+                "links": { "next": null }
+            }))
+        ]),
+    );
+    let reviewed = PlanSnapshot::from_resolved(
+        crate::planning_center::identity::ResolvedPlanIdentity {
+            plan_id: "plan-1".to_string(),
+            service_id: "service-1".to_string(),
+            service_name: "Sunday Morning".to_string(),
+            plan_title: "July 26".to_string(),
+            date: Utc
+                .with_ymd_and_hms(2026, 7, 26, 13, 0, 0)
+                .single()
+                .expect("valid date"),
+            default_playlist_name: "July 26, 2026 - Sunday Morning".to_string(),
+        },
+        Vec::new(),
+    );
+
+    let error = test_client(base_url)
+        .refresh_plan_snapshot(&reviewed)
+        .await
+        .expect_err("unstable direct reads cannot become a reviewed snapshot");
+
+    assert!(matches!(
+        error,
+        Error::PlanningCenterSnapshotUnstable { plan_id, .. } if plan_id == "plan-1"
+    ));
 }

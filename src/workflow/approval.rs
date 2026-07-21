@@ -204,6 +204,13 @@ impl SourceManifest {
         Ok(())
     }
 
+    /// Exact reviewed source identities in deterministic path order.
+    pub(super) fn digests(&self) -> impl Iterator<Item = (&Path, [u8; 32])> {
+        self.sources
+            .iter()
+            .map(|source| (source.path.as_path(), source.sha256))
+    }
+
     #[cfg(test)]
     pub(super) fn contains(&self, path: &Path) -> bool {
         self.sources.iter().any(|source| source.path == path)
@@ -321,19 +328,19 @@ mod tests {
     };
 
     fn existing_plan(output_key: &str, source: &Path) -> ResolvedItemPlan {
-        ResolvedItemPlan {
-            output_key: OutputKey::new(output_key.to_string()).expect("valid test output key"),
-            position: 0,
-            pco_title: "Existing presentation".to_string(),
-            playlist_name: "Existing presentation".to_string(),
-            reason: "Test fixture".to_string(),
-            item_kind: ItemKind::Other,
-            item_type: None,
-            disposition: PlanDisposition::Ready(ReadyAction::UseExisting {
+        ResolvedItemPlan::new(
+            OutputKey::new(output_key.to_string()).expect("valid test output key"),
+            0,
+            "Existing presentation".to_string(),
+            "Existing presentation".to_string(),
+            "Test fixture".to_string(),
+            ItemKind::Other,
+            None,
+            PlanDisposition::Ready(ReadyAction::UseExisting {
                 file_path: source.to_path_buf(),
                 arrangement: None,
             }),
-        }
+        )
     }
 
     #[test]

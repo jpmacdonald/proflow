@@ -193,13 +193,11 @@ fn background_override_rejects_read_only_action() {
 async fn unresolved_plan_cannot_cross_the_prepared_build_boundary() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
-    let plan = ResolvedItemPlan {
-        reason: "ambiguous classification".to_string(),
-        ..test_plan(
-            "pco:item:main",
-            PlanDisposition::NeedsReview(ReviewContext::new(None)),
-        )
-    };
+    let mut plan = test_plan(
+        "pco:item:main",
+        PlanDisposition::NeedsReview(ReviewContext::new(None)),
+    );
+    plan.reason = "ambiguous classification".to_string();
     let review = runtime
         .executor()
         .review_build_request(
@@ -223,16 +221,14 @@ async fn unresolved_proposal_does_not_capture_executable_sources() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let missing = root.path().join("missing.pro");
-    let plan = ResolvedItemPlan {
-        reason: "operator must choose a presentation".to_string(),
-        ..test_plan(
-            "pco:item:main",
-            PlanDisposition::NeedsReview(ReviewContext::new(Some(ReadyAction::UseExisting {
-                file_path: missing.clone(),
-                arrangement: None,
-            }))),
-        )
-    };
+    let mut plan = test_plan(
+        "pco:item:main",
+        PlanDisposition::NeedsReview(ReviewContext::new(Some(ReadyAction::UseExisting {
+            file_path: missing.clone(),
+            arrangement: None,
+        }))),
+    );
+    plan.reason = "operator must choose a presentation".to_string();
 
     let review = runtime
         .executor()
@@ -283,7 +279,7 @@ fn same_output_key_cannot_be_skipped_and_overridden() {
 }
 
 #[test]
-fn slide_type_override_changes_only_playlist_semantics() {
+fn slide_type_override_changes_native_semantics_without_forging_policy_identity() {
     let original = test_plan("pco:item:main", PlanDisposition::Skip);
     let override_entry = EntryOverride {
         output_key: original.output_key.to_string(),
@@ -295,7 +291,51 @@ fn slide_type_override_changes_only_playlist_semantics() {
     let effective =
         apply_override(&original, Some(&override_entry)).expect("valid metadata override");
 
-    assert_eq!(effective.item_kind, ItemKind::Scripture);
-    assert_eq!(effective.item_type.as_deref(), Some("scripture"));
+    assert_eq!(effective.item_kind(), ItemKind::Scripture);
+    assert_eq!(effective.item_type(), None);
+    assert_eq!(effective.slide_type(), SlideType::Scripture);
     assert!(effective.render_style().is_none());
+}
+
+#[test]
+fn slide_type_override_cannot_relabel_generated_scripture() {
+    let scripture = ScriptureContent::single("Exodus 16:1-4".to_string(), "NRSVue".to_string())
+        .expect("valid scripture");
+    let original = test_plan(
+        "pco:item:main",
+        PlanDisposition::Ready(ReadyAction::GenerateScripture {
+            scripture,
+            style: test_style(None),
+        }),
+    );
+    let override_entry = EntryOverride {
+        output_key: original.output_key.to_string(),
+        playlist_name: None,
+        slide_type: Some(OverrideSlideType::Lyrics),
+        action: None,
+    };
+
+    let error = apply_override(&original, Some(&override_entry))
+        .expect_err("scripture content cannot acquire lyric output semantics");
+
+    assert!(matches!(
+        error,
+        BuildServiceError::PlanSemantics(PlanSemanticsError::IncompatibleSlideType { .. })
+    ));
+}
+
+#[test]
+fn generated_scripture_normalizes_classification_to_scripture() {
+    let scripture = ScriptureContent::single("Exodus 16:1-4".to_string(), "NRSVue".to_string())
+        .expect("valid scripture");
+    let plan = test_plan(
+        "pco:item:main",
+        PlanDisposition::Ready(ReadyAction::GenerateScripture {
+            scripture,
+            style: test_style(None),
+        }),
+    );
+
+    assert_eq!(plan.item_kind(), ItemKind::Scripture);
+    assert_eq!(plan.slide_type(), SlideType::Scripture);
 }

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use prost::Message;
+
 use crate::propresenter::deserialize::ProPresenterError;
 use crate::propresenter::generated::rv_data;
 use crate::propresenter::inspection::PresentationStructureSummary;
@@ -39,24 +41,97 @@ pub enum PackageError {
 }
 
 /// Decoded contents of a `.proplaylist` package.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PlaylistPackage {
-    /// The decoded protobuf playlist document from the `data` archive entry.
-    pub document: rv_data::PlaylistDocument,
+    document: rv_data::PlaylistDocument,
+    document_data: Vec<u8>,
+    embedded_file_data: BTreeMap<String, Vec<u8>>,
+    archive_entries: Vec<PackageFileSummary>,
+    archive_comment: Vec<u8>,
+}
+
+impl PlaylistPackage {
+    pub(super) const fn new(
+        document: rv_data::PlaylistDocument,
+        document_data: Vec<u8>,
+        embedded_file_data: BTreeMap<String, Vec<u8>>,
+        archive_entries: Vec<PackageFileSummary>,
+        archive_comment: Vec<u8>,
+    ) -> Self {
+        Self {
+            document,
+            document_data,
+            embedded_file_data,
+            archive_entries,
+            archive_comment,
+        }
+    }
+
+    /// Decoded protobuf playlist document from the `data` archive entry.
+    #[must_use]
+    pub const fn document(&self) -> &rv_data::PlaylistDocument {
+        &self.document
+    }
+
+    /// Consume the inspection result and return its decoded document.
+    #[must_use]
+    pub fn into_document(self) -> rv_data::PlaylistDocument {
+        self.document
+    }
+
     /// Raw protobuf bytes from the `data` archive entry.
-    pub document_data: Vec<u8>,
-    /// Whether decode then encode reproduced `document_data` byte-for-byte.
-    pub document_round_trip_exact: bool,
-    /// Non-`data` archive entries, usually embedded `.pro` files and media.
-    pub embedded_files: Vec<String>,
-    /// Detailed metadata for non-`data` archive entries.
-    pub embedded_file_details: Vec<PackageFileSummary>,
-    /// Raw bytes for non-`data` archive entries keyed by archive path.
-    pub embedded_file_data: BTreeMap<String, Vec<u8>>,
+    #[must_use]
+    pub fn document_data(&self) -> &[u8] {
+        &self.document_data
+    }
+
+    /// Whether decoding and re-encoding reproduces the exact `data` bytes.
+    #[must_use]
+    pub fn document_round_trip_is_exact(&self) -> bool {
+        self.document.encode_to_vec() == self.document_data
+    }
+
+    /// Names of non-`data` archive entries in physical archive order.
+    pub fn embedded_files(&self) -> impl Iterator<Item = &str> {
+        self.embedded_file_details().map(|file| file.name.as_str())
+    }
+
+    /// Metadata for non-`data` archive entries in physical archive order.
+    pub fn embedded_file_details(&self) -> impl Iterator<Item = &PackageFileSummary> {
+        self.archive_entries
+            .iter()
+            .filter(|entry| entry.name != "data")
+    }
+
+    /// Number of non-`data` archive entries.
+    #[must_use]
+    pub fn embedded_file_count(&self) -> usize {
+        self.embedded_file_data.len()
+    }
+
+    /// Raw bytes for one exact non-`data` archive path.
+    #[must_use]
+    pub fn embedded_file(&self, name: &str) -> Option<&[u8]> {
+        self.embedded_file_data.get(name).map(Vec::as_slice)
+    }
+
+    /// Whether the package contains one exact non-`data` archive path.
+    #[must_use]
+    pub fn has_embedded_file(&self, name: &str) -> bool {
+        self.embedded_file_data.contains_key(name)
+    }
+
     /// Every archive entry in physical order, including the `data` member.
-    pub archive_entries: Vec<PackageFileSummary>,
+    #[must_use]
+    pub fn archive_entries(&self) -> &[PackageFileSummary] {
+        &self.archive_entries
+    }
+
     /// Raw ZIP archive comment.
-    pub archive_comment: Vec<u8>,
+    #[must_use]
+    pub fn archive_comment(&self) -> &[u8] {
+        &self.archive_comment
+    }
 }
 
 /// Metadata for a non-`data` file inside a `.proplaylist` package.
@@ -91,24 +166,16 @@ pub struct PackageFileSummary {
 /// This is inspection data, not a write policy. In particular, a portable
 /// import containing only basename `.pro` members may still have the same
 /// observable shape as a library-local archive.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    rmcp::schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PlaylistPackageMode {
-    /// Local playlist package whose items link to installed presentations.
-    LibraryLocal,
-    /// Portable export containing the presentations and media needed to import it.
-    #[default]
-    ExportPortable,
+pub enum PlaylistArchiveShape {
+    /// Archive has no media or path-qualified members beyond presentations.
+    ///
+    /// This does not prove that presentation items are links: native exports
+    /// with embedded basename `.pro` members have the same inspected shape.
+    PresentationsOnly,
+    /// Archive contains media or path-qualified members associated with export.
+    ContainsMedia,
 }
 
 /// A compact view of a presentation item inside a playlist document.
@@ -170,10 +237,10 @@ pub struct PlaylistPackageComparison {
     pub expected_path: String,
     /// Actual/candidate package path.
     pub actual_path: String,
-    /// Inferred package mode for the expected package.
-    pub expected_mode: PlaylistPackageMode,
-    /// Inferred package mode for the actual package.
-    pub actual_mode: PlaylistPackageMode,
+    /// Inferred archive shape for the expected package.
+    pub expected_shape: PlaylistArchiveShape,
+    /// Inferred archive shape for the actual package.
+    pub actual_shape: PlaylistArchiveShape,
     /// Whether no comparison issues were found.
     pub compatible: bool,
     /// Human-readable comparison issues.

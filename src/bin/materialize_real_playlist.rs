@@ -7,7 +7,7 @@
 //! `.proplaylist` package.
 //!
 //! Usage:
-//!   `cargo run --bin materialize_real_playlist -- <ProPresenter root> <playlist name> <output.proplaylist>`
+//!   `cargo run --features dev-tools --bin materialize_real_playlist -- <ProPresenter root> <playlist name> <output.proplaylist>`
 
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 

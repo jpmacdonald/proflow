@@ -1,26 +1,25 @@
 //! Shared typed workflow plan model.
 
-mod existing;
 mod item;
-mod render;
 
-#[allow(unused_imports)]
-pub use existing::ExistingTransformError;
-pub use existing::{BackgroundTransform, CueTransform, ExistingTransform, MacroTransform};
+pub(crate) use crate::project_config::{
+    BackgroundTransform, CueTransform, ExistingTransform, MacroTransform,
+};
 pub use item::{
-    ItemKind, OutputKey, PlanDisposition, ReadyAction, ResolvedItemPlan, ReviewContext,
-    ScriptureContent, ScriptureRefInfo, ScriptureRequest,
+    ItemKind, OutputKey, PlanDisposition, PlanSemanticsError, ReadyAction, ResolvedItemPlan,
+    ReviewContext, ScriptureContent, ScriptureRefInfo, ScriptureRequest,
 };
 // Checked constructor errors remain available at the facade boundary even when
 // production callers only need inference to route them into review.
-#[allow(unused_imports)]
-pub use item::ScripturePlanError;
-pub use render::{
-    CueMacro, RenderRole, RenderStyle, ResolvedBackground, RestyleMacroPolicy, RestyleMacroRegion,
-    RestyleMacroSelector, SpeakerPalette,
+#[cfg(test)]
+pub(crate) use crate::project_config::{CueMacro, RestyleMacroRegion, SpeakerPalette};
+#[cfg(test)]
+pub(crate) use crate::project_config::{IdentifierProblem, RenderPlanError};
+pub(crate) use crate::project_config::{
+    RenderRole, RenderStyle, ResolvedBackground, RestyleMacroPolicy, RestyleMacroSelector,
 };
-#[allow(unused_imports)]
-pub use render::{IdentifierProblem, RenderPlanError};
+#[cfg(test)]
+pub(crate) use item::ScripturePlanError;
 
 #[cfg(test)]
 mod tests;

@@ -67,6 +67,7 @@
     },
     {
       "id": "all_songs",
+      "tier": "catch_all",
       "match": {
         "category": "song"
       },

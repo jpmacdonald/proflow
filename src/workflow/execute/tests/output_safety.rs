@@ -280,7 +280,8 @@ fn reviewed_background_keeps_canonical_identity_after_symlink_retarget() {
         BackgroundAssetPath::new("backgrounds/selected.png").expect("background path"),
     )));
     let reviewed = super::review::ReviewedBuildInputs::capture(
-        BoundBuildRequest::try_from(reviewed_request("Reviewed")).expect("bound request"),
+        super::review::ReviewedRequest::offline(reviewed_request("Reviewed"))
+            .expect("reviewed request"),
         vec![generate_title_plan("pco:item:main", style)],
         crate::propresenter::PresentationSize::FULL_HD,
         root.path(),

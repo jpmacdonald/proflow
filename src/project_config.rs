@@ -4,7 +4,7 @@
 //! Only the v4 schema is supported.
 
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod model;
 mod runtime;
@@ -13,21 +13,32 @@ mod validation;
 
 pub use model::{
     AmbiguousDecisionPolicy, BackgroundAssetPath, BackgroundId, ContentSourceKind, CueRoleConfig,
-    DecisionChoiceConfig, DecisionChoiceMatch, DecisionConfig, DescriptionParserKind,
-    DisplayBindingConfig, ExpansionRule, ExpansionStep, ItemKind, ItemRuleConfig, ItemRuleOutcome,
-    LibraryName, MatchSpec, OutputStrategy, OverrideRuleConfig, OverrideWhen, PersonConfig,
-    PresentationTypeConfig, ProjectDefaults, ProjectMetadata, RawProjectConfig,
-    RequiredPlaylistItemConfig, RequiredPlaylistPlacement, RestyleMacroConfig,
-    RestyleMacroRegionConfig, RestyleMacroSelectorConfig, RgbColor, RuleAction, ServiceGroupConfig,
-    SpeakerColorConfig, SpeakerSource, TargetSpec,
+    DecisionChoiceConfig, DecisionChoiceMatch, DecisionConfig, DecisionContextField,
+    DescriptionParserKind, DisplayBindingConfig, ExpansionRule, ExpansionStep, ItemKind,
+    ItemRuleConfig, ItemRuleOutcome, LibraryName, MatchCategory, MatchSpec, OutputStrategy,
+    OverrideRuleConfig, OverrideWhen, PersonConfig, PresentationTypeConfig, ProjectDefaults,
+    ProjectMetadata, RawProjectConfig, RequiredPlaylistItemConfig, RequiredPlaylistPlacement,
+    RestyleMacroConfig, RestyleMacroRegionConfig, RestyleMacroSelectorConfig, RgbColor, RuleAction,
+    RuleTier, ServiceGroupConfig, SpeakerColorConfig, SpeakerSource, TargetSpec,
 };
+pub use runtime::ResolvedBackground;
 pub use storage::{
     load_project_config, parse_project_config_str, parse_project_config_value,
     serialize_project_config, write_project_config, ProjectConfigLoadError,
 };
 pub use validation::{validate_project_config, ConfigValidationIssue};
 
-pub(crate) use runtime::{ExistingSource, PresentationPolicy, ReviewPolicy};
+pub(crate) use runtime::{
+    BackgroundTransform, CompiledDecision, CompiledDirectTarget, CompiledExpansionStep,
+    CompiledItemRule, CompiledRequiredPlaylistItem, CompiledRuleOutcome, CompiledSpeakerTarget,
+    CueTransform, ExistingSource, ExistingTransform, ItemMatchInput, MacroTransform,
+    PresentationPolicy, RenderRole, RenderStyle, ResolvedPresentationType,
+    ResolvedRequiredPresentation, RestyleMacroPolicy, RestyleMacroSelector, ReviewPolicy,
+};
+#[cfg(test)]
+pub(crate) use runtime::{
+    CueMacro, IdentifierProblem, RenderPlanError, RestyleMacroRegion, SpeakerPalette,
+};
 
 /// Validated project configuration accepted by runtime planning.
 ///
@@ -37,7 +48,9 @@ pub(crate) use runtime::{ExistingSource, PresentationPolicy, ReviewPolicy};
 #[derive(Debug, Clone)]
 pub struct ProjectConfig {
     raw: RawProjectConfig,
-    presentation_policies: BTreeMap<String, PresentationPolicy>,
+    presentation_policies: BTreeMap<String, std::sync::Arc<PresentationPolicy>>,
+    item_rules: Vec<CompiledItemRule>,
+    required_playlist_items: Vec<CompiledRequiredPlaylistItem>,
 }
 
 impl ProjectConfig {
@@ -71,16 +84,51 @@ impl ProjectConfig {
         &self.raw.cue_roles
     }
 
-    pub(crate) const fn service_groups(&self) -> &BTreeMap<String, ServiceGroupConfig> {
-        &self.raw.service_groups
+    /// Exact installed macro names that any compiled production policy can apply.
+    ///
+    /// This is the canonical inventory for native-asset validation. It covers
+    /// both macro-bearing config surfaces: generated cue roles and
+    /// existing-presentation macro regions.
+    pub(crate) fn referenced_macro_names(&self) -> BTreeSet<&str> {
+        let cue_role_names = self
+            .raw
+            .cue_roles
+            .values()
+            .flat_map(|role| {
+                [
+                    role.enter_macro.as_deref(),
+                    role.leader_enter_macro.as_deref(),
+                ]
+            })
+            .flatten();
+        let restyle_names = self
+            .raw
+            .presentation_types
+            .values()
+            .filter_map(|presentation| presentation.macro_transitions.as_ref())
+            .flat_map(|transitions| {
+                transitions
+                    .regions
+                    .iter()
+                    .map(|region| region.enter_macro.as_str())
+            });
+        cue_role_names.chain(restyle_names).collect()
     }
 
-    pub(crate) fn required_playlist_items(&self) -> &[RequiredPlaylistItemConfig] {
-        &self.raw.required_playlist_items
+    /// Return compiled presentation-type keys in deterministic order.
+    ///
+    /// This is the same policy set referenced by compiled item rules, so config
+    /// inspection never recompiles or interprets the wire model a second time.
+    pub fn presentation_type_keys(&self) -> impl Iterator<Item = &str> {
+        self.presentation_policies.keys().map(String::as_str)
     }
 
-    pub(crate) fn item_rules(&self) -> &[ItemRuleConfig] {
-        &self.raw.item_rules
+    pub(crate) fn compiled_item_rules(&self) -> &[CompiledItemRule] {
+        &self.item_rules
+    }
+
+    pub(crate) fn compiled_required_playlist_items(&self) -> &[CompiledRequiredPlaylistItem] {
+        &self.required_playlist_items
     }
 
     pub(crate) const fn people(&self) -> &BTreeMap<String, PersonConfig> {
@@ -89,8 +137,11 @@ impl ProjectConfig {
 
     /// Return the compiled presentation policy used by runtime planning.
     #[must_use]
-    pub(crate) fn presentation_policy(&self, key: &str) -> Option<&PresentationPolicy> {
-        self.presentation_policies.get(key)
+    #[cfg(test)]
+    pub(crate) fn presentation_policy(&self, key: &str) -> Option<PresentationPolicy> {
+        self.presentation_policies
+            .get(key)
+            .map(|policy| policy.as_ref().clone())
     }
 }
 
@@ -129,19 +180,47 @@ impl TryFrom<RawProjectConfig> for ProjectConfig {
     type Error = ProjectConfigValidationError;
 
     fn try_from(raw: RawProjectConfig) -> Result<Self, Self::Error> {
-        let issues = validation::validate_project_config(&raw);
+        let issues = validation::validate_project_config_structure(&raw);
         if !issues.is_empty() {
             return Err(ProjectConfigValidationError { issues });
         }
-        let presentation_policies =
-            runtime::compile_presentation_policies(&raw).map_err(|issue| {
-                ProjectConfigValidationError {
-                    issues: vec![issue],
+
+        let (render_roles, issues) = runtime::compile_render_roles(&raw);
+        if !issues.is_empty() {
+            return Err(ProjectConfigValidationError { issues });
+        }
+
+        let (presentation_policies, issues) =
+            runtime::compile_presentation_policies(&raw, &render_roles);
+        if !issues.is_empty() {
+            return Err(ProjectConfigValidationError { issues });
+        }
+
+        let mut issues = Vec::new();
+        let item_rules = match runtime::compile_item_rules(&raw, &presentation_policies) {
+            Ok(rules) => rules,
+            Err(rule_issues) => {
+                issues.extend(rule_issues);
+                Vec::new()
+            }
+        };
+        let required_playlist_items =
+            match runtime::compile_required_playlist_items(&raw, &presentation_policies) {
+                Ok(items) => items,
+                Err(required_issues) => {
+                    issues.extend(required_issues);
+                    Vec::new()
                 }
-            })?;
+            };
+
+        if !issues.is_empty() {
+            return Err(ProjectConfigValidationError { issues });
+        }
         Ok(Self {
             raw,
             presentation_policies,
+            item_rules,
+            required_playlist_items,
         })
     }
 }

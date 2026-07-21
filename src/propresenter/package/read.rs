@@ -16,8 +16,6 @@ pub fn read_playlist_package(path: impl AsRef<Path>) -> Result<PlaylistPackage, 
     let mut archive = ZipArchive::new(file)?;
     let archive_comment = archive.comment().to_vec();
     let mut archive_entries = Vec::with_capacity(archive.len());
-    let mut embedded_file_details = Vec::new();
-    let mut embedded_files = Vec::new();
     let mut embedded_file_data = BTreeMap::new();
     let mut seen_names = BTreeSet::new();
     let mut data = None;
@@ -31,7 +29,6 @@ pub fn read_playlist_package(path: impl AsRef<Path>) -> Result<PlaylistPackage, 
             return Err(PackageError::DuplicateArchiveEntry(name));
         }
         let summary = package_file_summary(&file, &name);
-        archive_entries.push(summary.clone());
 
         if name == "data" {
             data = Some(bytes);
@@ -44,25 +41,20 @@ pub fn read_playlist_package(path: impl AsRef<Path>) -> Result<PlaylistPackage, 
                     }
                 })?;
             }
-            embedded_file_details.push(summary);
-            embedded_files.push(name.clone());
             embedded_file_data.insert(name, bytes);
         }
+        archive_entries.push(summary);
     }
 
     let document_data = data.ok_or(PackageError::MissingData)?;
     let document = rv_data::PlaylistDocument::decode(document_data.as_slice())?;
-    let document_round_trip_exact = document.encode_to_vec() == document_data;
-    Ok(PlaylistPackage {
+    Ok(PlaylistPackage::new(
         document,
         document_data,
-        document_round_trip_exact,
-        embedded_files,
-        embedded_file_details,
         embedded_file_data,
         archive_entries,
         archive_comment,
-    })
+    ))
 }
 
 fn native_archive_member_name(file: &zip::read::ZipFile<'_>) -> String {

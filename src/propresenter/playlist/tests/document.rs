@@ -128,8 +128,11 @@ fn playlist_set_owns_child_and_package_order() {
     .expect("write playlist set");
     let package =
         crate::propresenter::package::read_playlist_package(&output).expect("read playlist set");
-    assert_eq!(presentation_items(&package.document).len(), 2);
-    assert_eq!(package.embedded_files, vec!["Shared Song.pro"]);
+    assert_eq!(presentation_items(package.document()).len(), 2);
+    assert_eq!(
+        package.embedded_files().collect::<Vec<_>>(),
+        ["Shared Song.pro"]
+    );
 }
 
 #[test]
@@ -139,10 +142,13 @@ fn builder_uses_native_fixture_metadata_and_current_node_defaults() {
     );
     let native =
         crate::propresenter::package::read_playlist_package(fixture).expect("read native fixture");
-    let metadata = PlaylistMetadata::from_document(&native.document).expect("native metadata");
+    let metadata = PlaylistMetadata::from_document(native.document()).expect("native metadata");
 
     let built = build_playlist("Native Defaults", &[], &metadata);
-    assert_eq!(built.application_info, native.document.application_info);
+    assert_eq!(
+        built.application_info.as_ref(),
+        native.document().application_info.as_ref()
+    );
     let root = built.root_node.expect("root playlist");
     assert_eq!(root.r#type, playlist::Type::Unknown as i32);
     assert!(!root.expanded);
@@ -328,7 +334,7 @@ fn selected_arrangement_round_trips_uuid_and_exact_name() {
     write_playlist_document_for_fidelity(&document, &entries, &output).expect("write playlist");
     let package =
         crate::propresenter::package::read_playlist_package(&output).expect("read playlist");
-    let items = presentation_items(&package.document);
+    let items = presentation_items(package.document());
     assert_eq!(
         items[0].arrangement_uuid.as_deref(),
         Some(arrangement_uuid_text.as_str())

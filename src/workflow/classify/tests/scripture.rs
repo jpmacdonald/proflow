@@ -284,7 +284,7 @@ fn static_scripture_type_reuses_an_existing_presentation() {
     let plans = build_plan(&[item], &config, Some(&index), None);
 
     assert!(is_use_existing(&plans[0]));
-    assert_eq!(plans[0].item_kind, ItemKind::Scripture);
+    assert_eq!(plans[0].item_kind(), ItemKind::Scripture);
     assert_eq!(plans[0].playlist_name, "Jonah 4");
     assert_eq!(
         plans[0].file_path(),

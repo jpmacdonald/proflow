@@ -1,6 +1,6 @@
 //! Cue-local instantiation of native theme slide identity graphs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::SlideInstantiationError;
 use crate::propresenter::generated::rv_data;
@@ -24,7 +24,7 @@ impl SourceIdentities {
         field: &mut Option<rv_data::Uuid>,
         kind: &'static str,
     ) -> Result<RemintedIdentity, SlideInstantiationError> {
-        let source_key = field.as_ref().and_then(uuid_key);
+        let source_key = field.as_ref().and_then(source_identity_key);
         if let Some(key) = &source_key {
             if let Some(first_kind) = self.kinds.insert(key.clone(), kind) {
                 return Err(SlideInstantiationError::DuplicateIdentity {
@@ -118,7 +118,151 @@ pub(super) fn instantiate_template_slide(
         }
     }
 
+    validate_slide_identity_graph(&instance)?;
     Ok(instance)
+}
+
+/// Prove that every cue-local slide object has one identity and every local
+/// reference resolves exactly once inside the same slide.
+pub fn validate_slide_identity_graph(
+    instance: &rv_data::PresentationSlide,
+) -> Result<(), SlideInstantiationError> {
+    use rv_data::slide::element::data_link::visibility_link::condition::ConditionType;
+    use rv_data::slide::element::data_link::PropertyType;
+
+    let slide = instance
+        .base_slide
+        .as_ref()
+        .ok_or(SlideInstantiationError::MissingBaseSlide)?;
+    let mut identities = BTreeMap::<String, &'static str>::new();
+    let mut element_ids = BTreeSet::<String>::new();
+    let mut build_order_ids = BTreeSet::<String>::new();
+
+    register_identity(&mut identities, slide.uuid.as_ref(), "slide")?;
+    for element in &slide.elements {
+        if let Some(graphics) = &element.element {
+            let key =
+                register_identity(&mut identities, graphics.uuid.as_ref(), "graphics element")?;
+            element_ids.insert(key.clone());
+            build_order_ids.insert(key);
+        }
+        for (build, kind) in [
+            (element.build_in.as_ref(), "build in"),
+            (element.build_out.as_ref(), "build out"),
+        ] {
+            let Some(build) = build else {
+                continue;
+            };
+            if element.element.is_none() {
+                return Err(SlideInstantiationError::BuildWithoutElement { build_kind: kind });
+            }
+            let key = register_identity(&mut identities, build.uuid.as_ref(), kind)?;
+            build_order_ids.insert(key);
+        }
+        for build in &element.child_builds {
+            let key = register_identity(&mut identities, build.uuid.as_ref(), "child build")?;
+            build_order_ids.insert(key);
+        }
+    }
+    for element in &slide.elements {
+        for (build, relation) in [
+            (element.build_in.as_ref(), "build-in elementUUID"),
+            (element.build_out.as_ref(), "build-out elementUUID"),
+        ] {
+            if let Some(build) = build {
+                require_local_reference(build.element_uuid.as_ref(), &element_ids, relation)?;
+            }
+        }
+        for data_link in &element.data_links {
+            match &data_link.property_type {
+                Some(PropertyType::AlternateText(alternate)) => optional_local_reference(
+                    alternate.other_element_uuid.as_ref(),
+                    &element_ids,
+                    "alternate-text link",
+                )?,
+                Some(PropertyType::AlternateFill(alternate)) => optional_local_reference(
+                    alternate.other_element_uuid.as_ref(),
+                    &element_ids,
+                    "alternate-fill link",
+                )?,
+                Some(PropertyType::VisibilityLink(link)) => {
+                    for condition in &link.conditions {
+                        if let Some(ConditionType::ElementVisibility(visibility)) =
+                            &condition.condition_type
+                        {
+                            optional_local_reference(
+                                visibility.other_element_uuid.as_ref(),
+                                &element_ids,
+                                "element-visibility link",
+                            )?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for guideline in &slide.guidelines {
+        register_identity(&mut identities, guideline.uuid.as_ref(), "slide guideline")?;
+    }
+    for guideline in &instance.template_guidelines {
+        register_identity(
+            &mut identities,
+            guideline.uuid.as_ref(),
+            "template guideline",
+        )?;
+    }
+    for reference in &slide.element_build_order {
+        require_local_reference(Some(reference), &build_order_ids, "element build order")?;
+    }
+    Ok(())
+}
+
+fn register_identity(
+    identities: &mut BTreeMap<String, &'static str>,
+    identity: Option<&rv_data::Uuid>,
+    kind: &'static str,
+) -> Result<String, SlideInstantiationError> {
+    let identity = identity
+        .and_then(validated_identity_key)
+        .ok_or(SlideInstantiationError::MissingIdentity { kind })?;
+    if let Some(first_kind) = identities.insert(identity.clone(), kind) {
+        return Err(SlideInstantiationError::DuplicateIdentity {
+            uuid: identity,
+            first_kind,
+            duplicate_kind: kind,
+        });
+    }
+    Ok(identity)
+}
+
+fn optional_local_reference(
+    reference: Option<&rv_data::Uuid>,
+    identities: &BTreeSet<String>,
+    relation: &'static str,
+) -> Result<(), SlideInstantiationError> {
+    reference.map_or(Ok(()), |reference| {
+        require_local_reference(Some(reference), identities, relation)
+    })
+}
+
+fn require_local_reference(
+    reference: Option<&rv_data::Uuid>,
+    identities: &BTreeSet<String>,
+    relation: &'static str,
+) -> Result<(), SlideInstantiationError> {
+    let source = reference.map_or_else(String::new, |uuid| uuid.string.clone());
+    if reference
+        .and_then(validated_identity_key)
+        .is_some_and(|identity| identities.contains(&identity))
+    {
+        Ok(())
+    } else {
+        Err(SlideInstantiationError::DanglingReference {
+            relation,
+            uuid: source,
+        })
+    }
 }
 
 fn record_remap(remap: &mut UuidRemap, identity: &RemintedIdentity) {
@@ -203,9 +347,9 @@ fn rewrite_required_reference(
     relation: &'static str,
 ) -> Result<(), SlideInstantiationError> {
     let source = reference.string.clone();
-    let reminted = uuid_key(reference)
+    let reminted = source_identity_key(reference)
         .and_then(|key| remap.get(&key))
-        .ok_or_else(|| SlideInstantiationError::DanglingReference {
+        .ok_or(SlideInstantiationError::DanglingReference {
             relation,
             uuid: source,
         })?;
@@ -213,9 +357,25 @@ fn rewrite_required_reference(
     Ok(())
 }
 
-fn uuid_key(uuid: &rv_data::Uuid) -> Option<String> {
+/// Return the opaque identity key carried by a source template.
+///
+/// Native source documents are reminted before they cross the generated-output
+/// boundary, so legacy non-UUID identity text remains usable for matching its
+/// source-local references.
+fn source_identity_key(uuid: &rv_data::Uuid) -> Option<String> {
     let value = uuid.string.trim();
     (!value.is_empty()).then(|| value.to_ascii_lowercase())
+}
+
+/// Return the canonical key permitted in a finalized generated slide graph.
+fn validated_identity_key(uuid: &rv_data::Uuid) -> Option<String> {
+    let value = uuid.string.trim();
+    if value != uuid.string {
+        return None;
+    }
+    uuid::Uuid::parse_str(value)
+        .ok()
+        .map(|identity| identity.to_string())
 }
 
 fn new_uuid() -> rv_data::Uuid {
@@ -226,9 +386,11 @@ fn new_uuid() -> rv_data::Uuid {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(clippy::expect_used, clippy::panic)]
 
     use std::collections::BTreeSet;
+
+    use prost::Message;
 
     use super::*;
 
@@ -247,6 +409,129 @@ mod tests {
     }
 
     #[test]
+    fn every_committed_native_template_instantiates_a_closed_local_graph() {
+        let fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/propresenter/native/templates");
+        let mut fixtures = std::fs::read_dir(&fixture_root)
+            .unwrap_or_else(|error| panic!("read {}: {error}", fixture_root.display()))
+            .map(|entry| {
+                entry.unwrap_or_else(|error| {
+                    panic!(
+                        "read fixture entry under {}: {error}",
+                        fixture_root.display()
+                    )
+                })
+            })
+            .filter(|entry| {
+                entry
+                    .file_type()
+                    .unwrap_or_else(|error| {
+                        panic!("inspect fixture {}: {error}", entry.path().display())
+                    })
+                    .is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("pro"))
+            })
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        fixtures.sort();
+        assert!(
+            !fixtures.is_empty(),
+            "{} contains no native template fixtures",
+            fixture_root.display()
+        );
+
+        for path in fixtures {
+            let presentation = rv_data::Presentation::decode(
+                std::fs::read(&path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+                    .as_slice(),
+            )
+            .unwrap_or_else(|error| panic!("decode {}: {error}", path.display()));
+            let mut slide_count = 0;
+            for action in presentation.cues.iter().flat_map(|cue| &cue.actions) {
+                let Some(rv_data::action::ActionTypeData::Slide(slide_action)) =
+                    &action.action_type_data
+                else {
+                    continue;
+                };
+                let Some(rv_data::action::slide_type::Slide::Presentation(slide)) =
+                    &slide_action.slide
+                else {
+                    continue;
+                };
+                let instance = instantiate_template_slide(slide)
+                    .unwrap_or_else(|error| panic!("instantiate {}: {error}", path.display()));
+                validate_slide_identity_graph(&instance)
+                    .unwrap_or_else(|error| panic!("validate {}: {error}", path.display()));
+                slide_count += 1;
+            }
+            assert!(slide_count > 0, "{} has no template slides", path.display());
+        }
+    }
+
+    #[test]
+    fn remints_opaque_source_identities_before_strict_final_validation() {
+        let source_element = native_uuid("legacy-element-id");
+        let source = rv_data::PresentationSlide {
+            base_slide: Some(rv_data::Slide {
+                uuid: Some(native_uuid("legacy-slide-id")),
+                elements: vec![rv_data::slide::Element {
+                    element: Some(rv_data::graphics::Element {
+                        uuid: Some(source_element.clone()),
+                        ..rv_data::graphics::Element::default()
+                    }),
+                    build_in: Some(rv_data::slide::element::Build {
+                        uuid: Some(native_uuid("legacy-build-id")),
+                        element_uuid: Some(source_element),
+                        ..rv_data::slide::element::Build::default()
+                    }),
+                    ..rv_data::slide::Element::default()
+                }],
+                ..rv_data::Slide::default()
+            }),
+            ..rv_data::PresentationSlide::default()
+        };
+
+        let instance = instantiate_template_slide(&source)
+            .expect("opaque source identities are reminted before validation");
+        validate_slide_identity_graph(&instance).expect("reminted graph is canonical");
+        let slide = instance.base_slide.as_ref().expect("base slide");
+        assert!(
+            uuid::Uuid::parse_str(&slide.uuid.as_ref().expect("slide identity").string).is_ok()
+        );
+        assert!(uuid::Uuid::parse_str(
+            &slide.elements[0]
+                .element
+                .as_ref()
+                .and_then(|element| element.uuid.as_ref())
+                .expect("element identity")
+                .string
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn final_validation_rejects_non_uuid_local_identity() {
+        let instance = rv_data::PresentationSlide {
+            base_slide: Some(rv_data::Slide {
+                uuid: Some(native_uuid("not-a-uuid")),
+                ..rv_data::Slide::default()
+            }),
+            ..rv_data::PresentationSlide::default()
+        };
+
+        assert!(matches!(
+            validate_slide_identity_graph(&instance),
+            Err(SlideInstantiationError::MissingIdentity { kind: "slide" })
+        ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn remints_local_graph_and_preserves_external_references() {
         use rv_data::slide::element::data_link::visibility_link::condition::ConditionType;
         use rv_data::slide::element::data_link::PropertyType;
@@ -271,7 +556,7 @@ mod tests {
                                 enable: true,
                                 fill_type: Some(rv_data::graphics::fill::FillType::Media(
                                     rv_data::Media {
-                                        uuid: Some(external_media.clone()),
+                                        uuid: Some(external_media),
                                         ..rv_data::Media::default()
                                     },
                                 )),
@@ -282,18 +567,18 @@ mod tests {
                             uuid: Some(source_build_in.clone()),
                             element_uuid: Some(source_element_a.clone()),
                             transition: Some(rv_data::Transition {
-                                favorite_uuid: Some(external_effect.clone()),
+                                favorite_uuid: Some(external_effect),
                                 ..rv_data::Transition::default()
                             }),
                             ..rv_data::slide::element::Build::default()
                         }),
                         build_out: Some(rv_data::slide::element::Build {
-                            uuid: Some(source_build_out.clone()),
+                            uuid: Some(source_build_out),
                             element_uuid: Some(source_element_a.clone()),
                             ..rv_data::slide::element::Build::default()
                         }),
                         child_builds: vec![rv_data::slide::element::ChildBuild {
-                            uuid: Some(source_child_build.clone()),
+                            uuid: Some(source_child_build),
                             ..rv_data::slide::element::ChildBuild::default()
                         }],
                         data_links: vec![
@@ -355,7 +640,7 @@ mod tests {
                         ..rv_data::slide::Element::default()
                     },
                 ],
-                element_build_order: vec![source_element_a.clone(), source_build_in.clone()],
+                element_build_order: vec![source_element_a.clone(), source_build_in],
                 guidelines: vec![rv_data::AlignmentGuide {
                     uuid: Some(native_uuid("10000000-0000-0000-0000-000000000006")),
                     ..rv_data::AlignmentGuide::default()
@@ -423,8 +708,8 @@ mod tests {
         assert_eq!(build_out.element_uuid.as_ref(), Some(first_uuid));
         assert_eq!(&slide.element_build_order[0], first_uuid);
         assert_eq!(
-            slide.element_build_order[1],
-            *build_in.uuid.as_ref().expect("build-in identity")
+            &slide.element_build_order[1],
+            build_in.uuid.as_ref().expect("build-in identity")
         );
 
         let PropertyType::AlternateText(alternate) = first.data_links[0]
@@ -467,18 +752,21 @@ mod tests {
         assert_eq!(timer_visibility.timer_uuid.as_ref(), Some(&external_timer));
 
         assert_eq!(
-            first.element.as_ref().and_then(|element| element.fill.as_ref()),
+            first
+                .element
+                .as_ref()
+                .and_then(|element| element.fill.as_ref()),
             source_slide.elements[0]
                 .element
                 .as_ref()
                 .and_then(|element| element.fill.as_ref())
         );
         assert_eq!(
-            build_in.transition,
+            build_in.transition.as_ref(),
             source_slide.elements[0]
                 .build_in
                 .as_ref()
-                .and_then(|build| build.transition.clone())
+                .and_then(|build| build.transition.as_ref())
         );
         let PropertyType::TimerText(timer) = first.data_links[3]
             .property_type

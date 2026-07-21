@@ -5,6 +5,14 @@
 //! unique basename match is therefore reported as an inferred native rebase.
 //! It is useful reverse-engineering evidence, not proof that an export can be
 //! relocated or imported successfully.
+//!
+//! The committed Easter media fixture was exported by `ProPresenter` 18.4 and
+//! links presentations relative to `ROOT_USER_HOME`. Current production output
+//! deliberately uses `ROOT_SHOW/Libraries/...`. Those locator roots are
+//! operator-significant and the package comparator correctly does not normalize
+//! them. Consequently this fixture is an independent oracle for native archive,
+//! link, and media-dependency shape; the current-version presentations-only
+//! fixture separately owns exact production-writer reconstruction parity.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
@@ -40,6 +48,20 @@ struct MediaAudit {
     missing: Vec<String>,
     ambiguous: Vec<String>,
     extra_archive_media: Vec<String>,
+}
+
+#[test]
+fn committed_independent_portable_export_has_complete_media_and_links() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "tests/fixtures/propresenter/native/corpus/playlists/native-easter-portable-media.proplaylist",
+    );
+    let audit = audit_export(&path);
+
+    assert_media_complete(&path, &audit);
+    assert!(
+        audit.exact_matches + audit.inferred_rebases.len() > 0,
+        "fixture must exercise an actual presentation-to-media dependency"
+    );
 }
 
 #[test]
@@ -163,7 +185,7 @@ fn audit_export(path: &Path) -> MediaAudit {
         references.extend(
             presentation_media_dependencies(&presentation)
                 .into_iter()
-                .map(|dependency| media_reference(&name, dependency)),
+                .map(|dependency| media_reference(&name, &dependency)),
         );
     }
 
@@ -178,15 +200,13 @@ fn assert_playlist_link_integrity(path: &Path) {
     let mut embedded_by_name = EmbeddedPresentationsByName::new();
     let mut embedded_names = BTreeSet::new();
     for file in package
-        .embedded_file_details
-        .iter()
+        .embedded_file_details()
         .filter(|file| file.is_presentation)
     {
         let bytes = package
-            .embedded_file_data
-            .get(&file.name)
+            .embedded_file(&file.name)
             .unwrap_or_else(|| panic!("{} has no retained bytes", file.name));
-        let presentation = rv_data::Presentation::decode(bytes.as_slice())
+        let presentation = rv_data::Presentation::decode(bytes)
             .unwrap_or_else(|error| panic!("{} is not a presentation: {error}", file.name));
         embedded_by_name
             .entry(file.basename.to_ascii_lowercase())
@@ -197,10 +217,11 @@ fn assert_playlist_link_integrity(path: &Path) {
 
     let mut referenced_names = BTreeSet::new();
     let mut failures = Vec::new();
+    let document = package.document();
     for root in [
-        package.document.root_node.as_ref(),
-        package.document.live_video_playlist.as_ref(),
-        package.document.downloads_playlist.as_ref(),
+        document.root_node.as_ref(),
+        document.live_video_playlist.as_ref(),
+        document.downloads_playlist.as_ref(),
     ]
     .into_iter()
     .flatten()
@@ -488,19 +509,18 @@ fn assert_media_complete(path: &Path, audit: &MediaAudit) {
     );
 }
 
-fn media_reference(presentation: &str, dependency: MediaDependency) -> MediaReference {
-    let path = dependency.path.map_or_else(
-        || normalize_path(&dependency.source),
+fn media_reference(presentation: &str, dependency: &MediaDependency) -> MediaReference {
+    let path = dependency.stored_absolute_path().map_or_else(
+        || normalize_path(dependency.source()),
         |path| normalize_path(&path.to_string_lossy()),
     );
     let basename = dependency
-        .basename
-        .as_deref()
+        .basename()
         .and_then(normalized_basename)
         .or_else(|| normalized_basename(&path));
     MediaReference {
         presentation: presentation.to_string(),
-        source: dependency.source,
+        source: dependency.source().to_string(),
         path,
         basename,
     }

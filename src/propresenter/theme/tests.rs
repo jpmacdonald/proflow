@@ -45,6 +45,8 @@ fn cache(
             })
             .collect(),
         theme_name: Some("test".to_string()),
+        source_path: None,
+        source_sha256: None,
     }
 }
 
@@ -92,12 +94,18 @@ fn theme_loading_uses_only_the_explicit_root() {
             actions: Vec::new(),
         }],
     };
-    std::fs::write(directory.join("Theme"), document.encode_to_vec()).expect("write theme");
+    let theme_path = directory.join("Theme");
+    let bytes = document.encode_to_vec();
+    std::fs::write(&theme_path, &bytes).expect("write theme");
 
     let loaded = ThemeCache::load_from_dir(Some("Sunday"), &root.path().join("Themes"))
         .expect("load explicit theme");
     assert_eq!(loaded.theme_name(), Some("Sunday"));
     assert_eq!(loaded.theme_slide_names(), vec!["Scripture"]);
+    assert_eq!(
+        loaded.source_document(),
+        Some((theme_path.as_path(), Sha256::digest(bytes).into()))
+    );
 }
 
 #[test]
@@ -122,6 +130,8 @@ fn discovery_reports_slots_canvas_and_embedded_actions() {
             },
         )]),
         theme_name: Some("test".to_string()),
+        source_path: None,
+        source_sha256: None,
     };
 
     let facts = themes.theme_slide_facts();
@@ -208,6 +218,8 @@ fn embedded_theme_actions_are_rejected() {
             },
         )]),
         theme_name: Some("test".to_string()),
+        source_path: None,
+        source_sha256: None,
     };
     assert!(matches!(
         themes.slide_template("Content"),

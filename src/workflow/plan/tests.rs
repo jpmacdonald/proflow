@@ -192,17 +192,16 @@ fn canonical_item_kinds_preserve_propresenter_slide_semantics() {
         (ItemKind::Liturgy, SlideType::Text),
         (ItemKind::Other, SlideType::Text),
     ] {
-        let plan = ResolvedItemPlan {
-            output_key: OutputKey::new("test:slide-type".to_string())
-                .expect("valid test output key"),
-            position: 0,
-            pco_title: "Test".to_string(),
-            playlist_name: "Test".to_string(),
-            reason: "Test fixture".to_string(),
+        let plan = ResolvedItemPlan::new(
+            OutputKey::new("test:slide-type".to_string()).expect("valid test output key"),
+            0,
+            "Test".to_string(),
+            "Test".to_string(),
+            "Test fixture".to_string(),
             item_kind,
-            item_type: None,
-            disposition: PlanDisposition::Skip,
-        };
+            None,
+            PlanDisposition::Skip,
+        );
         assert_eq!(plan.slide_type(), expected);
     }
 }

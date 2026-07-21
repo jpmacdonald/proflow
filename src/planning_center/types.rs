@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Represents a type of service (e.g., "Sunday Morning")
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Service {
     /// Unique identifier from Planning Center
     pub id: String,
@@ -15,7 +15,7 @@ pub struct Service {
 }
 
 /// Represents a specific instance of a Service on a particular date
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Plan {
     /// Unique identifier from Planning Center
     pub id: String,
@@ -32,7 +32,7 @@ pub struct Plan {
 }
 
 /// Represents an element within a Plan (e.g., Song, Scripture, Header)
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Item {
     /// Unique identifier from Planning Center
     pub id: String,
@@ -69,7 +69,7 @@ pub enum Category {
 }
 
 /// Song metadata from Planning Center
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Song {
     /// Song title
     pub title: String,
@@ -88,7 +88,7 @@ pub struct Song {
 }
 
 /// Scripture reference
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Scripture {
     /// Book, chapter, and verse reference string
     pub reference: String,

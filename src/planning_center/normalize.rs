@@ -212,17 +212,7 @@ fn parse_item(
 
     let scripture = if category == Category::Title && title.to_lowercase().contains("scripture") {
         crate::bible::parse_scripture_ref(&title).map(|reference| {
-            let reference = if let Some(end) = reference.end_verse {
-                format!(
-                    "{} {}:{}-{}",
-                    reference.book, reference.chapter, reference.start_verse, end
-                )
-            } else {
-                format!(
-                    "{} {}:{}",
-                    reference.book, reference.chapter, reference.start_verse
-                )
-            };
+            let reference = reference.to_string();
             Scripture {
                 reference,
                 text: description.clone(),

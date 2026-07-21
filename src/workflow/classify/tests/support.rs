@@ -41,16 +41,16 @@ pub(super) fn is_generated(plan: &ResolvedItemPlan) -> bool {
 }
 
 pub(super) fn test_plan(disposition: PlanDisposition) -> ResolvedItemPlan {
-    ResolvedItemPlan {
-        output_key: OutputKey::new("test:main".to_string()).expect("valid test output key"),
-        position: 0,
-        pco_title: "Test".to_string(),
-        playlist_name: "Test".to_string(),
-        reason: "Test fixture".to_string(),
-        item_kind: ItemKind::Other,
-        item_type: None,
+    ResolvedItemPlan::new(
+        OutputKey::new("test:main".to_string()).expect("valid test output key"),
+        0,
+        "Test".to_string(),
+        "Test".to_string(),
+        "Test fixture".to_string(),
+        ItemKind::Other,
+        None,
         disposition,
-    }
+    )
 }
 
 pub(super) fn test_render_role(id: &str, macro_binding: Option<CueMacro>) -> RenderRole {
@@ -348,7 +348,17 @@ pub(super) fn mutable_target_collision_config() -> ProjectConfig {
         r#"
             {
               "version": 4,
-              "cue_roles": { "text": { "slide": "Text" } },
+              "cue_roles": {
+                "text": {
+                  "slide": "Text",
+                  "enter_macro": "Scripture/Prayer",
+                  "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+                  "speaker_colors": {
+                    "leader": "\u0023FEDB4F",
+                    "audience": "\u0023FFFFFF"
+                  }
+                }
+              },
               "presentation_types": {
                 "edited": {
                   "kind": "liturgy",

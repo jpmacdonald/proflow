@@ -1,7 +1,7 @@
 //! Compare two `ProPresenter` playlist packages for parity work.
 //!
 //! Usage:
-//!   `cargo run --bin parity_diff -- <ground-truth.proplaylist> <generated.proplaylist>`
+//!   `cargo run --features dev-tools --bin parity_diff -- <ground-truth.proplaylist> <generated.proplaylist>`
 
 #![allow(clippy::print_stdout)]
 
@@ -10,9 +10,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use proflow::propresenter::package::{
-    compare_playlist_packages, embedded_presentation_structures, infer_package_mode,
-    presentation_items, read_playlist_package, EmbeddedPresentationStructure, PlaylistItemSummary,
-    PlaylistPackageComparison, PlaylistPackageMode,
+    compare_playlist_packages, embedded_presentation_structures, infer_archive_shape,
+    presentation_items, read_playlist_package, EmbeddedPresentationStructure, PlaylistArchiveShape,
+    PlaylistItemSummary, PlaylistPackageComparison,
 };
 use serde::Serialize;
 
@@ -21,8 +21,8 @@ struct ParityDiffReport {
     expected_path: String,
     actual_path: String,
     compatible: bool,
-    expected_mode: PlaylistPackageMode,
-    actual_mode: PlaylistPackageMode,
+    expected_shape: PlaylistArchiveShape,
+    actual_shape: PlaylistArchiveShape,
     package: PlaylistPackageComparison,
     expected_items: Vec<PlaylistItemSummary>,
     actual_items: Vec<PlaylistItemSummary>,
@@ -83,10 +83,10 @@ fn run() -> Result<ParityDiffReport> {
         expected_path: expected_path.display().to_string(),
         actual_path: actual_path.display().to_string(),
         compatible: package.compatible,
-        expected_mode: infer_package_mode(&expected),
-        actual_mode: infer_package_mode(&actual),
-        expected_items: presentation_items(&expected.document),
-        actual_items: presentation_items(&actual.document),
+        expected_shape: infer_archive_shape(&expected),
+        actual_shape: infer_archive_shape(&actual),
+        expected_items: presentation_items(expected.document()),
+        actual_items: presentation_items(actual.document()),
         expected_presentations: embedded_presentation_structures(&expected),
         actual_presentations: embedded_presentation_structures(&actual),
         package,

@@ -1,7 +1,7 @@
 //! Compact summary of a `ProPresenter` `.pro` file.
 //!
 //! Usage:
-//!   `cargo run --bin summarize_pro -- <file.pro> [...]`
+//!   `cargo run --features dev-tools --bin summarize_pro -- <file.pro> [...]`
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 

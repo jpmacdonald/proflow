@@ -218,34 +218,6 @@ pub fn summarize_presentation_structure(
     }
 }
 
-pub(crate) fn percent_decode_lossy(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                decoded.push((hi << 4) | lo);
-                index += 3;
-                continue;
-            }
-        }
-        decoded.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8(decoded).unwrap_or_else(|_| value.to_string())
-}
-
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
 type ReferenceIndex<'a> = BTreeMap<&'a str, Vec<usize>>;
 
 enum ReferenceResolution<'a> {

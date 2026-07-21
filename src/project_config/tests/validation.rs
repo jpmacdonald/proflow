@@ -26,9 +26,9 @@ fn required_playlist_items_reference_static_existing_types_and_known_groups() {
         "#;
     let config =
         parse_project_config_str(valid).expect("a required static presentation should validate");
-    assert_eq!(config.required_playlist_items().len(), 1);
+    assert_eq!(config.as_raw().required_playlist_items.len(), 1);
     assert_eq!(
-        config.required_playlist_items()[0].placement,
+        config.as_raw().required_playlist_items[0].placement,
         RequiredPlaylistPlacement::Start
     );
 
@@ -39,7 +39,7 @@ fn required_playlist_items_reference_static_existing_types_and_known_groups() {
         .to_string()
         .contains("unknown service group 'missing'"));
 
-    let invalid_type = valid.replace("\"preserve_existing\"", "\"generate_new\"");
+    let invalid_type = valid.replace("\"preserve_existing\"", "\"needs_review\"");
     let error = parse_project_config_str(&invalid_type)
         .expect_err("required generated presentations must fail validation");
     assert!(error.to_string().contains("static preserve_existing"));
@@ -114,7 +114,7 @@ fn allows_required_file_ownership_in_disjoint_service_scopes() {
         parse_project_config_value(required_file_scope_config(Some("weekly"), Some("seasonal")))
             .expect("disjoint service scopes may reuse one required presentation");
 
-    assert_eq!(config.required_playlist_items().len(), 2);
+    assert_eq!(config.as_raw().required_playlist_items.len(), 2);
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn target_kind_must_match_the_rule_context() {
             "generated": {
               "kind": "liturgy",
               "content_source": "description",
-              "description_parser": "liturgical",
+              "description_parser": "content_nametag",
               "output_strategy": "generate_new",
               "display": { "kind": "single", "role": "content" }
             }
@@ -279,7 +279,7 @@ fn rejects_split_display_with_one_role_identity() {
             "generated": {
               "kind": "liturgy",
               "content_source": "description",
-              "description_parser": "liturgical",
+              "description_parser": "content_nametag",
               "output_strategy": "generate_new",
               "display": {
                 "kind": "split",
@@ -295,7 +295,7 @@ fn rejects_split_display_with_one_role_identity() {
         .expect_err("split regions must have distinct semantic identities");
     assert!(error
         .to_string()
-        .contains("title and content must use different cue roles"));
+        .contains("title and content roles both use id 'content'"));
 }
 
 #[test]
@@ -363,6 +363,13 @@ fn rejects_styling_on_read_only_presentations() {
     let message = error.to_string();
     for field in ["display", "background", "max_lines_per_slide"] {
         assert!(message.contains(field), "missing {field:?} in {message}");
+        assert_eq!(
+            message
+                .matches(&format!("presentation_types.song.{field}:"))
+                .count(),
+            1,
+            "semantic compiler must own {field:?} exactly once: {message}"
+        );
     }
     assert!(!message.contains("arrangement is not valid"));
 }
@@ -512,10 +519,15 @@ fn validates_arrangements_only_for_existing_presentations() {
         .to_string()
         .contains("arrangement cannot target non-preserve_existing/non-restyle_existing"));
 
-    let existing_and_broad = r#"
+    let existing_and_broad = r##"
         {
           "version": 4,
-          "cue_roles": { "content": { "slide": "Content" } },
+          "cue_roles": { "content": {
+            "slide": "Content",
+            "enter_macro": "Scripture/Prayer",
+            "leader_enter_macro": "Scripture/Prayer (Highlighted)",
+            "speaker_colors": {"leader": "#FEDB4F", "audience": "#FFFFFF"}
+          } },
           "presentation_types": {
             "existing": {
               "kind": "graphic",
@@ -536,7 +548,7 @@ fn validates_arrangements_only_for_existing_presentations() {
             "arrangement": "Seasonal"
           }]
         }
-        "#;
+        "##;
     parse_project_config_str(existing_and_broad)
         .expect("existing and broad arrangement configuration should remain valid");
 }
@@ -769,8 +781,9 @@ fn validate_project_config_reports_unknown_refs() {
     let mut config = RawProjectConfig::default();
     config.item_rules.push(ItemRuleConfig {
         id: "bad_rule".to_string(),
+        tier: RuleTier::Primary,
         match_spec: MatchSpec {
-            category: Some("text".to_string()),
+            category: Some(MatchCategory::Text),
             ..MatchSpec::default()
         },
         outcome: ItemRuleOutcome::UseType {
@@ -790,6 +803,47 @@ fn validate_project_config_reports_unknown_refs() {
 
     let issues = validate_project_config(&config);
     assert_eq!(issues.len(), 3);
+}
+
+#[test]
+fn checked_compilation_reports_independent_rule_and_required_reference_errors_together() {
+    let error = parse_project_config_str(
+        r#"{
+          "version": 4,
+          "presentation_types": {
+            "static": {
+              "kind": "graphic",
+              "content_source": "static",
+              "output_strategy": "preserve_existing"
+            }
+          },
+          "item_rules": [
+            {
+              "id": "first",
+              "match": { "title_prefix": ["first"] },
+              "use_type": "missing_first"
+            },
+            {
+              "id": "second",
+              "match": { "title_prefix": ["second"] },
+              "use_type": "missing_second"
+            }
+          ],
+          "required_playlist_items": [{
+            "id": "required",
+            "use_type": "static",
+            "library_file": "Required.pro",
+            "placement": "start",
+            "service_group": "missing_group"
+          }]
+        }"#,
+    )
+    .expect_err("all unresolved compiled references must reject the config")
+    .to_string();
+
+    for expected in ["missing_first", "missing_second", "missing_group"] {
+        assert!(error.contains(expected), "missing {expected:?} in {error}");
+    }
 }
 
 #[test]
@@ -858,6 +912,59 @@ fn rejects_duplicate_rule_ids() {
     let error = parse_project_config_str(json).expect_err("duplicate ids must be rejected");
     assert!(matches!(error, ProjectConfigLoadError::Invalid(_)));
     assert!(error.to_string().contains("duplicate item rule id"));
+}
+
+#[test]
+fn speaker_fallback_rule_accepts_an_exact_configured_rule_id() {
+    let json = r#"
+        {
+          "version": 4,
+          "defaults": {
+            "speaker_fallback_rule": "lords_prayer"
+          },
+          "item_rules": [
+            {
+              "id": "lords_prayer",
+              "match": { "title_prefix": ["prayer and the lord's prayer"] },
+              "action": { "kind": "skip", "reason": "test source" }
+            }
+          ]
+        }
+        "#;
+
+    let config = parse_project_config_str(json).expect("exact rule reference should compile");
+    assert_eq!(
+        config.defaults().speaker_fallback_rule.as_deref(),
+        Some("lords_prayer")
+    );
+}
+
+#[test]
+fn speaker_fallback_rule_rejects_unknown_or_inexact_rule_ids() {
+    for fallback_rule in ["missing_rule", "LORDS_PRAYER", " lords_prayer"] {
+        let json = format!(
+            r#"
+            {{
+              "version": 4,
+              "defaults": {{
+                "speaker_fallback_rule": "{fallback_rule}"
+              }},
+              "item_rules": [
+                {{
+                  "id": "lords_prayer",
+                  "match": {{ "title_prefix": ["prayer and the lord's prayer"] }},
+                  "action": {{ "kind": "skip", "reason": "test source" }}
+                }}
+              ]
+            }}
+            "#
+        );
+
+        let error = parse_project_config_str(&json)
+            .expect_err("unknown or inexact speaker fallback rule must be rejected");
+        assert!(matches!(error, ProjectConfigLoadError::Invalid(_)));
+        assert!(error.to_string().contains("defaults.speaker_fallback_rule"));
+    }
 }
 
 #[test]

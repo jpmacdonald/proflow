@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::bible::{to_superscript, Verse};
 
-use super::text_flow::TextLayout;
+use super::text_flow::{FitPartitionError, TextLayout};
 
 const MAX_SCRIPTURE_LINES: usize = 7;
 const MIN_TRAILING_SLIDE_WORDS: usize = 3;
@@ -66,11 +66,36 @@ impl ScriptureSlide {
 /// one additional slide.
 #[must_use]
 pub fn split_verses_for_slides(verses: &[Verse], layout: TextLayout) -> Vec<ScriptureSlide> {
+    let max_lines = layout.max_lines().min(MAX_SCRIPTURE_LINES);
+    let mut estimated_fit =
+        |text: &str| Ok::<_, std::convert::Infallible>(layout.estimated_lines(text) <= max_lines);
+    match split_verses_with_fit(verses, &mut estimated_fit) {
+        Ok(slides) => slides,
+        Err(FitPartitionError::NoFittingPartition) => Vec::new(),
+        Err(FitPartitionError::Measurement(unreachable)) => match unreachable {},
+    }
+}
+
+/// Split verses with an authoritative physical-fit and line-policy predicate.
+///
+/// Grammar, verse provenance, and front-loading remain pure. The caller owns
+/// native shaping and the configured maximum-line decision. The predicate must
+/// be prefix-monotone: after one candidate does not fit, appending more source
+/// words may not make it fit. This is true for the production contract because
+/// it measures fixed-scale attributed text in fixed bounds with no text
+/// transforms. The optimizer relies on that property to stop probing a prefix
+/// after its first overflow.
+pub fn split_verses_with_fit<E, F>(
+    verses: &[Verse],
+    fits: &mut F,
+) -> Result<Vec<ScriptureSlide>, FitPartitionError<E>>
+where
+    F: FnMut(&str) -> Result<bool, E>,
+{
     let words = scripture_words(verses);
-    let Some(partition) = optimal_partition(&words, layout) else {
-        return Vec::new();
-    };
-    render_partition(&words, &partition.ends)
+    let partition =
+        optimal_partition_with_fit(&words, fits)?.ok_or(FitPartitionError::NoFittingPartition)?;
+    Ok(render_partition(&words, &partition.ends))
 }
 
 #[derive(Debug, Clone)]
@@ -236,14 +261,19 @@ impl Partition {
     }
 }
 
-fn optimal_partition(words: &[ScriptureWord], layout: TextLayout) -> Option<Partition> {
+fn optimal_partition_with_fit<E, F>(
+    words: &[ScriptureWord],
+    fits: &mut F,
+) -> Result<Option<Partition>, FitPartitionError<E>>
+where
+    F: FnMut(&str) -> Result<bool, E>,
+{
     if words.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let mut prefixes = vec![BTreeMap::<usize, Partition>::new(); words.len()];
     let mut finals = Vec::new();
-    let max_lines = layout.max_lines().min(MAX_SCRIPTURE_LINES);
 
     for start in 0..words.len() {
         let prior_partitions = if start == 0 {
@@ -269,7 +299,7 @@ fn optimal_partition(words: &[ScriptureWord], layout: TextLayout) -> Option<Part
             let word = &words[end - 1];
             text.push_str(&word.text);
             word_count += word.source_word_count;
-            if layout.estimated_lines(&text) > max_lines {
+            if !fits(&text).map_err(FitPartitionError::Measurement)? {
                 break;
             }
 
@@ -295,13 +325,13 @@ fn optimal_partition(words: &[ScriptureWord], layout: TextLayout) -> Option<Part
         }
     }
 
-    finals.into_iter().reduce(|best, candidate| {
+    Ok(finals.into_iter().reduce(|best, candidate| {
         if candidate.is_better_than(&best, true) {
             candidate
         } else {
             best
         }
-    })
+    }))
 }
 
 fn retain_partition(
@@ -539,6 +569,33 @@ mod tests {
             slides,
             split_verses_for_slides(&verses, permissive_layout),
             "the global optimum must be deterministic"
+        );
+    }
+
+    #[test]
+    fn monotone_fit_stops_extending_each_overflowing_prefix() {
+        let verses = [Verse {
+            number: 1,
+            text: (0..180)
+                .map(|index| format!("word{index}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        }];
+        let mut calls = 0_usize;
+        let mut fit = |candidate: &str| {
+            calls += 1;
+            Ok::<_, std::convert::Infallible>(candidate.split_whitespace().count() <= 20)
+        };
+
+        let slides = split_verses_with_fit(&verses, &mut fit).expect("monotone fit partitions");
+
+        assert!(!slides.is_empty());
+        assert!(slides
+            .iter()
+            .all(|slide| slide.text().split_whitespace().count() <= 20));
+        assert!(
+            calls <= 180 * 21,
+            "overflow probing exceeded the monotone-prefix bound: {calls} calls"
         );
     }
 

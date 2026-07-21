@@ -5,9 +5,8 @@ use std::path::PathBuf;
 
 use super::request::{canonical_presentation_source, validate_identity, validate_path_identity};
 use super::BuildServiceError;
-use crate::workflow::plan::{
-    ItemKind, PlanDisposition, ReadyAction, RenderStyle, ResolvedBackground, ResolvedItemPlan,
-};
+use crate::propresenter::SlideType;
+use crate::workflow::plan::{ReadyAction, ResolvedBackground, ResolvedItemPlan};
 
 /// Per-entry override applied during service build execution.
 ///
@@ -158,9 +157,10 @@ pub(super) fn validate_request_edits(
     for key in skip_output_keys {
         validate_identity("skip output_key", key)?;
         if !skip_keys.insert(key.as_str()) {
-            return Err(BuildServiceError::message(format!(
-                "duplicate skip_output_key '{key}'"
-            )));
+            return Err(BuildServiceError::DuplicateRequestEdit {
+                kind: "skip_output_key",
+                key: key.clone(),
+            });
         }
     }
 
@@ -168,16 +168,15 @@ pub(super) fn validate_request_edits(
     for entry in overrides {
         validate_identity("override output_key", &entry.output_key)?;
         if !override_keys.insert(entry.output_key.as_str()) {
-            return Err(BuildServiceError::message(format!(
-                "duplicate override for output_key '{}'",
-                entry.output_key
-            )));
+            return Err(BuildServiceError::DuplicateRequestEdit {
+                kind: "override for output_key",
+                key: entry.output_key.clone(),
+            });
         }
         if skip_keys.contains(entry.output_key.as_str()) {
-            return Err(BuildServiceError::message(format!(
-                "output_key '{}' cannot be both skipped and overridden",
-                entry.output_key
-            )));
+            return Err(BuildServiceError::ConflictingRequestEdits {
+                output_key: entry.output_key.clone(),
+            });
         }
         entry.validate()?;
     }
@@ -205,7 +204,7 @@ pub(super) fn resolve_requested_plans(
         .map(|plan| {
             if skip_set.contains(plan.output_key.as_str()) {
                 let mut skipped = plan.clone();
-                skipped.disposition = PlanDisposition::Skip;
+                skipped.skip();
                 skipped.reason = "Skipped by reviewed build request".to_string();
                 Ok(skipped)
             } else {
@@ -231,10 +230,9 @@ fn validate_requested_plan_keys(
     if !duplicate_keys.is_empty() {
         duplicate_keys.sort_unstable();
         duplicate_keys.dedup();
-        return Err(BuildServiceError::message(format!(
-            "duplicate plan output_keys: {}",
-            duplicate_keys.join(", ")
-        )));
+        return Err(BuildServiceError::DuplicatePlanOutputKeys {
+            keys: duplicate_keys.into_iter().map(str::to_string).collect(),
+        });
     }
     let mut unknown_skips = skip_set
         .iter()
@@ -243,10 +241,9 @@ fn validate_requested_plan_keys(
         .collect::<Vec<_>>();
     unknown_skips.sort_unstable();
     if !unknown_skips.is_empty() {
-        return Err(BuildServiceError::message(format!(
-            "unknown skip_output_keys: {}",
-            unknown_skips.join(", ")
-        )));
+        return Err(BuildServiceError::UnknownSkipOutputKeys {
+            keys: unknown_skips.into_iter().map(str::to_string).collect(),
+        });
     }
     let mut unknown_overrides = override_map
         .keys()
@@ -255,10 +252,9 @@ fn validate_requested_plan_keys(
         .collect::<Vec<_>>();
     unknown_overrides.sort_unstable();
     if !unknown_overrides.is_empty() {
-        return Err(BuildServiceError::message(format!(
-            "unknown override output_keys: {}",
-            unknown_overrides.join(", ")
-        )));
+        return Err(BuildServiceError::UnknownOverrideOutputKeys {
+            keys: unknown_overrides.into_iter().map(str::to_string).collect(),
+        });
     }
     Ok(())
 }
@@ -304,13 +300,12 @@ pub(super) fn apply_override(
         if let Some(ref playlist_name) = override_entry.playlist_name {
             effective.playlist_name.clone_from(playlist_name);
         }
-        if let Some(slide_type) = override_entry.slide_type {
-            effective.item_kind = item_kind_from_override(slide_type);
-            effective.item_type = item_type_from_override(slide_type);
-        }
         if let Some(action) = &override_entry.action {
-            effective.disposition = PlanDisposition::Ready(resolve_override_action(entry, action)?);
+            effective.set_ready_action(resolve_override_action(entry, action)?)?;
             effective.reason = "Build override action".to_string();
+        }
+        if let Some(slide_type) = override_entry.slide_type {
+            effective.set_slide_type(slide_type.into())?;
         }
     }
     Ok(effective)
@@ -382,7 +377,7 @@ fn resolve_override_action(
                 }
             };
             if let Some(background) = background {
-                style = render_style_with_background(&style, background.clone())?;
+                style = style.with_background(background.clone());
             }
             Ok(ReadyAction::EditDescription {
                 file_path: canonical_presentation_source(file_path)?,
@@ -452,7 +447,7 @@ fn replace_render_background(
         | ReadyAction::GenerateDescription { style, .. }
         | ReadyAction::GenerateScripture { style, .. }
         | ReadyAction::GenerateTitle { style, .. } => {
-            *style = render_style_with_background(style, background)?;
+            *style = style.clone().with_background(background);
             Ok(())
         }
         ReadyAction::UseExisting { .. } => Err(unsupported_override(
@@ -462,45 +457,21 @@ fn replace_render_background(
     }
 }
 
-fn render_style_with_background(
-    style: &RenderStyle,
-    background: ResolvedBackground,
-) -> Result<RenderStyle, BuildServiceError> {
-    RenderStyle::new(
-        Some(background),
-        style.content().clone(),
-        style.title().cloned(),
-        style.max_lines_per_slide(),
-    )
-    .map_err(|error| {
-        BuildServiceError::message(format!(
-            "failed to apply background to checked render style: {error}"
-        ))
-    })
-}
-
-fn unsupported_override(plan: &ResolvedItemPlan, intent: &str) -> BuildServiceError {
-    BuildServiceError::message(format!(
-        "override for '{}' cannot {intent}",
-        plan.output_key
-    ))
-}
-
-const fn item_kind_from_override(slide_type: OverrideSlideType) -> ItemKind {
-    match slide_type {
-        OverrideSlideType::Lyrics => ItemKind::Song,
-        OverrideSlideType::Scripture => ItemKind::Scripture,
-        OverrideSlideType::Title | OverrideSlideType::Nametag => ItemKind::Nametag,
-        OverrideSlideType::Graphic => ItemKind::Graphic,
-        OverrideSlideType::Text => ItemKind::Other,
+fn unsupported_override(plan: &ResolvedItemPlan, intent: &'static str) -> BuildServiceError {
+    BuildServiceError::UnsupportedOverride {
+        output_key: plan.output_key.to_string(),
+        intent,
     }
 }
 
-fn item_type_from_override(slide_type: OverrideSlideType) -> Option<String> {
-    match slide_type {
-        OverrideSlideType::Lyrics => Some("song".to_string()),
-        OverrideSlideType::Scripture => Some("scripture".to_string()),
-        OverrideSlideType::Title | OverrideSlideType::Nametag => Some("title".to_string()),
-        OverrideSlideType::Text | OverrideSlideType::Graphic => None,
+impl From<OverrideSlideType> for SlideType {
+    fn from(slide_type: OverrideSlideType) -> Self {
+        match slide_type {
+            OverrideSlideType::Text => Self::Text,
+            OverrideSlideType::Lyrics => Self::Lyrics,
+            OverrideSlideType::Scripture => Self::Scripture,
+            OverrideSlideType::Title | OverrideSlideType::Nametag => Self::Title,
+            OverrideSlideType::Graphic => Self::Graphic,
+        }
     }
 }

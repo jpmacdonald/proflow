@@ -7,21 +7,30 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use prost::Message;
+use sha2::{Digest, Sha256};
 
 use super::generated::rv_data;
 use super::media::{presentation_slide_media_dependencies, MediaDependency};
+#[cfg(test)]
 use super::presentation_spec::TextField;
-use super::render::{ResolvedCueRole, SlideTemplate, TemplateSlotError};
+#[cfg(test)]
+use super::render::ResolvedCueRole;
+use super::render::{SlideTemplate, TemplateSlotError};
+#[cfg(test)]
 use super::rtf::extract_text_options;
 
 /// Default maximum visual lines when a template has no usable geometry.
 pub(crate) const DEFAULT_MAX_LINES_PER_SLIDE: usize = 10;
 
+#[cfg(test)]
 const CHAR_WIDTH_RATIO: f64 = 0.50;
+#[cfg(test)]
 const DEFAULT_LINE_HEIGHT_MULTIPLE: f64 = 1.2;
+#[cfg(test)]
 const RTF_KERNING_UNITS_PER_POINT: f64 = 4.0;
 
 /// Text-box capacity derived from one exact native text element.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SlideMetrics {
     pub(crate) chars_per_line: usize,
@@ -34,6 +43,7 @@ pub(crate) struct SlideMetrics {
 /// bound an explicit semantic field to an exact native element. Reusing that
 /// binding here prevents unrelated title, footer, or helper elements from
 /// controlling content splitting.
+#[cfg(test)]
 pub(crate) fn extract_role_metrics(
     role: &ResolvedCueRole<'_>,
     field: &TextField,
@@ -53,6 +63,7 @@ pub(crate) fn extract_role_metrics(
     Ok(metrics_from_text_element(graphics, text))
 }
 
+#[cfg(test)]
 fn metrics_from_text_element(
     graphics: &rv_data::graphics::Element,
     text: &rv_data::graphics::Text,
@@ -93,6 +104,7 @@ fn metrics_from_text_element(
     })
 }
 
+#[cfg(test)]
 fn resolve_character_spacing(text: &rv_data::graphics::Text) -> f64 {
     text.attributes.as_ref().map_or_else(
         || f64::from(extract_text_options(text).kerning) / RTF_KERNING_UNITS_PER_POINT,
@@ -100,6 +112,7 @@ fn resolve_character_spacing(text: &rv_data::graphics::Text) -> f64 {
     )
 }
 
+#[cfg(test)]
 fn resolve_font_size(text: &rv_data::graphics::Text) -> f64 {
     if let Some(size) = text
         .attributes
@@ -113,6 +126,7 @@ fn resolve_font_size(text: &rv_data::graphics::Text) -> f64 {
     f64::from(extract_text_options(text).font_size)
 }
 
+#[cfg(test)]
 fn resolve_line_height(text: &rv_data::graphics::Text, font_size: f64) -> f64 {
     let Some(paragraph) = text
         .attributes
@@ -144,6 +158,8 @@ fn resolve_line_height(text: &rv_data::graphics::Text, font_size: f64) -> f64 {
 pub struct ThemeCache {
     theme_slides: HashMap<String, CachedThemeSlide>,
     theme_name: Option<String>,
+    source_path: Option<PathBuf>,
+    source_sha256: Option<[u8; 32]>,
 }
 
 struct CachedThemeSlide {
@@ -272,7 +288,7 @@ impl ThemeCache {
                 name: name.to_string(),
                 searched,
             })?;
-        let theme_slides = load_theme(&path)?;
+        let (theme_slides, source_sha256) = load_theme(&path)?;
         if theme_slides.is_empty() {
             return Err(ThemeCacheLoadError::Empty {
                 name: name.to_string(),
@@ -282,6 +298,8 @@ impl ThemeCache {
         Ok(Self {
             theme_slides,
             theme_name: Some(name.to_string()),
+            source_path: Some(path),
+            source_sha256: Some(source_sha256),
         })
     }
 
@@ -291,6 +309,8 @@ impl ThemeCache {
         Self {
             theme_slides: HashMap::new(),
             theme_name: None,
+            source_path: None,
+            source_sha256: None,
         }
     }
 
@@ -343,6 +363,11 @@ impl ThemeCache {
     #[must_use]
     pub fn theme_name(&self) -> Option<&str> {
         self.theme_name.as_deref()
+    }
+
+    /// Exact native theme document parsed into this immutable cache.
+    pub(crate) fn source_document(&self) -> Option<(&Path, [u8; 32])> {
+        self.source_path.as_deref().zip(self.source_sha256)
     }
 
     /// Return loaded slide names in deterministic order.
@@ -409,7 +434,9 @@ impl ThemeCache {
     }
 }
 
-fn load_theme(path: &Path) -> Result<HashMap<String, CachedThemeSlide>, ThemeCacheLoadError> {
+fn load_theme(
+    path: &Path,
+) -> Result<(HashMap<String, CachedThemeSlide>, [u8; 32]), ThemeCacheLoadError> {
     let data = std::fs::read(path).map_err(|source| ThemeCacheLoadError::Read {
         path: path.to_path_buf(),
         source,
@@ -445,7 +472,7 @@ fn load_theme(path: &Path) -> Result<HashMap<String, CachedThemeSlide>, ThemeCac
             },
         );
     }
-    Ok(slides)
+    Ok((slides, Sha256::digest(&data).into()))
 }
 
 #[cfg(test)]

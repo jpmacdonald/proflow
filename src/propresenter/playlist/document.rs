@@ -5,6 +5,7 @@ use super::naming::document_path_for_presentation_path;
 use crate::propresenter::generated::rv_data::{self, playlist, playlist_document, playlist_item};
 
 /// Build a native document containing one named child playlist.
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn build_playlist(
     name: &str,
     entries: &[PlaylistEntry],
@@ -56,8 +57,6 @@ fn build_child_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::Playl
 }
 
 fn build_playlist_item(entry: &PlaylistEntry) -> rv_data::PlaylistItem {
-    let (file_url, relative_path) = document_path_for_presentation_path(entry.presentation_path());
-
     rv_data::PlaylistItem {
         uuid: Some(new_uuid()),
         name: entry.name().to_string(),
@@ -65,11 +64,9 @@ fn build_playlist_item(entry: &PlaylistEntry) -> rv_data::PlaylistItem {
         is_hidden: false,
         item_type: Some(playlist_item::ItemType::Presentation(
             playlist_item::Presentation {
-                document_path: Some(rv_data::Url {
-                    platform: rv_data::url::Platform::Macos as i32,
-                    storage: Some(rv_data::url::Storage::AbsoluteString(file_url)),
-                    relative_file_path: relative_path,
-                }),
+                document_path: Some(document_path_for_presentation_path(
+                    entry.presentation_path(),
+                )),
                 arrangement: entry
                     .selected_arrangement()
                     .map(|arrangement| rv_data::Uuid {

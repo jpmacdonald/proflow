@@ -22,6 +22,7 @@ pub struct BuildLocations {
     propresenter_root: PathBuf,
     themes: PathBuf,
     macros: PathBuf,
+    workspace: PathBuf,
 }
 
 /// Unchecked path inputs supplied by discovery, tests, or diagnostic tools.
@@ -144,6 +145,7 @@ impl BuildLocations {
         require_directory("presentation library", &inputs.presentation_library)?;
         reject_file_output("playlist output directory", &inputs.playlist_output)?;
         require_directory("ProPresenter data root", &inputs.propresenter_root)?;
+        let workspace = inputs.propresenter_root.join("Configuration/Workspace");
 
         Ok(Self {
             project_config: inputs.project_data_root.join(PROJECT_CONFIG_FILE),
@@ -153,6 +155,7 @@ impl BuildLocations {
             propresenter_root: inputs.propresenter_root,
             themes: inputs.themes,
             macros: inputs.macros,
+            workspace,
         })
     }
 
@@ -189,6 +192,11 @@ impl BuildLocations {
     /// Exact native macro document selected for this process.
     pub fn macros(&self) -> &Path {
         &self.macros
+    }
+
+    /// Exact native workspace document selected for this process.
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
     }
 
     /// Installed native cue-group document for this `ProPresenter` snapshot.
@@ -445,6 +453,10 @@ mod tests {
         assert_eq!(locations.project_config(), data.join(PROJECT_CONFIG_FILE));
         assert_eq!(locations.presentation_library(), library);
         assert_eq!(locations.propresenter_root(), propresenter);
+        assert_eq!(
+            locations.workspace(),
+            propresenter.join("Configuration/Workspace")
+        );
     }
 
     #[test]

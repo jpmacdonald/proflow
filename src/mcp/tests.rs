@@ -2,20 +2,17 @@
 
 use super::config::{backup_config_path, candidate_locations, write_config_reviewed};
 use super::review::{
-    bounded_days, bounded_usize, consume_reviewed_plan, preview_lookahead_days,
-    replace_prepared_snapshot, resolve_entry_override, resolve_plan_metadata, PreparedPlanSnapshot,
-    PreviewPlanError, ReviewedPlanError,
+    bounded_days, bounded_usize, consume_reviewed_plan, replace_prepared_snapshot,
+    resolve_entry_override, PreparedPlanSnapshot, ReviewedPlanError,
 };
 use super::{BuildServiceArgs, EntryOverride, EntryOverrideAction, ProFlowServer};
 use crate::paths::{BuildLocationInputs, BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
-use crate::planning_center::types::{Plan, Service};
 use crate::project_config::{
     BackgroundAssetPath, BackgroundId, LibraryName, ProjectConfig, RawProjectConfig,
 };
-use crate::propresenter::package::PlaylistPackageMode;
+use crate::propresenter::playlist::PlaylistExportMode;
 use crate::workflow::classify::{PreviewResult, PreviewSummary};
 use crate::workflow::execute::{OverrideAction, PreparedBuildRequest};
-use chrono::Utc;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -79,14 +76,6 @@ fn bounded_arguments_accept_defaults_and_limits() {
 }
 
 #[test]
-fn preview_lookahead_uses_at_least_sixty_days_and_never_exceeds_limit() {
-    assert_eq!(preview_lookahead_days(None), 60);
-    assert_eq!(preview_lookahead_days(Some(14)), 60);
-    assert_eq!(preview_lookahead_days(Some(90)), 90);
-    assert_eq!(preview_lookahead_days(Some(500)), 365);
-}
-
-#[test]
 fn preview_without_background_or_media_defaults_portable_and_preserves_explicit_local() {
     let default_args = serde_json::from_value::<super::PreviewPlaylistArgs>(serde_json::json!({
         "plan_id": "plan-1"
@@ -94,7 +83,7 @@ fn preview_without_background_or_media_defaults_portable_and_preserves_explicit_
     .expect("minimal MCP preview arguments");
     assert_eq!(
         default_args.package_mode.unwrap_or_default(),
-        PlaylistPackageMode::ExportPortable
+        PlaylistExportMode::PortableImport
     );
 
     let local_args = serde_json::from_value::<super::PreviewPlaylistArgs>(serde_json::json!({
@@ -104,7 +93,7 @@ fn preview_without_background_or_media_defaults_portable_and_preserves_explicit_
     .expect("explicit local MCP preview arguments");
     assert_eq!(
         local_args.package_mode.unwrap_or_default(),
-        PlaylistPackageMode::LibraryLocal
+        PlaylistExportMode::LibraryLinks
     );
 }
 
@@ -177,45 +166,6 @@ fn missing_candidate_library_is_rejected_before_candidate_or_activation_writes()
 }
 
 #[test]
-fn preview_metadata_comes_from_planning_center_and_rejects_mismatch() {
-    let services = vec![Service {
-        id: "service-1".to_string(),
-        name: "Sunday Morning".to_string(),
-    }];
-    let plans = vec![Plan {
-        id: "plan-1".to_string(),
-        service_id: "service-1".to_string(),
-        service_name: "stale embedded name".to_string(),
-        date: Utc::now(),
-        title: "Fourth Sunday".to_string(),
-        items: Vec::new(),
-    }];
-
-    let resolved = resolve_plan_metadata(&services, &plans, "plan-1", Some("Sunday Morning"), 60)
-        .expect("matching Planning Center metadata should resolve");
-    assert_eq!(resolved.service_name, "Sunday Morning");
-    assert_eq!(resolved.plan_title, "Fourth Sunday");
-    assert!(!resolved.date.is_empty());
-    assert!(resolved
-        .default_playlist_name
-        .ends_with(" - Sunday Morning"));
-
-    let mismatch = resolve_plan_metadata(&services, &plans, "plan-1", Some("Christmas Eve"), 60);
-    assert!(matches!(
-        mismatch,
-        Err(PreviewPlanError::ServiceNameMismatch { .. })
-    ));
-    let missing = resolve_plan_metadata(&services, &plans, "missing", None, 60);
-    assert_eq!(
-        missing.err(),
-        Some(PreviewPlanError::NotFound {
-            plan_id: "missing".to_string(),
-            days_ahead: 60,
-        })
-    );
-}
-
-#[test]
 fn build_tool_rejects_output_options_that_were_not_bound_by_preview() {
     let error = serde_json::from_value::<BuildServiceArgs>(serde_json::json!({
         "plan_id": "plan-1",
@@ -232,7 +182,7 @@ fn unresolved_preview_serializes_without_an_executable_revision() {
     let response = super::schema::ReviewedPreviewResponse {
         preview_revision: None,
         playlist_name: "Needs decisions".to_string(),
-        package_mode: PlaylistPackageMode::LibraryLocal,
+        package_mode: PlaylistExportMode::LibraryLinks,
         media_assets: Vec::new(),
         preview: PreviewResult {
             plan_title: "Sunday".to_string(),

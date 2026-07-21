@@ -10,6 +10,7 @@ use super::super::BuildServiceError;
 
 #[derive(Debug)]
 pub(super) enum ReviewedOutputOwner {
+    Receipt,
     Playlist,
     Plan(String),
 }
@@ -17,6 +18,7 @@ pub(super) enum ReviewedOutputOwner {
 impl ReviewedOutputOwner {
     fn label(&self) -> String {
         match self {
+            Self::Receipt => "build receipt".to_string(),
             Self::Playlist => "playlist".to_string(),
             Self::Plan(output_key) => format!("plan '{output_key}'"),
         }

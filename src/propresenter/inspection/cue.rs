@@ -1,11 +1,10 @@
-use std::path::Path;
-
 use super::{
-    percent_decode_lossy, ActionLabelSignature, BibleReferenceSummary, CueStructureSummary,
-    IntRangeSummary, TextStyleSignature,
+    ActionLabelSignature, BibleReferenceSummary, CueStructureSummary, IntRangeSummary,
+    TextStyleSignature,
 };
-use crate::propresenter::generated::rv_data::{self, action, url};
+use crate::propresenter::generated::rv_data::{self, action};
 use crate::propresenter::macros::macro_action_name;
+use crate::propresenter::native_url;
 use crate::propresenter::rtf::{extract_text_options, rtf_to_text};
 
 pub(super) fn summarize_cue(
@@ -302,23 +301,6 @@ fn background_media_basename(action: &rv_data::Action) -> Option<String> {
         .element
         .as_ref()
         .and_then(|media| media.url.as_ref())
-        .and_then(url_storage_string)
-        .map(|source| path_basename(&source))
-}
-
-fn url_storage_string(url: &rv_data::Url) -> Option<String> {
-    match url.storage.as_ref()? {
-        url::Storage::AbsoluteString(value) | url::Storage::RelativePath(value) => {
-            Some(value.clone())
-        }
-    }
-}
-
-fn path_basename(value: &str) -> String {
-    let decoded = percent_decode_lossy(value.trim_start_matches("file://"));
-    Path::new(&decoded)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(&decoded)
-        .to_string()
+        .and_then(native_url::preferred_source)
+        .and_then(native_url::decoded_basename_lossy)
 }

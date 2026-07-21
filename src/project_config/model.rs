@@ -39,7 +39,7 @@ pub struct RawProjectConfig {
     /// Named presentation types.
     #[serde(default)]
     pub presentation_types: BTreeMap<String, PresentationTypeConfig>,
-    /// Ordered item rules.
+    /// Item rules with explicit precedence tiers.
     #[serde(default)]
     pub item_rules: Vec<ItemRuleConfig>,
     /// Known people metadata.
@@ -95,6 +95,8 @@ pub struct ProjectDefaults {
     pub days_ahead: Option<i64>,
     /// Bible translation used only when a scripture item does not name one.
     pub bible_version: Option<crate::bible::BibleVersion>,
+    /// Item-rule ID whose explicit speaker is the final fallback for missing speakers.
+    pub speaker_fallback_rule: Option<String>,
     /// Required slide-canvas size for generated and selected presentations.
     #[serde(default)]
     pub presentation_size: crate::propresenter::PresentationSize,
@@ -108,6 +110,7 @@ impl Default for ProjectDefaults {
             background: None,
             days_ahead: None,
             bible_version: None,
+            speaker_fallback_rule: None,
             presentation_size: crate::propresenter::PresentationSize::FULL_HD,
         }
     }
@@ -544,7 +547,7 @@ pub enum RestyleMacroSelectorConfig {
     },
 }
 
-/// Ordered matching rule for items.
+/// Matching rule with explicit precedence for items.
 #[derive(Debug, Clone)]
 pub struct ItemRuleConfig {
     /// Stable rule identifier.
@@ -553,8 +556,46 @@ pub struct ItemRuleConfig {
     pub match_spec: MatchSpec,
     /// The single outcome produced by a match.
     pub outcome: ItemRuleOutcome,
+    /// Explicit precedence tier used when more than one rule matches.
+    pub tier: RuleTier,
     /// Free-form notes.
     pub notes: Option<String>,
+}
+
+/// Explicit precedence for classification rules.
+///
+/// The highest matching tier wins. Multiple matches in that tier remain
+/// ambiguous and require review, so array position never decides behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleTier {
+    /// Last-resort rule, such as the generic rule for every song.
+    CatchAll,
+    /// Domain fallback that wins over a generic catch-all.
+    Fallback,
+    /// Ordinary specific rule.
+    #[default]
+    Primary,
+}
+
+impl RuleTier {
+    /// Numeric precedence used only for deterministic tier comparison.
+    pub const fn precedence(self) -> u8 {
+        match self {
+            Self::Primary => 2,
+            Self::Fallback => 1,
+            Self::CatchAll => 0,
+        }
+    }
+
+    /// Stable operator-facing name used in ambiguity diagnostics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Fallback => "fallback",
+            Self::CatchAll => "catch-all",
+        }
+    }
 }
 
 /// The single outcome produced by an item rule.
@@ -609,6 +650,8 @@ struct ItemRuleConfigWire {
     #[serde(default)]
     expand: Vec<ExpansionStep>,
     target: Option<TargetSpec>,
+    #[serde(default)]
+    tier: RuleTier,
     notes: Option<String>,
 }
 
@@ -658,6 +701,7 @@ impl<'de> Deserialize<'de> for ItemRuleConfig {
             id: wire.id,
             match_spec: wire.match_spec,
             outcome,
+            tier: wire.tier,
             notes: wire.notes,
         })
     }
@@ -677,7 +721,8 @@ impl Serialize for ItemRuleConfig {
                     target: Some(_),
                     ..
                 }
-            )) + usize::from(self.notes.is_some());
+            )) + usize::from(self.tier != RuleTier::Primary)
+                + usize::from(self.notes.is_some());
         let mut map = serializer.serialize_map(Some(field_count))?;
         map.serialize_entry("id", &self.id)?;
         map.serialize_entry("match", &self.match_spec)?;
@@ -693,6 +738,9 @@ impl Serialize for ItemRuleConfig {
             ItemRuleOutcome::Expand(expansion) => {
                 map.serialize_entry("expand", &expansion.iter().collect::<Vec<_>>())?;
             }
+        }
+        if self.tier != RuleTier::Primary {
+            map.serialize_entry("tier", &self.tier)?;
         }
         if let Some(notes) = &self.notes {
             map.serialize_entry("notes", notes)?;
@@ -714,13 +762,29 @@ pub struct MatchSpec {
     /// Description substrings.
     #[serde(default)]
     pub description_contains: Vec<String>,
-    /// Optional category string.
-    pub category: Option<String>,
+    /// Optional typed Planning Center category.
+    pub category: Option<MatchCategory>,
     /// Whether the item contains a scripture reference.
     pub has_scripture_ref: Option<bool>,
     /// Restrict the rule to specific service types.
     #[serde(default)]
     pub service_type: Vec<String>,
+}
+
+/// Planning Center category accepted by an item-rule matcher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchCategory {
+    /// Text or liturgical content.
+    Text,
+    /// Static graphical content.
+    Graphic,
+    /// A title or nametag item.
+    Title,
+    /// A song or hymn item.
+    Song,
+    /// An uncategorized Planning Center item.
+    Other,
 }
 
 impl MatchSpec {
@@ -742,7 +806,7 @@ pub enum DecisionConfig {
     ChooseExistingFile {
         /// PCO fields available for the choice (`title`, `description`, `note`).
         #[serde(default)]
-        context_fields: Vec<String>,
+        context_fields: Vec<DecisionContextField>,
         /// Human-readable instructions surfaced in review contexts.
         instructions: Option<String>,
         /// Allowed choices.
@@ -751,6 +815,28 @@ pub enum DecisionConfig {
         /// What to do when no choice or multiple choices match.
         on_ambiguous: Option<AmbiguousDecisionPolicy>,
     },
+}
+
+/// Planning Center text field included in a contextual decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionContextField {
+    /// The Planning Center item title.
+    Title,
+    /// The Planning Center item description.
+    Description,
+    /// The Planning Center item note.
+    Note,
+}
+
+impl DecisionContextField {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Description => "description",
+            Self::Note => "note",
+        }
+    }
 }
 
 /// One allowed contextual choice.

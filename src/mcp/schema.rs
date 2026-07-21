@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::planning_center::types::Category;
 use crate::project_config::{BackgroundId, ConfigValidationIssue, ProjectConfig};
-use crate::propresenter::package::PlaylistPackageMode;
+use crate::propresenter::playlist::PlaylistExportMode;
 use crate::workflow::classify;
 use crate::workflow::execute::OverrideSlideType;
 
@@ -36,7 +36,7 @@ pub struct PreviewPlaylistArgs {
     pub overrides: Option<Vec<EntryOverride>>,
     /// Package mode. Defaults to a portable export.
     #[schemars(description = "Package mode: export_portable (default) or explicit library_local")]
-    pub package_mode: Option<PlaylistPackageMode>,
+    pub package_mode: Option<PlaylistExportMode>,
     /// Extra media files to bind to an `export_portable` preview/build.
     #[schemars(description = "Extra media files to bind to an export_portable build")]
     pub media_assets: Option<Vec<PlaylistMediaAssetArg>>,
@@ -275,7 +275,7 @@ pub(super) struct ReviewedPreviewResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) preview_revision: Option<String>,
     pub(super) playlist_name: String,
-    pub(super) package_mode: PlaylistPackageMode,
+    pub(super) package_mode: PlaylistExportMode,
     pub(super) media_assets: Vec<ReviewedMediaAssetResponse>,
     #[serde(flatten)]
     pub(super) preview: classify::PreviewResult,

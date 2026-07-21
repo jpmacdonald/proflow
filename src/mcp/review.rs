@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::paths::expand_user_path;
-use crate::planning_center::types::{Plan, Service};
 use crate::project_config::{BackgroundId, ProjectConfig};
 use crate::propresenter::playlist::PlaylistMediaAsset;
 use crate::workflow::execute::{
@@ -16,7 +15,6 @@ use super::mcp_err;
 use super::schema::{EntryOverride, EntryOverrideAction, PlaylistMediaAssetArg};
 
 pub(super) const DEFAULT_DAYS_AHEAD: i64 = 30;
-const MIN_PREVIEW_LOOKAHEAD_DAYS: i64 = 60;
 const MAX_DAYS_AHEAD: i64 = 365;
 
 pub(super) struct PreparedPlanSnapshot {
@@ -48,18 +46,6 @@ pub(super) fn replace_prepared_snapshot(
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(super) enum PreviewPlanError {
-    #[error("plan '{plan_id}' was not found in the next {days_ahead} days")]
-    NotFound { plan_id: String, days_ahead: i64 },
-    #[error("service_name mismatch for plan '{plan_id}': caller supplied '{supplied}', Planning Center reports '{actual}'")]
-    ServiceNameMismatch {
-        plan_id: String,
-        supplied: String,
-        actual: String,
-    },
-}
-
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub(super) enum ReviewedPlanError {
     #[error("plan '{plan_id}' has no unconsumed reviewed preview in this server process")]
     Missing { plan_id: String },
@@ -69,13 +55,6 @@ pub(super) enum ReviewedPlanError {
         "service_name must match Planning Center metadata '{actual}' for the reviewed preview"
     )]
     ServiceNameMismatch { actual: String },
-}
-
-pub(super) struct ResolvedPlanMetadata {
-    pub(super) service_name: String,
-    pub(super) plan_title: String,
-    pub(super) date: String,
-    pub(super) default_playlist_name: String,
 }
 
 pub(super) fn parse_media_assets(
@@ -215,50 +194,6 @@ pub(super) fn bounded_days(value: Option<i64>, default: i64) -> Result<i64, rmcp
             "days_ahead must be between 1 and {MAX_DAYS_AHEAD}, got {value}"
         )))
     }
-}
-
-pub(super) fn preview_lookahead_days(configured_days: Option<i64>) -> i64 {
-    configured_days
-        .unwrap_or(DEFAULT_DAYS_AHEAD)
-        .clamp(MIN_PREVIEW_LOOKAHEAD_DAYS, MAX_DAYS_AHEAD)
-}
-
-pub(super) fn resolve_plan_metadata(
-    services: &[Service],
-    plans: &[Plan],
-    plan_id: &str,
-    supplied_service_name: Option<&str>,
-    days_ahead: i64,
-) -> Result<ResolvedPlanMetadata, PreviewPlanError> {
-    let plan = plans
-        .iter()
-        .find(|plan| plan.id == plan_id)
-        .ok_or_else(|| PreviewPlanError::NotFound {
-            plan_id: plan_id.to_string(),
-            days_ahead,
-        })?;
-    let service_name = services
-        .iter()
-        .find(|service| service.id == plan.service_id)
-        .map_or_else(|| plan.service_name.clone(), |service| service.name.clone());
-
-    if let Some(supplied) = supplied_service_name {
-        if supplied != service_name {
-            return Err(PreviewPlanError::ServiceNameMismatch {
-                plan_id: plan_id.to_string(),
-                supplied: supplied.to_string(),
-                actual: service_name,
-            });
-        }
-    }
-
-    let default_playlist_name = format!("{} - {service_name}", plan.date.format("%B %-d, %Y"));
-    Ok(ResolvedPlanMetadata {
-        service_name,
-        plan_title: plan.title.clone(),
-        date: plan.date.format("%Y-%m-%d").to_string(),
-        default_playlist_name,
-    })
 }
 
 pub(super) fn consume_reviewed_plan(

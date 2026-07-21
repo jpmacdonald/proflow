@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::super::expansion::resolve_speaker;
+use super::super::expansion::{resolve_speaker, SpeakerResolution};
 use super::support::*;
 use crate::planning_center::types::{Category, Item};
 use crate::project_config::parse_project_config_str;
@@ -13,7 +13,7 @@ use tempfile::tempdir;
 
 fn assert_managed_speaker_nametag(plan: &ResolvedItemPlan) {
     assert_eq!(plan.output_key, "pco:1:expand:0:title_static");
-    assert_eq!(plan.item_type.as_deref(), Some("title_static"));
+    assert_eq!(plan.item_type(), Some("title_static"));
     assert!(plan
         .file_path()
         .and_then(Path::to_str)
@@ -47,7 +47,7 @@ fn expansion_outputs_have_stable_keys_and_respect_declared_type() {
               "defaults": { "background": "default" },
               "backgrounds": { "default": "backgrounds/default.png" },
               "cue_roles": {
-                "content": { "slide": "Content" }
+                "content": {"slide":"Content", "enter_macro":"Scripture/Prayer", "leader_enter_macro":"Scripture/Prayer (Highlighted)", "speaker_colors":{"leader":"\u0023FEDB4F", "audience":"\u0023FFFFFF"}}
               },
               "presentation_types": {
                 "title_static": {
@@ -113,10 +113,13 @@ fn expansion_outputs_have_stable_keys_and_respect_declared_type() {
 
     let plans = build_plan(&items, &config, Some(&index), None);
     assert_eq!(plans.len(), 2);
+    assert!(plans
+        .iter()
+        .all(|plan| { plan.classification_rule() == Some("call_to_worship_bundle") }));
     assert_managed_speaker_nametag(&plans[0]);
 
     assert_eq!(plans[1].output_key, "pco:1:expand:1:liturgical_edited");
-    assert_eq!(plans[1].item_type.as_deref(), Some("liturgical_edited"));
+    assert_eq!(plans[1].item_type(), Some("liturgical_edited"));
     assert!(is_edit_description(&plans[1]));
     assert!(plans[1]
         .file_path()
@@ -140,8 +143,8 @@ fn expansion_outputs_have_stable_keys_and_respect_declared_type() {
     );
     assert_eq!(unresolved.len(), 2);
     assert!(unresolved.iter().all(ResolvedItemPlan::needs_review));
-    assert_eq!(unresolved[0].item_kind, ItemKind::Nametag);
-    assert_eq!(unresolved[1].item_kind, ItemKind::Liturgy);
+    assert_eq!(unresolved[0].item_kind(), ItemKind::Nametag);
+    assert_eq!(unresolved[1].item_kind(), ItemKind::Liturgy);
 }
 
 #[test]
@@ -159,29 +162,127 @@ fn speaker_resolution_requires_a_configured_person() {
     .expect("config should parse");
 
     assert_eq!(
-        resolve_speaker("Call to Worship (Hope)", None, &config).as_deref(),
-        Some("Hope")
+        resolve_speaker("Call to Worship (Hope)", None, &config),
+        SpeakerResolution::Resolved("Hope".to_string())
     );
     assert_eq!(
         resolve_speaker("Call to Worship (Jordan)", None, &config),
-        None
+        SpeakerResolution::Unrecognized
     );
     assert_eq!(
         resolve_speaker("Call to Worship", Some("Liturgist: Jordan"), &config),
-        None
+        SpeakerResolution::Unrecognized
     );
     assert_eq!(
-        resolve_speaker("Call to Worship", Some("Liturgist: Hope Lee"), &config).as_deref(),
-        Some("Hope Lee")
+        resolve_speaker("Call to Worship", Some("Liturgist: Hope Lee"), &config),
+        SpeakerResolution::Resolved("Hope Lee".to_string())
     );
     assert_eq!(
         resolve_speaker("Call to Worship (Hope & Robert)", None, &config),
-        None
+        SpeakerResolution::Unrecognized
     );
     assert_eq!(
         resolve_speaker("Call to Worship", Some("Liturgist: Hope leads"), &config),
-        None
+        SpeakerResolution::Unrecognized
     );
+    assert_eq!(
+        resolve_speaker("Call to Worship", None, &config),
+        SpeakerResolution::Missing
+    );
+}
+
+#[test]
+fn missing_speaker_uses_the_unique_lords_prayer_speaker_as_a_plan_fallback() {
+    let config = parse_project_config_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/proflow.config.json"
+    )))
+    .expect("repo config should parse");
+    let items = vec![
+        test_text_item("welcome", 1, "Welcome", None),
+        test_text_item(
+            "lords-prayer",
+            2,
+            "Prayer and The Lord's Prayer (Hope)",
+            Some("Our Father, who art in heaven."),
+        ),
+    ];
+
+    let plans = build_plan(&items, &config, None, Some("10:30am traditional"));
+    let nametag = plans
+        .iter()
+        .find(|plan| plan.output_key == "pco:welcome:expand:0:title_static")
+        .expect("welcome nametag output");
+
+    assert_eq!(nametag.playlist_name, "Hope Nametag");
+}
+
+#[test]
+fn explicit_or_invalid_item_speakers_are_never_replaced_by_the_plan_fallback() {
+    let config = parse_project_config_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/proflow.config.json"
+    )))
+    .expect("repo config should parse");
+    let lords_prayer = test_text_item(
+        "lords-prayer",
+        3,
+        "Prayer and The Lord's Prayer (Hope)",
+        Some("Our Father, who art in heaven."),
+    );
+    let items = vec![
+        test_text_item("explicit", 1, "Welcome (Robert)", None),
+        test_text_item("unknown", 2, "Welcome (Jordan)", None),
+        lords_prayer,
+    ];
+
+    let plans = build_plan(&items, &config, None, Some("10:30am traditional"));
+    let explicit = plans
+        .iter()
+        .find(|plan| plan.output_key == "pco:explicit:expand:0:title_static")
+        .expect("explicit welcome nametag output");
+    let unknown = plans
+        .iter()
+        .find(|plan| plan.output_key == "pco:unknown:expand:0:title_static")
+        .expect("unknown welcome nametag output");
+
+    assert_eq!(explicit.playlist_name, "Robert Nametag");
+    assert!(unknown.needs_review());
+    assert_ne!(unknown.playlist_name, "Hope Nametag");
+}
+
+#[test]
+fn duplicate_fallback_source_items_do_not_guess_a_plan_speaker() {
+    let config = parse_project_config_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/proflow.config.json"
+    )))
+    .expect("repo config should parse");
+    let items = vec![
+        test_text_item("welcome", 1, "Welcome", None),
+        test_text_item(
+            "lords-prayer-hope",
+            2,
+            "Prayer and The Lord's Prayer (Hope)",
+            None,
+        ),
+        test_text_item(
+            "lords-prayer-robert",
+            3,
+            "Prayer and The Lord's Prayer (Robert)",
+            None,
+        ),
+    ];
+
+    let plans = build_plan(&items, &config, None, Some("10:30am traditional"));
+    let nametag = plans
+        .iter()
+        .find(|plan| plan.output_key == "pco:welcome:expand:0:title_static")
+        .expect("welcome nametag output");
+
+    assert!(nametag.needs_review());
+    assert_ne!(nametag.playlist_name, "Hope Nametag");
+    assert_ne!(nametag.playlist_name, "Robert Nametag");
 }
 
 #[test]
