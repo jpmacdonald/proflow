@@ -5,7 +5,7 @@ use crate::propresenter::inspection::{
 };
 use crate::propresenter::playlist::PlaylistEntry;
 use crate::propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
-use crate::workflow::plan::ResolvedItemPlan;
+use crate::workflow::plan::{ExpectedMacroPolicy, ExpectedMacroRegion, ResolvedItemPlan};
 use crate::workflow::report::{BuildServiceEntry, PlaylistSelectionSummary};
 use crate::workflow::transaction::BuildFileTransaction;
 
@@ -33,16 +33,35 @@ impl RenderedService {
         }
     }
 
-    pub(super) fn record(&mut self, rendered: RenderedPlan) -> Result<(), BuildServiceError> {
+    pub(super) fn record(
+        &mut self,
+        plan: &ResolvedItemPlan,
+        presentation_size: crate::propresenter::PresentationSize,
+        rendered: RenderedPlan,
+    ) -> Result<(), BuildServiceError> {
+        let mut expected_presentation =
+            crate::workflow::plan::ExpectedPresentationContract::from_plan(plan, presentation_size)
+                .map_err(|_| BuildServiceError::ReviewStateInvariant)?;
         match rendered {
             RenderedPlan::Generated {
                 playlist_entry,
                 mut summary,
                 text_fit_evidence,
+                resolved_macro_regions,
             } => {
                 summary.text_fit_evidence = text_fit_evidence;
+                if let Some(regions) = resolved_macro_regions {
+                    expected_presentation
+                        .as_mut()
+                        .ok_or(BuildServiceError::ReviewStateInvariant)?
+                        .macros = ExpectedMacroPolicy::Exact(regions);
+                }
+                let expected = expected_presentation
+                    .as_ref()
+                    .ok_or(BuildServiceError::ReviewStateInvariant)?;
                 let (structure, selection) =
-                    presentation_evidence(&playlist_entry, &summary.output_key)?;
+                    presentation_evidence(&playlist_entry, &summary.output_key, expected)?;
+                summary.expected_presentation = expected_presentation;
                 summary.presentation_structure = Some(structure);
                 summary.playlist_selection = selection;
                 self.playlist_entries.push(playlist_entry);
@@ -53,8 +72,12 @@ impl RenderedService {
                 playlist_entry,
                 mut summary,
             } => {
+                let expected = expected_presentation
+                    .as_ref()
+                    .ok_or(BuildServiceError::ReviewStateInvariant)?;
                 let (structure, selection) =
-                    presentation_evidence(&playlist_entry, &summary.output_key)?;
+                    presentation_evidence(&playlist_entry, &summary.output_key, expected)?;
+                summary.expected_presentation = expected_presentation;
                 summary.presentation_structure = Some(structure);
                 summary.playlist_selection = selection;
                 self.playlist_entries.push(playlist_entry);
@@ -62,6 +85,7 @@ impl RenderedService {
                 self.counts.library += 1;
             }
             RenderedPlan::Skipped(summary) => {
+                debug_assert!(expected_presentation.is_none());
                 self.summary_entries.push(summary);
                 self.counts.skipped += 1;
             }
@@ -73,6 +97,7 @@ impl RenderedService {
 fn presentation_evidence(
     entry: &PlaylistEntry,
     output_key: &str,
+    expected: &crate::workflow::ExpectedPresentationContract,
 ) -> Result<
     (
         PresentationStructureSummary,
@@ -101,6 +126,7 @@ fn presentation_evidence(
             diagnostics: summary.reference_diagnostics,
         });
     }
+    let mut effective = presentation.clone();
     let selection = entry
         .selected_arrangement()
         .map(
@@ -123,7 +149,6 @@ fn presentation_evidence(
                         arrangement: selected.name().to_string(),
                         source: crate::propresenter::arrangement::ArrangementSelectionError::Unavailable,
                     })?;
-                let mut effective = presentation.clone();
                 effective.selected_arrangement = Some(native_uuid);
                 let operator_cue_indexes =
                     crate::propresenter::arrangement::checked_operator_cue_indices(&effective)
@@ -139,6 +164,18 @@ fn presentation_evidence(
             },
         )
         .transpose()?;
+    super::presentation_contract::validate_final_presentation(
+        &effective,
+        &summary,
+        entry
+            .selected_arrangement()
+            .map(crate::propresenter::playlist::SelectedArrangement::name),
+        expected,
+    )
+    .map_err(|source| BuildServiceError::PresentationContract {
+        output_key: output_key.to_string(),
+        source,
+    })?;
     Ok((summary, selection))
 }
 
@@ -154,6 +191,7 @@ pub(super) enum RenderedPlan {
         playlist_entry: PlaylistEntry,
         summary: BuildServiceEntry,
         text_fit_evidence: Vec<CueTextFitSummary>,
+        resolved_macro_regions: Option<Vec<ExpectedMacroRegion>>,
     },
     Library {
         playlist_entry: PlaylistEntry,
@@ -170,6 +208,7 @@ pub(super) fn skipped_summary(plan: &ResolvedItemPlan) -> BuildServiceEntry {
         action: format!("skipped: {}", plan.reason),
         file_path: None,
         slides: None,
+        expected_presentation: None,
         presentation_structure: None,
         playlist_selection: None,
         text_fit_evidence: Vec::new(),
@@ -185,6 +224,7 @@ pub(super) fn library_summary(plan: &ResolvedItemPlan, file_path: String) -> Bui
         action: "library".to_string(),
         file_path: Some(file_path),
         slides: None,
+        expected_presentation: None,
         presentation_structure: None,
         playlist_selection: None,
         text_fit_evidence: Vec::new(),
@@ -204,6 +244,7 @@ pub(super) fn edited_summary(
         action: "edited".to_string(),
         file_path: Some(file_path),
         slides: Some(slides),
+        expected_presentation: None,
         presentation_structure: None,
         playlist_selection: None,
         text_fit_evidence: Vec::new(),
@@ -223,6 +264,7 @@ pub(super) fn restyled_summary(
         action: "restyled".to_string(),
         file_path: Some(file_path),
         slides: Some(slides),
+        expected_presentation: None,
         presentation_structure: None,
         playlist_selection: None,
         text_fit_evidence: Vec::new(),
@@ -235,6 +277,7 @@ pub(super) fn generated_plan(
     playlist_entry: PlaylistEntry,
     slides: usize,
     text_fit_evidence: Vec<CueTextFitSummary>,
+    resolved_macro_regions: Vec<ExpectedMacroRegion>,
 ) -> RenderedPlan {
     let file_path = playlist_entry.presentation_path().to_string();
     RenderedPlan::Generated {
@@ -246,12 +289,14 @@ pub(super) fn generated_plan(
             action: "generated".to_string(),
             file_path: Some(file_path),
             slides: Some(slides),
+            expected_presentation: None,
             presentation_structure: None,
             playlist_selection: None,
             text_fit_evidence: Vec::new(),
             warnings: zero_slide_warnings(slides),
         },
         text_fit_evidence,
+        resolved_macro_regions: Some(resolved_macro_regions),
     }
 }
 

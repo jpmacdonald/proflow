@@ -1,12 +1,12 @@
 //! Reconciliation of description-bounded scripture proposals.
 
-use crate::bible::BibleService;
+use crate::bible::BibleCorpusSnapshot;
 use crate::workflow::execute::BuildServiceError;
 use crate::workflow::plan::{ReadyAction, ResolvedItemPlan, ScriptureRequest};
 
 pub(super) fn reconcile_description_scripture_excerpts(
     plans: &mut [ResolvedItemPlan],
-    bible: &mut BibleService,
+    bible: &BibleCorpusSnapshot,
 ) -> Result<(), BuildServiceError> {
     for plan in plans {
         if !plan.needs_review() {
@@ -52,7 +52,7 @@ pub(super) fn reconcile_description_scripture_excerpts(
 }
 
 fn validate_description_scripture_excerpt(
-    bible: &mut BibleService,
+    bible: &BibleCorpusSnapshot,
     reference_text: &str,
     bible_version: &str,
     excerpt_text: &str,
@@ -91,12 +91,13 @@ mod tests {
 
     #[test]
     fn exodus_partial_description_is_proved_against_local_nrsvue_text() {
-        let mut bible =
-            BibleService::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/bibles"));
+        let bible =
+            BibleCorpusSnapshot::capture(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/bibles"))
+                .expect("capture Bible corpora");
 
         assert_eq!(
             validate_description_scripture_excerpt(
-                &mut bible,
+                &bible,
                 "Exodus 16:1-4",
                 "NRSVue",
                 EXODUS_DESCRIPTION,
@@ -104,7 +105,7 @@ mod tests {
             Ok(())
         );
         assert!(validate_description_scripture_excerpt(
-            &mut bible,
+            &bible,
             "Exodus 16:1-4",
             "NRSVue",
             &EXODUS_DESCRIPTION.replace("gather enough", "gather too much"),
@@ -148,9 +149,10 @@ mod tests {
         let mut plans = crate::workflow::classify::build_plan(&[item], &config, None, None);
         assert!(plans[0].needs_review());
 
-        let mut bible =
-            BibleService::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/bibles"));
-        reconcile_description_scripture_excerpts(&mut plans, &mut bible)
+        let bible =
+            BibleCorpusSnapshot::capture(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/bibles"))
+                .expect("capture Bible corpora");
+        reconcile_description_scripture_excerpts(&mut plans, &bible)
             .expect("compatible scripture proposal");
 
         assert!(matches!(

@@ -139,6 +139,7 @@ fn measure_source(
     }
     let summary = source_evidence.summarize(TextFitDestinationIdentity::ExistingPresentation {
         cue_uuid,
+        field: text_element_uuid.clone(),
         text_element_uuid,
     });
     Ok((source_evidence, summary))
@@ -209,6 +210,12 @@ fn measure_audience_screen(
     }
     Ok(
         evidence.summarize(TextFitDestinationIdentity::AudienceScreen {
+            field: proof
+                .source
+                .graphics
+                .uuid
+                .as_ref()
+                .map_or_else(String::new, |uuid| uuid.string.clone()),
             screen_uuid: screen.screen_uuid().to_string(),
             screen_name: screen.screen_name().to_string(),
             macro_name: proof.macro_name.to_string(),

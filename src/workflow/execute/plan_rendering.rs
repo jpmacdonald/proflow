@@ -23,7 +23,7 @@ use super::{
 };
 
 impl ServiceBuildExecutor<'_> {
-    pub(super) async fn render_plans(
+    pub(super) fn render_plans(
         &self,
         plans: &[ResolvedItemPlan],
         presentation_size: PresentationSize,
@@ -36,24 +36,22 @@ impl ServiceBuildExecutor<'_> {
         let mut rendered = RenderedService::new(transaction, text_fit.contract().clone());
         for plan in plans {
             let background = reviewed_background(plan, backgrounds, sources)?;
-            let output = self
-                .render_plan(
-                    plan,
-                    PlanExecutionInputs {
-                        presentation_size,
-                        background,
-                        sources,
-                        transaction: &mut rendered.transaction,
-                        text_fit: &mut text_fit,
-                    },
-                )
-                .await?;
-            rendered.record(output)?;
+            let output = self.render_plan(
+                plan,
+                PlanExecutionInputs {
+                    presentation_size,
+                    background,
+                    sources,
+                    transaction: &mut rendered.transaction,
+                    text_fit: &mut text_fit,
+                },
+            )?;
+            rendered.record(plan, presentation_size, output)?;
         }
         Ok(rendered)
     }
 
-    async fn render_plan(
+    fn render_plan(
         &self,
         plan: &ResolvedItemPlan,
         inputs: PlanExecutionInputs<'_>,
@@ -93,7 +91,6 @@ impl ServiceBuildExecutor<'_> {
             }) => self.render_generated_description(plan, parsed_content, style, inputs),
             PlanDisposition::Ready(ReadyAction::GenerateScripture { scripture, style }) => {
                 self.render_generated_scripture(plan, scripture, style, inputs)
-                    .await
             }
             PlanDisposition::Ready(ReadyAction::GenerateTitle { text, style }) => {
                 self.render_generated_title(plan, text, style, inputs)
@@ -154,13 +151,14 @@ impl ServiceBuildExecutor<'_> {
             presentation_size,
             background,
         };
-        let (playlist_entry, slides, text_fit_evidence) =
+        let (playlist_entry, slides, text_fit_evidence, resolved_macro_regions) =
             self.edit_description(plan, content, style, target, text_fit)?;
         let file_path = playlist_entry.presentation_path().to_string();
         Ok(RenderedPlan::Generated {
             playlist_entry,
             summary: edited_summary(plan, file_path, slides),
             text_fit_evidence,
+            resolved_macro_regions: Some(resolved_macro_regions),
         })
     }
 
@@ -215,6 +213,7 @@ impl ServiceBuildExecutor<'_> {
             playlist_entry,
             summary: restyled_summary(plan, file_path, slides),
             text_fit_evidence,
+            resolved_macro_regions: None,
         })
     }
 
@@ -234,17 +233,18 @@ impl ServiceBuildExecutor<'_> {
         } = inputs;
         let staged = self.stage_generated_presentation(plan, transaction)?;
         let target = staged.reviewed_target(sources, presentation_size, background);
-        let (playlist_entry, slides, text_fit_evidence) =
+        let (playlist_entry, slides, text_fit_evidence, resolved_macro_regions) =
             self.generate_description(plan, content, style, target, text_fit)?;
         Ok(generated_plan(
             plan,
             playlist_entry,
             slides,
             text_fit_evidence,
+            resolved_macro_regions,
         ))
     }
 
-    async fn render_generated_scripture(
+    fn render_generated_scripture(
         &self,
         plan: &ResolvedItemPlan,
         scripture: &ScriptureContent,
@@ -260,14 +260,14 @@ impl ServiceBuildExecutor<'_> {
         } = inputs;
         let staged = self.stage_generated_presentation(plan, transaction)?;
         let target = staged.reviewed_target(sources, presentation_size, background);
-        let (playlist_entry, slides, text_fit_evidence) = self
-            .generate_scripture(plan, scripture, style, target, sources, text_fit)
-            .await?;
+        let (playlist_entry, slides, text_fit_evidence, resolved_macro_regions) =
+            self.generate_scripture(plan, scripture, style, target, sources, text_fit)?;
         Ok(generated_plan(
             plan,
             playlist_entry,
             slides,
             text_fit_evidence,
+            resolved_macro_regions,
         ))
     }
 
@@ -287,13 +287,14 @@ impl ServiceBuildExecutor<'_> {
         } = inputs;
         let staged = self.stage_generated_presentation(plan, transaction)?;
         let target = staged.reviewed_target(sources, presentation_size, background);
-        let (playlist_entry, slides, text_fit_evidence) =
+        let (playlist_entry, slides, text_fit_evidence, resolved_macro_regions) =
             self.generate_title(plan, text, style, target, text_fit)?;
         Ok(generated_plan(
             plan,
             playlist_entry,
             slides,
             text_fit_evidence,
+            resolved_macro_regions,
         ))
     }
 

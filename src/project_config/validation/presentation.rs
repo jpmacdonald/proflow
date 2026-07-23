@@ -24,16 +24,6 @@ pub(super) fn validate_runtime_defaults(
             });
         }
     }
-    if config
-        .defaults
-        .days_ahead
-        .is_some_and(|days| !(1..=365).contains(&days))
-    {
-        issues.push(ConfigValidationIssue {
-            path: "defaults.days_ahead".to_string(),
-            message: "must be between 1 and 365".to_string(),
-        });
-    }
 }
 
 pub(super) fn validate_background_references(

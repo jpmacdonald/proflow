@@ -740,3 +740,23 @@ fn restyled_same_aspect_presentation_is_normalized_without_review() {
         Some(ReadyAction::RestyleExisting { .. })
     ));
 }
+
+#[test]
+fn catalog_capabilities_reject_an_oversized_cue_prefix_before_execution() {
+    let library = tempdir().expect("temporary library");
+    let path = library.path().join("One Cue.pro");
+    write_library_presentation(&path);
+    let catalog = LibraryCatalog::build(library.path()).expect("fixture library should index");
+    let capabilities = catalog.entries()[0].transform_capabilities();
+    let transform = ExistingTransform::new(
+        BackgroundTransform::Preserve,
+        MacroTransform::Preserve,
+        CueTransform::RetainOperatorPrefix(NonZeroUsize::new(2).expect("nonzero")),
+    )
+    .expect("nonempty transform");
+
+    let problem = super::super::transform_traversal_problem(capabilities, None, &transform)
+        .expect("oversized prefix must be rejected");
+
+    assert!(problem.contains("exceeds the checked traversal length 1"));
+}

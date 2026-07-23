@@ -16,6 +16,10 @@ mod presentation_render;
 pub use crate::project_config::ResolvedBackground;
 pub use approval::{OutputReviewError, SourceReviewError};
 pub use execute::OverrideAction;
+pub use plan::{
+    ExpectedCueCount, ExpectedMacroPolicy, ExpectedMacroRegion, ExpectedMacroSelector,
+    ExpectedPresentationContract,
+};
 pub use presentation_render::PresentationRenderError;
 pub mod report;
 mod scripture;

@@ -10,7 +10,7 @@ use rmcp::model::{CallToolResult, Content};
 use rmcp::{tool, tool_router};
 use serde::Serialize;
 
-use crate::project_config::parse_project_config_value;
+use crate::project_config::{parse_project_config_value, RawProjectConfig};
 use crate::propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode};
 use crate::propresenter::theme::ThemeCache;
 use crate::setup;
@@ -20,7 +20,7 @@ use crate::workflow::execute::BuildRequest;
 use super::config::write_config_reviewed;
 use super::review::{
     bounded_days, bounded_usize, consume_reviewed_plan, parse_media_assets,
-    replace_prepared_snapshot, resolve_entry_override, DEFAULT_DAYS_AHEAD,
+    replace_prepared_snapshot, resolve_entry_override,
 };
 use super::schema::{
     format_category, BuildServiceArgs, CatalogAssetsArgs, ConfigValidationResponse,
@@ -42,6 +42,14 @@ fn json_result(value: &impl Serialize) -> Result<CallToolResult, rmcp::ErrorData
 
 #[tool_router(vis = "pub(super)")]
 impl ProFlowServer {
+    /// Return the machine-readable v4 project-config contract.
+    #[tool(
+        description = "Return the complete JSON Schema for proflow.config.json. Use this before authoring or changing presentation types, cue roles, item rules, required playlist items, or overrides."
+    )]
+    async fn project_config_schema(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        json_result(&schemars::schema_for!(RawProjectConfig))
+    }
+
     /// Show the normalized config the runtime is actually using.
     #[tool(
         description = "Show the project config the runtime is currently using, alongside validation results. Use this to inspect the effective config state before debugging rule behavior."
@@ -130,9 +138,8 @@ impl ProFlowServer {
         Parameters(args): Parameters<FetchPlanArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let days = bounded_days(
-            args.days_ahead
-                .or_else(|| self.render_assets.config().defaults().days_ahead),
-            DEFAULT_DAYS_AHEAD,
+            args.days_ahead,
+            self.render_assets.config().plan_lookahead_days(),
         )?;
         let (services, plans) = self
             .pco_client
@@ -250,6 +257,7 @@ impl ProFlowServer {
             })
             .collect();
         let summary = classify::PreviewSummary::from_entries(&entries);
+        let materialized = reviewed.materialized_result().cloned();
         let result = classify::PreviewResult {
             plan_title,
             service_name,
@@ -272,6 +280,7 @@ impl ProFlowServer {
             playlist_name,
             package_mode,
             media_assets,
+            materialized,
             preview: result,
         })
     }

@@ -4,9 +4,10 @@ use std::path::Path;
 
 use crate::propresenter::generated::rv_data;
 use crate::propresenter::generated_document::GeneratedPresentation;
+use crate::propresenter::native_document::EditablePresentation;
 use crate::propresenter::playlist::{PlaylistEntry, PlaylistError, SelectedArrangement};
 use crate::propresenter::render::RenderedPresentation;
-use crate::propresenter::serialize::{encode_existing_presentation, write_presentation_bytes};
+use crate::propresenter::serialize::write_presentation_bytes;
 use crate::propresenter::PresentationSize;
 use crate::workflow::plan::ResolvedItemPlan;
 use crate::workflow::presentation_render::PresentationRenderError;
@@ -44,16 +45,17 @@ pub(super) fn update_rendered_document(
 
 pub(super) fn write_existing_playlist_presentation(
     entry: &ResolvedItemPlan,
-    presentation: &rv_data::Presentation,
+    editable: &EditablePresentation,
     target: ReviewedRenderTarget<'_>,
     selected_arrangement: Option<SelectedArrangement>,
 ) -> Result<(PlaylistEntry, usize), BuildServiceError> {
+    let presentation = editable.presentation();
     validate_rendered_presentation_size(
         presentation,
         target.presentation_size,
         entry.output_key.as_str(),
     )?;
-    let encoded = encode_existing_presentation(presentation)?;
+    let encoded = editable.encode()?;
     write_encoded_playlist_presentation(
         entry,
         presentation.cues.len(),

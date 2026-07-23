@@ -55,7 +55,16 @@ fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
         ("Amazing Grace", "10:30am traditional", "hymn"),
         ("Amazing Grace", "9:00am contemporary", "song"),
     ] {
-        let mut item = song_item(None);
+        let mut item = if title == "Prayer of Confession" {
+            test_text_item(
+                "rule-order-confession",
+                1,
+                title,
+                Some("Leader: Let us pray."),
+            )
+        } else {
+            song_item(None)
+        };
         item.id = format!("rule-order-{title}");
         item.title = title.to_string();
         let plans = build_plan(&[item], &config, None, Some(service));

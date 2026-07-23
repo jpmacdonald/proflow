@@ -140,13 +140,13 @@
             "selector": {
               "kind": "arrangement_group",
               "index": 0,
-              "names": ["Background", "Blank"]
+              "names": ["Background", "Blank", "Title"]
             },
             "enter_macro": "Song"
           }
         ]
       },
-      "description": "Contemporary song: blank/background entry runs Song; native lyrics and arrangement remain intact"
+      "description": "Contemporary song: the native empty entry (commonly named Background, Blank, or Title) runs Song; native lyrics and arrangement remain intact"
     },
     "hymn": {
       "kind": "song",
@@ -401,6 +401,11 @@
       "last": "Shenenberger",
       "role": "organist",
       "nametag": "Marilyn Nametag"
+    },
+    "Adrian": {
+      "last": "Rogers",
+      "role": "pastor",
+      "nametag": "Adrian Nametag"
     }
   },
   "item_rules": [
@@ -460,6 +465,18 @@
       }
     },
     {
+      "id": "hymn_361_how_firm_a_foundation",
+      "match": {
+        "title_prefix": [
+          "#361 how firm a foundation"
+        ]
+      },
+      "use_type": "hymn",
+      "target": {
+        "library_file": "[Hymn] How Firm A Foundation.pro"
+      }
+    },
+    {
       "id": "hymn_384_o_love_that_wilt_not_let_me_go",
       "match": {
         "title_prefix": [
@@ -484,6 +501,18 @@
       }
     },
     {
+      "id": "hymn_840_it_is_well_with_my_soul",
+      "match": {
+        "title_contains": [
+          "#840 it is well with my soul"
+        ]
+      },
+      "use_type": "hymn",
+      "target": {
+        "library_file": "[Hymn] It Is Well With My Soul.pro"
+      }
+    },
+    {
       "id": "scripture",
       "match": {
         "title_prefix": [
@@ -504,6 +533,15 @@
         "kind": "skip",
         "reason": "PCO section header - not a slide"
       }
+    },
+    {
+      "id": "mad_camp_title",
+      "match": {
+        "title_prefix": [
+          "mad camp"
+        ]
+      },
+      "use_type": "generated_content_nametag"
     },
     {
       "id": "skip_invitation_to_worship",
@@ -754,6 +792,18 @@
       }
     },
     {
+      "id": "offertory_at_the_river_copland",
+      "match": {
+        "title_prefix": [
+          "offertory: at the river"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "target": {
+        "library_file": "At the River.pro"
+      }
+    },
+    {
       "id": "offertory_hes_always_been_faithful",
       "match": {
         "title_prefix": [
@@ -817,7 +867,23 @@
       ]
     },
     {
+      "id": "skip_confession_explicitly_marked_no_slide",
+      "match": {
+        "title_prefix": [
+          "prayer of confession"
+        ],
+        "description_contains": [
+          "confession no slide"
+        ]
+      },
+      "action": {
+        "kind": "skip",
+        "reason": "Planning Center explicitly marks confession as no slide"
+      }
+    },
+    {
       "id": "prayer_of_confession",
+      "tier": "fallback",
       "match": {
         "title_prefix": [
           "prayer of confession"

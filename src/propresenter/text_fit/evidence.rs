@@ -17,6 +17,8 @@ pub enum TextFitDestinationIdentity {
     SourceTheme {
         /// Exact semantic role whose configured theme slide was measured.
         cue_role: String,
+        /// Semantic text field measured within the role.
+        field: String,
         /// Native UUID of the configured source theme slide, when present.
         #[serde(skip_serializing_if = "Option::is_none")]
         theme_slide_uuid: Option<String>,
@@ -27,9 +29,13 @@ pub enum TextFitDestinationIdentity {
         cue_uuid: String,
         /// Native UUID of the one measured text element.
         text_element_uuid: String,
+        /// Stable native field identity for this text element.
+        field: String,
     },
     /// One exact audience screen selected through a cue macro and Audience Look.
     AudienceScreen {
+        /// Semantic text field measured on this screen.
+        field: String,
         /// Stable native screen UUID.
         screen_uuid: String,
         /// Operator-visible screen name.

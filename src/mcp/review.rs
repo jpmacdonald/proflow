@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::paths::expand_user_path;
+use crate::planning_center::PlanLookaheadDays;
 use crate::project_config::{BackgroundId, ProjectConfig};
 use crate::propresenter::playlist::PlaylistMediaAsset;
 use crate::workflow::execute::{
@@ -13,9 +14,6 @@ use crate::workflow::plan::ResolvedBackground;
 
 use super::mcp_err;
 use super::schema::{EntryOverride, EntryOverrideAction, PlaylistMediaAssetArg};
-
-pub(super) const DEFAULT_DAYS_AHEAD: i64 = 30;
-const MAX_DAYS_AHEAD: i64 = 365;
 
 pub(super) struct PreparedPlanSnapshot {
     pub(super) revision: String,
@@ -185,15 +183,13 @@ pub(super) fn bounded_usize(
     }
 }
 
-pub(super) fn bounded_days(value: Option<i64>, default: i64) -> Result<i64, rmcp::ErrorData> {
-    let value = value.unwrap_or(default);
-    if (1..=MAX_DAYS_AHEAD).contains(&value) {
-        Ok(value)
-    } else {
-        Err(mcp_err(format!(
-            "days_ahead must be between 1 and {MAX_DAYS_AHEAD}, got {value}"
-        )))
-    }
+pub(super) fn bounded_days(
+    value: Option<i64>,
+    default: PlanLookaheadDays,
+) -> Result<PlanLookaheadDays, rmcp::ErrorData> {
+    value
+        .map_or(Ok(default), PlanLookaheadDays::new)
+        .map_err(|error| mcp_err(error.to_string()))
 }
 
 pub(super) fn consume_reviewed_plan(

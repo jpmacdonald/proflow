@@ -21,7 +21,9 @@ use super::description_parser::ParsedContent;
 use super::description_parser::{ParsedSegment, SpeakerRole};
 use super::execute::RenderAssetSnapshot;
 use super::plan::{RenderRole, RenderStyle};
+use super::{ExpectedMacroRegion, ExpectedMacroSelector};
 use crate::bible::Verse;
+use crate::propresenter::arrangement::OperatorTraversalError;
 use crate::propresenter::macros::{replace_entry_macro, MacroApplyError, MacroCache};
 use crate::propresenter::presentation_spec::{
     CueRoleId, GroupSpec, PresentationSpec, PresentationSpecError, TextField,
@@ -111,6 +113,9 @@ pub enum PresentationRenderError {
     /// A semantic specification could not be rendered from its native assets.
     #[error(transparent)]
     Render(#[from] RenderError),
+    /// The rendered document's effective operator traversal was invalid.
+    #[error(transparent)]
+    Traversal(#[from] OperatorTraversalError),
     /// A native text field could not be bound to its semantic name.
     #[error(transparent)]
     Template(#[from] TemplateSlotError),
@@ -198,14 +203,6 @@ pub enum PresentationRenderError {
     RenderedPresentationSlideUnavailable {
         /// Invalid zero-based cue index.
         cue_index: usize,
-    },
-    /// This workflow promises one semantic text field per generated cue.
-    #[error("rendered cue {cue_index} binds {field_count} text fields; exactly one is required")]
-    UnsupportedMultiFieldCue {
-        /// Invalid zero-based cue index.
-        cue_index: usize,
-        /// Number of semantic fields on the cue.
-        field_count: usize,
     },
     /// A configured cue macro has no compiled Audience Look destinations.
     #[error("configured macro '{macro_name}' has no resolved audience destinations")]
@@ -429,6 +426,56 @@ pub(crate) fn apply_role_macros(
     }
     rendered.replace_preserving_role_mapping(presentation)?;
     Ok(())
+}
+
+/// Lower semantic role transitions into the exact operator-cue macro contract
+/// produced by this render. Text fitting determines cue boundaries, so this
+/// contract can only become exact after rendering.
+pub(crate) fn resolved_macro_regions(
+    rendered: &RenderedPresentation,
+    style: &RenderStyle,
+) -> Result<Vec<ExpectedMacroRegion>, PresentationRenderError> {
+    let traversal =
+        crate::propresenter::arrangement::checked_operator_cue_indices(rendered.presentation())?;
+    let content_id = style.content().id();
+    let leader_id = format!("{content_id}{LEADER_ROLE_SUFFIX}");
+    let title = style.title();
+    let mut regions = Vec::new();
+
+    for transition in rendered.cue_roles().transitions() {
+        let role_id = transition.role().as_str();
+        let binding = if role_id == leader_id {
+            style
+                .content()
+                .cue_macro()
+                .map(|binding| binding.select(true))
+        } else if role_id == content_id {
+            style
+                .content()
+                .cue_macro()
+                .map(|binding| binding.select(false))
+        } else if let Some(title) = title.filter(|title| title.id() == role_id) {
+            title.cue_macro().map(|binding| binding.select(false))
+        } else {
+            None
+        };
+        let Some(macro_name) = binding else {
+            continue;
+        };
+        let operator_index = traversal
+            .iter()
+            .position(|&cue_index| cue_index == transition.cue_index())
+            .ok_or(PresentationRenderError::Render(
+                RenderError::RoleOperatorTraversalChanged,
+            ))?;
+        regions.push(ExpectedMacroRegion {
+            selector: ExpectedMacroSelector::OperatorCue {
+                index: operator_index,
+            },
+            macro_name: macro_name.to_string(),
+        });
+    }
+    Ok(regions)
 }
 
 fn apply_macro_for_role(

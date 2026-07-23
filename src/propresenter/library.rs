@@ -137,6 +137,8 @@ pub struct LibraryEntry {
     arrangements: Vec<LibraryArrangement>,
     /// Uniformity and dimensions of native presentation slides.
     presentation_size: PresentationSizeStatus,
+    /// Checked native facts needed to approve existing-document transforms.
+    transform_capabilities: LibraryTransformCapabilities,
 }
 
 impl LibraryEntry {
@@ -180,6 +182,72 @@ impl LibraryEntry {
     #[must_use]
     pub const fn presentation_size(&self) -> PresentationSizeStatus {
         self.presentation_size
+    }
+
+    /// Checked native facts available to planning without reopening the file.
+    #[must_use]
+    pub const fn transform_capabilities(&self) -> &LibraryTransformCapabilities {
+        &self.transform_capabilities
+    }
+}
+
+/// Compact native facts that determine whether an existing file can be restyled.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LibraryTransformCapabilities {
+    exact_editable: bool,
+    background_entries_editable: bool,
+    traversals: Vec<LibraryTraversalCapability>,
+}
+
+impl LibraryTransformCapabilities {
+    /// Whether decoding and re-encoding preserves the exact source bytes.
+    #[must_use]
+    pub const fn exact_editable(&self) -> bool {
+        self.exact_editable
+    }
+
+    /// Whether every background entry targeted by a restyle resolves uniquely.
+    #[must_use]
+    pub const fn background_entries_editable(&self) -> bool {
+        self.background_entries_editable
+    }
+
+    /// Resolve the traversal that would be active after selecting `arrangement`.
+    #[must_use]
+    pub fn traversal(&self, arrangement: Option<&str>) -> Option<&LibraryTraversalCapability> {
+        self.traversals.iter().find(|capability| {
+            arrangement.map_or_else(
+                || capability.arrangement.is_none(),
+                |name| {
+                    capability
+                        .arrangement
+                        .as_deref()
+                        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
+                },
+            )
+        })
+    }
+}
+
+/// One exact operator traversal available to an existing-document transform.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LibraryTraversalCapability {
+    arrangement: Option<String>,
+    cue_count: usize,
+    group_names: Vec<String>,
+}
+
+impl LibraryTraversalCapability {
+    /// Number of operator-visible cue occurrences.
+    #[must_use]
+    pub const fn cue_count(&self) -> usize {
+        self.cue_count
+    }
+
+    /// Selected-arrangement group occurrences in operator order.
+    #[must_use]
+    pub fn group_names(&self) -> &[String] {
+        &self.group_names
     }
 }
 
@@ -363,6 +431,7 @@ impl LibraryCatalog {
 struct NativeMetadata {
     arrangements: Vec<LibraryArrangement>,
     presentation_size: PresentationSizeStatus,
+    transform_capabilities: LibraryTransformCapabilities,
 }
 
 fn entry_from_bytes(library_path: &Path, full_path: &Path, bytes: &[u8]) -> Result<LibraryEntry> {
@@ -398,6 +467,7 @@ fn entry_from_bytes(library_path: &Path, full_path: &Path, bytes: &[u8]) -> Resu
         full_path: full_path.to_path_buf(),
         arrangements: metadata.arrangements,
         presentation_size: metadata.presentation_size,
+        transform_capabilities: metadata.transform_capabilities,
     })
 }
 
@@ -427,10 +497,92 @@ fn decode_native_metadata(bytes: &[u8], path: &Path) -> Result<NativeMetadata> {
             }
         })
         .collect();
+    let transform_capabilities = transform_capabilities(bytes, &presentation);
     Ok(NativeMetadata {
         arrangements,
         presentation_size: inspect_presentation_size(&presentation),
+        transform_capabilities,
     })
+}
+
+fn transform_capabilities(
+    bytes: &[u8],
+    presentation: &rv_data::Presentation,
+) -> LibraryTransformCapabilities {
+    let exact_editable = presentation.encode_to_vec() == bytes;
+    let normalized = (presentation.arrangements.is_empty()
+        && presentation.selected_arrangement.is_some())
+    .then(|| {
+        let mut normalized = presentation.clone();
+        crate::propresenter::arrangement::clear_stale_selected_arrangement(&mut normalized);
+        normalized
+    });
+    let presentation = normalized.as_ref().unwrap_or(presentation);
+    let mut traversals = Vec::new();
+    if let Ok(indices) =
+        crate::propresenter::arrangement::checked_operator_cue_indices(presentation)
+    {
+        let group_names =
+            crate::propresenter::arrangement::checked_selected_group_entries(presentation)
+                .ok()
+                .flatten()
+                .map_or_else(Vec::new, |groups| {
+                    groups
+                        .into_iter()
+                        .map(|group| group.name.to_string())
+                        .collect()
+                });
+        traversals.push(LibraryTraversalCapability {
+            arrangement: None,
+            cue_count: indices.len(),
+            group_names,
+        });
+    }
+    for arrangement in &presentation.arrangements {
+        let Ok(resolved) =
+            crate::propresenter::arrangement::selectable_arrangement(presentation, arrangement)
+        else {
+            continue;
+        };
+        let Some(graph) =
+            crate::propresenter::arrangement::resolve_arrangement(presentation, arrangement)
+        else {
+            continue;
+        };
+        traversals.push(LibraryTraversalCapability {
+            arrangement: Some(resolved.name().to_string()),
+            cue_count: graph.cue_indices().len(),
+            group_names: graph
+                .groups()
+                .iter()
+                .map(|group| group.name().to_string())
+                .collect(),
+        });
+    }
+    let background_entries_editable = if presentation.arrangements.is_empty() {
+        traversals.first().is_some_and(|traversal| {
+            crate::propresenter::arrangement::checked_operator_cue_indices(presentation)
+                .ok()
+                .and_then(|indices| indices.first().copied())
+                .and_then(|index| presentation.cues.get(index))
+                .and_then(|cue| cue.uuid.as_ref())
+                .is_some_and(|uuid| !uuid.string.is_empty())
+                && traversal.cue_count > 0
+        })
+    } else {
+        presentation.arrangements.iter().all(|arrangement| {
+            crate::propresenter::arrangement::selectable_arrangement(presentation, arrangement)
+                .ok()
+                .and_then(|resolved| presentation.cues.get(resolved.entry_cue_index()))
+                .and_then(|cue| cue.uuid.as_ref())
+                .is_some_and(|uuid| !uuid.string.is_empty())
+        })
+    };
+    LibraryTransformCapabilities {
+        exact_editable,
+        background_entries_editable,
+        traversals,
+    }
 }
 
 fn is_pro_path(path: &Path) -> bool {

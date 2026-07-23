@@ -6,6 +6,7 @@ use std::{
 };
 
 use super::generated::rv_data;
+use super::presentation_graph::{ReferenceResolution, ResolvedPresentationGraph};
 
 /// Failure to retain a checked prefix of the operator-visible cue traversal.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -85,10 +86,11 @@ pub enum OperatorTraversalError {
 /// without either structure fall back to their stored cue order.
 #[must_use]
 pub fn operator_cue_indices(presentation: &rv_data::Presentation) -> Vec<usize> {
-    if let Some(arrangement) = selected_or_default_resolved_arrangement(presentation) {
+    let graph = ResolvedPresentationGraph::new(presentation);
+    if let Some(arrangement) = selected_or_default_resolved_arrangement(&graph) {
         return arrangement.cue_indices().to_vec();
     }
-    fallback_operator_cue_indices(presentation)
+    fallback_operator_cue_indices(&graph)
 }
 
 /// Return the exact operator traversal permitted to drive native mutation.
@@ -98,7 +100,24 @@ pub fn operator_cue_indices(presentation: &rv_data::Presentation) -> Vec<usize> 
 pub(crate) fn checked_operator_cue_indices(
     presentation: &rv_data::Presentation,
 ) -> Result<Vec<usize>, OperatorTraversalError> {
-    if let Some(arrangement) = checked_selected_or_default_arrangement(presentation)? {
+    let graph = ResolvedPresentationGraph::new(presentation);
+    checked_operator_cue_indices_in(&graph)
+}
+
+/// Remove a selected-arrangement identifier that cannot identify anything
+/// because the document contains no arrangements.
+///
+/// `ProPresenter` tolerates this stale field and displays raw cue-group order.
+/// Clearing it makes that effective traversal explicit before checked mutation.
+pub(crate) fn clear_stale_selected_arrangement(presentation: &mut rv_data::Presentation) -> bool {
+    presentation.arrangements.is_empty() && presentation.selected_arrangement.take().is_some()
+}
+
+pub(crate) fn checked_operator_cue_indices_in(
+    graph: &ResolvedPresentationGraph<'_>,
+) -> Result<Vec<usize>, OperatorTraversalError> {
+    let presentation = graph.presentation();
+    if let Some(arrangement) = checked_selected_or_default_arrangement(graph)? {
         return Ok(arrangement.cue_indices().to_vec());
     }
 
@@ -113,7 +132,7 @@ pub(crate) fn checked_operator_cue_indices(
     if presentation
         .cue_groups
         .iter()
-        .all(|group| append_group_cue_indices(presentation, group, &mut indices))
+        .all(|group| append_group_cue_indices(graph, group, &mut indices))
         && !indices.is_empty()
     {
         Ok(indices)
@@ -122,12 +141,13 @@ pub(crate) fn checked_operator_cue_indices(
     }
 }
 
-fn fallback_operator_cue_indices(presentation: &rv_data::Presentation) -> Vec<usize> {
+fn fallback_operator_cue_indices(graph: &ResolvedPresentationGraph<'_>) -> Vec<usize> {
+    let presentation = graph.presentation();
     let mut indices = Vec::new();
     let complete = presentation
         .cue_groups
         .iter()
-        .all(|group| append_group_cue_indices(presentation, group, &mut indices));
+        .all(|group| append_group_cue_indices(graph, group, &mut indices));
     if complete && !indices.is_empty() {
         indices
     } else {
@@ -447,26 +467,28 @@ pub(crate) fn resolve_arrangement<'a>(
     presentation: &'a rv_data::Presentation,
     arrangement: &'a rv_data::presentation::Arrangement,
 ) -> Option<ResolvedArrangement<'a>> {
+    let graph = ResolvedPresentationGraph::new(presentation);
+    resolve_arrangement_in(&graph, arrangement)
+}
+
+fn resolve_arrangement_in<'a>(
+    graph: &ResolvedPresentationGraph<'a>,
+    arrangement: &'a rv_data::presentation::Arrangement,
+) -> Option<ResolvedArrangement<'a>> {
+    let presentation = graph.presentation();
     if arrangement.group_identifiers.is_empty() {
         return None;
     }
     let mut groups = Vec::with_capacity(arrangement.group_identifiers.len());
     let mut cue_indices = Vec::new();
     for group_id in &arrangement.group_identifiers {
-        let mut matches = presentation.cue_groups.iter().filter(|candidate| {
-            candidate
-                .group
-                .as_ref()
-                .and_then(|group| group.uuid.as_ref())
-                .is_some_and(|uuid| uuid.string == group_id.string)
-        });
-        let group = matches.next()?;
-        if matches.next().is_some() {
+        let ReferenceResolution::Unique(group_index) = graph.group(&group_id.string) else {
             return None;
-        }
+        };
+        let group = &presentation.cue_groups[group_index];
         let name = group.group.as_ref()?.name.as_str();
         let start = cue_indices.len();
-        if !append_group_cue_indices(presentation, group, &mut cue_indices) {
+        if !append_group_cue_indices(graph, group, &mut cue_indices) {
             return None;
         }
         groups.push(ResolvedArrangementGroup {
@@ -477,7 +499,7 @@ pub(crate) fn resolve_arrangement<'a>(
     let entry_cue_index = cue_indices.first().copied()?;
     Some(ResolvedArrangement {
         arrangement,
-        identity: arrangement_identity(presentation, arrangement),
+        identity: arrangement_identity(graph, arrangement),
         groups,
         entry_cue_index,
         cue_indices,
@@ -485,26 +507,23 @@ pub(crate) fn resolve_arrangement<'a>(
 }
 
 fn arrangement_identity(
-    presentation: &rv_data::Presentation,
+    graph: &ResolvedPresentationGraph<'_>,
     arrangement: &rv_data::presentation::Arrangement,
 ) -> Result<uuid::Uuid, ArrangementIdentityError> {
     let name = arrangement.name.as_str();
     if name.trim().is_empty() || name.trim() != name || name.chars().any(char::is_control) {
         return Err(ArrangementIdentityError::InvalidName);
     }
-    let uuid = arrangement
+    let native_uuid = arrangement
         .uuid
         .as_ref()
-        .and_then(|native| uuid::Uuid::parse_str(&native.string).ok())
         .ok_or(ArrangementIdentityError::MissingOrInvalidUuid)?;
-    let matching_uuid_count = presentation
-        .arrangements
-        .iter()
-        .filter_map(|candidate| candidate.uuid.as_ref())
-        .filter_map(|candidate| uuid::Uuid::parse_str(&candidate.string).ok())
-        .filter(|candidate| *candidate == uuid)
-        .count();
-    if matching_uuid_count != 1 {
+    let uuid = uuid::Uuid::parse_str(&native_uuid.string)
+        .map_err(|_| ArrangementIdentityError::MissingOrInvalidUuid)?;
+    if !matches!(
+        graph.arrangement(&native_uuid.string),
+        ReferenceResolution::Unique(_)
+    ) {
         return Err(ArrangementIdentityError::AmbiguousUuid(uuid));
     }
     Ok(uuid)
@@ -524,7 +543,8 @@ pub(crate) struct SelectedGroupEntry<'a> {
 pub(crate) fn checked_selected_group_entries(
     presentation: &rv_data::Presentation,
 ) -> Result<Option<Vec<SelectedGroupEntry<'_>>>, OperatorTraversalError> {
-    let Some(resolved) = checked_selected_or_default_arrangement(presentation)? else {
+    let graph = ResolvedPresentationGraph::new(presentation);
+    let Some(resolved) = checked_selected_or_default_arrangement(&graph)? else {
         return Ok(None);
     };
     Ok(resolved
@@ -539,26 +559,21 @@ pub(crate) fn checked_selected_group_entries(
         .collect())
 }
 
-fn selected_or_default_resolved_arrangement(
-    presentation: &rv_data::Presentation,
-) -> Option<ResolvedArrangement<'_>> {
-    let arrangement = selected_or_default_arrangement_for_inspection(presentation)?;
-    resolve_arrangement(presentation, arrangement)
+fn selected_or_default_resolved_arrangement<'a>(
+    graph: &ResolvedPresentationGraph<'a>,
+) -> Option<ResolvedArrangement<'a>> {
+    let arrangement = selected_or_default_arrangement_for_inspection(graph)?;
+    resolve_arrangement_in(graph, arrangement)
 }
 
-fn selected_or_default_arrangement_for_inspection(
-    presentation: &rv_data::Presentation,
-) -> Option<&rv_data::presentation::Arrangement> {
+fn selected_or_default_arrangement_for_inspection<'a>(
+    graph: &ResolvedPresentationGraph<'a>,
+) -> Option<&'a rv_data::presentation::Arrangement> {
+    let presentation = graph.presentation();
     if let Some(selected) = &presentation.selected_arrangement {
-        let mut matches = presentation.arrangements.iter().filter(|arrangement| {
-            arrangement
-                .uuid
-                .as_ref()
-                .is_some_and(|uuid| uuid.string == selected.string)
-        });
-        return match (matches.next(), matches.next()) {
-            (Some(arrangement), None) => Some(arrangement),
-            _ => None,
+        return match graph.arrangement(&selected.string) {
+            ReferenceResolution::Unique(index) => presentation.arrangements.get(index),
+            ReferenceResolution::Missing | ReferenceResolution::Ambiguous(_) => None,
         };
     }
 
@@ -572,30 +587,25 @@ fn selected_or_default_arrangement_for_inspection(
     }
 }
 
-fn checked_selected_or_default_arrangement(
-    presentation: &rv_data::Presentation,
-) -> Result<Option<ResolvedArrangement<'_>>, OperatorTraversalError> {
+fn checked_selected_or_default_arrangement<'a>(
+    graph: &ResolvedPresentationGraph<'a>,
+) -> Result<Option<ResolvedArrangement<'a>>, OperatorTraversalError> {
+    let presentation = graph.presentation();
     if let Some(selected) = &presentation.selected_arrangement {
-        let mut matches = presentation.arrangements.iter().filter(|arrangement| {
-            arrangement
-                .uuid
-                .as_ref()
-                .is_some_and(|uuid| uuid.string == selected.string)
-        });
-        let arrangement = match (matches.next(), matches.next()) {
-            (None, _) => {
+        let arrangement = match graph.arrangement(&selected.string) {
+            ReferenceResolution::Missing => {
                 return Err(OperatorTraversalError::SelectedArrangementUnavailable {
                     identifier: selected.string.clone(),
                 });
             }
-            (Some(arrangement), None) => arrangement,
-            (Some(_), Some(_)) => {
+            ReferenceResolution::Unique(index) => &presentation.arrangements[index],
+            ReferenceResolution::Ambiguous(_) => {
                 return Err(OperatorTraversalError::SelectedArrangementAmbiguous {
                     identifier: selected.string.clone(),
                 });
             }
         };
-        let resolved = resolve_arrangement(presentation, arrangement).ok_or_else(|| {
+        let resolved = resolve_arrangement_in(graph, arrangement).ok_or_else(|| {
             OperatorTraversalError::SelectedArrangementIncomplete {
                 name: arrangement.name.clone(),
             }
@@ -615,7 +625,7 @@ fn checked_selected_or_default_arrangement(
     match (defaults.next(), defaults.next()) {
         (None, _) => Ok(None),
         (Some(arrangement), None) => {
-            let resolved = resolve_arrangement(presentation, arrangement).ok_or_else(|| {
+            let resolved = resolve_arrangement_in(graph, arrangement).ok_or_else(|| {
                 OperatorTraversalError::DefaultArrangementIncomplete {
                     name: arrangement.name.clone(),
                 }
@@ -632,22 +642,14 @@ fn checked_selected_or_default_arrangement(
 }
 
 fn append_group_cue_indices(
-    presentation: &rv_data::Presentation,
+    graph: &ResolvedPresentationGraph<'_>,
     group: &rv_data::presentation::CueGroup,
     indices: &mut Vec<usize>,
 ) -> bool {
     for cue_id in &group.cue_identifiers {
-        let mut matches = presentation.cues.iter().enumerate().filter(|(_, cue)| {
-            cue.uuid
-                .as_ref()
-                .is_some_and(|uuid| uuid.string == cue_id.string)
-        });
-        let Some((index, _)) = matches.next() else {
+        let ReferenceResolution::Unique(index) = graph.cue(&cue_id.string) else {
             return false;
         };
-        if matches.next().is_some() {
-            return false;
-        }
         indices.push(index);
     }
     true

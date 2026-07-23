@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use proflow::propresenter::generated::rv_data::{self, playlist};
 use proflow::propresenter::media::presentation_media_dependencies;
 use proflow::propresenter::package::{
     compare_playlist_packages, embedded_presentation_summaries, infer_archive_shape,
@@ -19,6 +18,7 @@ use proflow::propresenter::playlist::{
     build_playlist, linked_presentation_filename, write_playlist_document_for_fidelity,
     PlaylistEntry, PlaylistMetadata, SelectedArrangement,
 };
+use proflow::propresenter::unstable_native::rv_data::{self, playlist};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -33,6 +33,10 @@ struct Manifest {
 struct PlaylistFixture {
     path: String,
     provenance: String,
+    producer_version: String,
+    operating_system: String,
+    export_mode: String,
+    covered_native_capabilities: Vec<String>,
     independent_native_export: bool,
     mode: PlaylistArchiveShape,
     item_count: usize,
@@ -45,6 +49,10 @@ struct PlaylistFixture {
 struct PresentationFixture {
     path: String,
     provenance: String,
+    producer_version: String,
+    operating_system: String,
+    export_mode: String,
+    covered_native_capabilities: Vec<String>,
     independent_native_export: bool,
     name: String,
     cue_count: usize,
@@ -71,6 +79,10 @@ struct SmokeIssue {
 struct PlaylistSmokeReport {
     path: String,
     provenance: String,
+    producer_version: String,
+    operating_system: String,
+    export_mode: String,
+    covered_native_capabilities: Vec<String>,
     independent_native_export: bool,
     mode: PlaylistArchiveShape,
     item_count: usize,
@@ -85,6 +97,10 @@ struct PlaylistSmokeReport {
 struct PresentationSmokeReport {
     path: String,
     provenance: String,
+    producer_version: String,
+    operating_system: String,
+    export_mode: String,
+    covered_native_capabilities: Vec<String>,
     independent_native_export: bool,
     name: String,
     cue_count: usize,
@@ -252,6 +268,10 @@ fn inspect_playlist_fixture(
     Ok(PlaylistSmokeReport {
         path: fixture.path.clone(),
         provenance: fixture.provenance.clone(),
+        producer_version: fixture.producer_version.clone(),
+        operating_system: fixture.operating_system.clone(),
+        export_mode: fixture.export_mode.clone(),
+        covered_native_capabilities: fixture.covered_native_capabilities.clone(),
         independent_native_export: fixture.independent_native_export,
         mode: infer_archive_shape(&package),
         item_count: items.len(),
@@ -425,6 +445,10 @@ fn inspect_presentation_fixture(
     Ok(PresentationSmokeReport {
         path: fixture.path.clone(),
         provenance: fixture.provenance.clone(),
+        producer_version: fixture.producer_version.clone(),
+        operating_system: fixture.operating_system.clone(),
+        export_mode: fixture.export_mode.clone(),
+        covered_native_capabilities: fixture.covered_native_capabilities.clone(),
         independent_native_export: fixture.independent_native_export,
         name: presentation.name,
         cue_count,

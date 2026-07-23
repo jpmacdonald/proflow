@@ -603,10 +603,12 @@ fn source_destination_evidence_distinguishes_semantic_roles(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let title = TextFitDestinationIdentity::SourceTheme {
         cue_role: "title".to_string(),
+        field: "body".to_string(),
         theme_slide_uuid: Some("title-slide".to_string()),
     };
     let content = TextFitDestinationIdentity::SourceTheme {
         cue_role: "content".to_string(),
+        field: "body".to_string(),
         theme_slide_uuid: Some("content-slide".to_string()),
     };
     let title_json = serde_json::to_value(title)?;

@@ -1,0 +1,62 @@
+{
+  "schema": "proflow.qa-service-goldens.v1",
+  "provenance": {
+    "status": "operator_qa_approved",
+    "source": "sanitized ProFlow build receipts from the July 5, 12, and 19, 2026 services",
+    "producer_version": "ProFlow 0.1.0",
+    "native_producer_version": "ProPresenter 21.4.0 (352583705)",
+    "operating_system": "macOS",
+    "export_mode": "portable_import",
+    "sanitization": "absolute paths, UUIDs, plan IDs, person-specific source text, and media bytes omitted; fingerprint covers canonical presentation/package semantics"
+  },
+  "services": [
+    {
+      "playlist_name": "July 5, 2026 - 9am Contemporary",
+      "service_date": "2026-07-05",
+      "service_style": "contemporary",
+      "semantic_sha256": "abb23151efa6acd1b2484e1a6dc6250e592237a5438b84f43421a92fca5e18dd",
+      "counts": {"review_entries": 22, "playlist_items": 17, "presentation_artifacts": 15, "media_members": 21, "generated": 2, "edited": 0, "restyled": 13, "library": 2, "skipped": 5},
+      "covered_native_capabilities": ["required_items", "songs", "scripture", "nametags", "responsive_liturgy", "graphics", "arrangements", "portable_media"]
+    },
+    {
+      "playlist_name": "July 5, 2026 - 1030am Traditional",
+      "service_date": "2026-07-05",
+      "service_style": "traditional",
+      "semantic_sha256": "6e18ffcb4ea56964febbfce96b92f932e018ba987f4fccce2566189b98eee4e0",
+      "counts": {"review_entries": 27, "playlist_items": 22, "presentation_artifacts": 22, "media_members": 20, "generated": 3, "edited": 4, "restyled": 15, "library": 0, "skipped": 5},
+      "covered_native_capabilities": ["required_items", "hymns", "doxology", "scripture", "nametags", "responsive_liturgy", "graphics", "arrangements", "portable_media"]
+    },
+    {
+      "playlist_name": "July 12, 2026 - 9am Contemporary",
+      "service_date": "2026-07-12",
+      "service_style": "contemporary",
+      "semantic_sha256": "02d5d01c820819576eed790b2cbe12d5cb4f060ce53c9e881f6104df66a9e3d3",
+      "counts": {"review_entries": 20, "playlist_items": 14, "presentation_artifacts": 14, "media_members": 18, "generated": 2, "edited": 1, "restyled": 11, "library": 0, "skipped": 6},
+      "covered_native_capabilities": ["required_items", "songs", "scripture", "nametags", "responsive_liturgy", "graphics", "arrangements", "portable_media"]
+    },
+    {
+      "playlist_name": "July 12, 2026 - 1030am Traditional",
+      "service_date": "2026-07-12",
+      "service_style": "traditional",
+      "semantic_sha256": "7c0283cd6dc7ab24cc6f662040d990455a768bbbf2d3ae679bad61d0c90eea8e",
+      "counts": {"review_entries": 24, "playlist_items": 20, "presentation_artifacts": 20, "media_members": 18, "generated": 2, "edited": 4, "restyled": 14, "library": 0, "skipped": 4},
+      "covered_native_capabilities": ["required_items", "hymns", "doxology", "scripture", "creed", "nametags", "responsive_liturgy", "graphics", "arrangements", "portable_media"]
+    },
+    {
+      "playlist_name": "July 19, 2026 - 9am Contemporary",
+      "service_date": "2026-07-19",
+      "service_style": "contemporary",
+      "semantic_sha256": "972e8b603cac5117e996730ce3953fe648db364a8e5daa36c9f3d9c00d26485e",
+      "counts": {"review_entries": 21, "playlist_items": 16, "presentation_artifacts": 16, "media_members": 18, "generated": 3, "edited": 1, "restyled": 12, "library": 0, "skipped": 5},
+      "covered_native_capabilities": ["required_items", "songs", "scripture", "nametags", "responsive_liturgy", "graphics", "arrangements", "portable_media"]
+    },
+    {
+      "playlist_name": "July 19, 2026 - 1030am Traditional",
+      "service_date": "2026-07-19",
+      "service_style": "traditional",
+      "semantic_sha256": "ecac4c59a80f17cbbdca5a44c5588150e0c51bef41202cb3bd336b868930c494",
+      "counts": {"review_entries": 26, "playlist_items": 21, "presentation_artifacts": 21, "media_members": 18, "generated": 4, "edited": 4, "restyled": 13, "library": 0, "skipped": 5},
+      "covered_native_capabilities": ["required_items", "hymns", "doxology", "scripture", "catechism", "nametags", "responsive_liturgy", "graphics", "arrangements", "portable_media"]
+    }
+  ]
+}

@@ -351,7 +351,7 @@ fn paragraph_strategy() -> impl Strategy<Value = String> {
 
 proptest! {
     #[test]
-    fn styled_flow_preserves_bounds_content_order_and_style(
+    fn property_styled_flow_preserves_bounds_content_order_and_style(
         paragraphs in prop::collection::vec(prop::option::of(paragraph_strategy()), 0..16),
         wrap_column in MIN_SLIDE_WRAP..80usize,
         max_lines in 1..8usize,

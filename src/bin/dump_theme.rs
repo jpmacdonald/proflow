@@ -1,7 +1,7 @@
 //! Dump a `ProPresenter` theme file for inspection.
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
-use proflow::propresenter::generated::rv_data;
+use proflow::propresenter::unstable_native::rv_data;
 use prost::Message;
 use std::env;
 

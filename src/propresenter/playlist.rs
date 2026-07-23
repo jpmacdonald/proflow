@@ -8,6 +8,7 @@
 mod document;
 mod domain;
 mod naming;
+mod package_plan;
 mod package_validation;
 mod package_write;
 
@@ -29,6 +30,9 @@ pub use package_write::write_playlist_document_for_fidelity;
 pub use package_write::write_playlist_set_file;
 
 pub(crate) use domain::ReviewedPlaylistExportIntent;
+pub(crate) use package_plan::{
+    resolve_playlist_export, PlaylistExportEvidence, ResolvedPlaylistExport,
+};
 #[cfg(test)]
 pub(crate) use package_write::write_playlist_document_file_with_intent;
 pub(crate) use package_write::write_playlist_set_file_with_reviewed_media;

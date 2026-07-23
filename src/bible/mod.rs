@@ -13,7 +13,9 @@ mod excerpt;
 pub use excerpt::{reconcile_prefix_excerpt, ScriptureExcerptError};
 
 /// Supported Bible versions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[allow(clippy::upper_case_acronyms)] // NRSV, NIV, KJV are standard Bible version abbreviations
 pub enum BibleVersion {
     /// New Revised Standard Version Updated Edition
@@ -123,7 +125,7 @@ impl BibleVersion {
 }
 
 /// Verse selection within one scripture chapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerseSelection {
     /// Every verse present in the chapter.
     Chapter,
@@ -136,6 +138,41 @@ pub enum VerseSelection {
         /// Last requested verse.
         end: u32,
     },
+    /// Multiple ordered, non-overlapping ranges in the same chapter.
+    Disjoint(DisjointVerseRanges),
+}
+
+/// Checked ranges for a discontinuous selection such as `1-5, 9-17`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisjointVerseRanges(Box<[VerseRange]>);
+
+impl DisjointVerseRanges {
+    fn new(ranges: Vec<VerseRange>) -> Option<Self> {
+        if ranges.len() < 2 || ranges.windows(2).any(|pair| pair[0].end >= pair[1].start) {
+            return None;
+        }
+        Some(Self(ranges.into_boxed_slice()))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &VerseRange> {
+        self.0.iter()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VerseRange {
+    start: u32,
+    end: u32,
+}
+
+impl std::fmt::Display for VerseRange {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.start == self.end {
+            write!(formatter, "{}", self.start)
+        } else {
+            write!(formatter, "{}-{}", self.start, self.end)
+        }
+    }
 }
 
 /// A parsed scripture reference.
@@ -151,7 +188,7 @@ pub struct ScriptureRef {
 
 impl std::fmt::Display for ScriptureRef {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.verses {
+        match &self.verses {
             VerseSelection::Chapter => write!(formatter, "{} {}", self.book, self.chapter),
             VerseSelection::Verse(verse) => {
                 write!(formatter, "{} {}:{verse}", self.book, self.chapter)
@@ -159,7 +196,96 @@ impl std::fmt::Display for ScriptureRef {
             VerseSelection::Range { start, end } => {
                 write!(formatter, "{} {}:{start}-{end}", self.book, self.chapter)
             }
+            VerseSelection::Disjoint(ranges) => {
+                write!(formatter, "{} {}:", self.book, self.chapter)?;
+                for (index, range) in ranges.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "{range}")?;
+                }
+                Ok(())
+            }
         }
+    }
+}
+
+impl ScriptureRef {
+    /// Zero-based canonical Protestant book index used by native Bible metadata.
+    #[must_use]
+    pub fn canonical_book_index(&self) -> Option<u32> {
+        const BOOKS: &[&str] = &[
+            "Genesis",
+            "Exodus",
+            "Leviticus",
+            "Numbers",
+            "Deuteronomy",
+            "Joshua",
+            "Judges",
+            "Ruth",
+            "1 Samuel",
+            "2 Samuel",
+            "1 Kings",
+            "2 Kings",
+            "1 Chronicles",
+            "2 Chronicles",
+            "Ezra",
+            "Nehemiah",
+            "Esther",
+            "Job",
+            "Psalms",
+            "Proverbs",
+            "Ecclesiastes",
+            "Song of Solomon",
+            "Isaiah",
+            "Jeremiah",
+            "Lamentations",
+            "Ezekiel",
+            "Daniel",
+            "Hosea",
+            "Joel",
+            "Amos",
+            "Obadiah",
+            "Jonah",
+            "Micah",
+            "Nahum",
+            "Habakkuk",
+            "Zephaniah",
+            "Haggai",
+            "Zechariah",
+            "Malachi",
+            "Matthew",
+            "Mark",
+            "Luke",
+            "John",
+            "Acts",
+            "Romans",
+            "1 Corinthians",
+            "2 Corinthians",
+            "Galatians",
+            "Ephesians",
+            "Philippians",
+            "Colossians",
+            "1 Thessalonians",
+            "2 Thessalonians",
+            "1 Timothy",
+            "2 Timothy",
+            "Titus",
+            "Philemon",
+            "Hebrews",
+            "James",
+            "1 Peter",
+            "2 Peter",
+            "1 John",
+            "2 John",
+            "3 John",
+            "Jude",
+            "Revelation",
+        ];
+        BOOKS
+            .iter()
+            .position(|book| *book == self.book)
+            .and_then(|index| u32::try_from(index).ok())
     }
 }
 
@@ -197,6 +323,21 @@ pub enum BibleCorpusError {
         /// Conflicting translation using the same bytes.
         second: &'static str,
     },
+    /// Corpus bytes no longer match the immutable runtime snapshot.
+    #[error(
+        "{version} corpus at {} changed after startup (expected SHA-256 {expected}, found {actual})",
+        path.display()
+    )]
+    Changed {
+        /// Translation assigned to the file.
+        version: &'static str,
+        /// Exact corpus path.
+        path: PathBuf,
+        /// Hash captured by the immutable snapshot.
+        expected: String,
+        /// Hash observed later.
+        actual: String,
+    },
 }
 
 /// Validate every installed Bible corpus and reject duplicate translation
@@ -207,33 +348,10 @@ pub enum BibleCorpusError {
 /// reviewed-source boundary. Every file that is present must parse and must
 /// not be mislabeled as a second byte-identical translation.
 pub fn validate_bible_corpora(root: &std::path::Path) -> Result<(), BibleCorpusError> {
-    let mut hashes = BTreeMap::<[u8; 32], &'static str>::new();
-    for version in BibleVersion::all() {
-        let path = root.join(version.file_name());
-        if !path.exists() {
-            continue;
-        }
-        let bytes = std::fs::read(&path).map_err(|source| BibleCorpusError::Read {
-            version: version.name(),
-            path: path.clone(),
-            source,
-        })?;
-        serde_json::from_slice::<BibleData>(&bytes).map_err(|source| BibleCorpusError::Parse {
-            version: version.name(),
-            path,
-            source,
-        })?;
-        let hash: [u8; 32] = Sha256::digest(&bytes).into();
-        if let Some(first) = hashes.insert(hash, version.name()) {
-            return Err(BibleCorpusError::DuplicateTranslation {
-                first,
-                second: version.name(),
-            });
-        }
-    }
-    Ok(())
+    BibleCorpusSnapshot::capture(root.to_path_buf()).map(|_| ())
 }
 
+#[derive(Debug)]
 struct CachedBibleData {
     source_sha256: [u8; 32],
     data: BibleData,
@@ -424,12 +542,9 @@ fn normalize_book_name(name: &str) -> Option<&'static str> {
 pub fn parse_scripture_ref(text: &str) -> Option<ScriptureRef> {
     let text = strip_scripture_heading(text);
 
-    // Take only the first reference if multiple (separated by ; or ,)
-    let first_ref = text
-        .split(';')
-        .next()
-        .or_else(|| text.split(',').next())?
-        .trim();
+    // Semicolons separate passages. Commas remain part of a single reference
+    // because they can select discontinuous ranges in one chapter.
+    let first_ref = text.split(';').next()?.trim();
 
     // Remove version and location indicators like "(NRSV)" or "(Hope)" or "NRSVue"
     // Also handle version without parens at end
@@ -480,102 +595,108 @@ fn parse_single_reference(text: &str) -> Option<ScriptureRef> {
     // Normalize en-dash/em-dash to ASCII hyphen (PCO often uses typographic dashes)
     let text = text.replace(['\u{2013}', '\u{2014}'], "-");
 
-    // Find where the chapter:verse starts (look for digits followed by colon)
-    let mut parts = text.rsplitn(2, |c: char| c.is_whitespace());
-    let verse_part = parts.next()?;
-    let book_part = parts.next()?.trim();
+    // Try every word boundary so whitespace after a comma remains part of the
+    // verse selection while spaces inside canonical book names still work.
+    text.char_indices()
+        .rev()
+        .filter(|(_, character)| character.is_whitespace())
+        .find_map(|(boundary, _)| {
+            let book = normalize_book_name(text[..boundary].trim())?;
+            let (chapter, verses) = parse_chapter_selection(text[boundary..].trim())?;
+            Some(ScriptureRef {
+                book: book.to_string(),
+                chapter,
+                verses,
+            })
+        })
+}
 
-    // Parse a whole chapter, chapter:verse-range, or chapter-v-verse notation.
-    // Only the final numeric token owns this delimiter; a `v` inside a book
-    // name is content.
-    let chapter_and_verses = verse_part
-        .split_once(':')
-        .or_else(|| verse_part.split_once('v'));
-    let (chapter_str, verse_range) = chapter_and_verses.unwrap_or((verse_part, ""));
+fn parse_chapter_selection(text: &str) -> Option<(u32, VerseSelection)> {
+    let chapter_and_verses = text.split_once(':').or_else(|| text.split_once('v'));
+    let (chapter_str, verse_text) = chapter_and_verses.unwrap_or((text, ""));
     let chapter: u32 = chapter_str.parse().ok()?;
     if chapter == 0 {
         return None;
     }
 
-    let verses = if verse_range.is_empty() {
+    let verses = if verse_text.is_empty() {
         VerseSelection::Chapter
-    } else if verse_range.contains('-') {
-        let mut range_parts = verse_range.split('-');
-        let start: u32 = range_parts.next()?.parse().ok()?;
-        let end: u32 = range_parts.next()?.parse().ok()?;
-        if start == 0 || end < start || range_parts.next().is_some() {
-            return None;
-        }
-        VerseSelection::Range { start, end }
     } else {
-        let verse = verse_range.parse().ok()?;
-        if verse == 0 {
-            return None;
-        }
-        VerseSelection::Verse(verse)
-    };
-
-    let book = normalize_book_name(book_part)?;
-
-    Some(ScriptureRef {
-        book: book.to_string(),
-        chapter,
-        verses,
-    })
-}
-
-/// Bible lookup service
-pub struct BibleService {
-    /// Path to the directory containing Bible JSON data files
-    data_path: PathBuf,
-    /// Cached Bible data keyed by version
-    cache: HashMap<BibleVersion, CachedBibleData>,
-}
-
-impl BibleService {
-    /// Creates a new `BibleService` with the given data directory path.
-    pub fn new(data_path: PathBuf) -> Self {
-        Self {
-            data_path,
-            cache: HashMap::new(),
-        }
-    }
-
-    /// Load a Bible version into cache
-    fn load_version(&mut self, version: BibleVersion) -> Result<(), crate::error::Error> {
-        let path = self.data_path.join(version.file_name());
-        let bytes = std::fs::read(&path).map_err(|e| {
-            crate::error::Error::Scripture(format!("Failed to read {}: {e}", path.display()))
-        })?;
-        self.load_version_bytes(version, &bytes, &path.display().to_string())
-    }
-
-    fn load_version_bytes(
-        &mut self,
-        version: BibleVersion,
-        bytes: &[u8],
-        source: &str,
-    ) -> Result<(), crate::error::Error> {
-        let source_sha256 = Sha256::digest(bytes).into();
-        if self
-            .cache
-            .get(&version)
-            .is_some_and(|cached| cached.source_sha256 == source_sha256)
-        {
-            return Ok(());
-        }
-
-        let data: BibleData = serde_json::from_slice(bytes).map_err(|error| {
-            crate::error::Error::Scripture(format!("Failed to parse {source}: {error}"))
-        })?;
-
-        self.cache.insert(
-            version,
-            CachedBibleData {
-                source_sha256,
-                data,
+        let ranges = verse_text
+            .split(',')
+            .map(str::trim)
+            .map(parse_verse_range)
+            .collect::<Option<Vec<_>>>()?;
+        match ranges.as_slice() {
+            [range] if range.start == range.end => VerseSelection::Verse(range.start),
+            [range] => VerseSelection::Range {
+                start: range.start,
+                end: range.end,
             },
-        );
+            _ => VerseSelection::Disjoint(DisjointVerseRanges::new(ranges)?),
+        }
+    };
+    Some((chapter, verses))
+}
+
+fn parse_verse_range(text: &str) -> Option<VerseRange> {
+    let (start, end) = text.split_once('-').map_or_else(
+        || text.parse().ok().map(|verse| (verse, verse)),
+        |(start, end)| Some((start.parse().ok()?, end.parse().ok()?)),
+    )?;
+    (start > 0 && end >= start).then_some(VerseRange { start, end })
+}
+
+/// Immutable, parsed Bible corpora captured from one project data bundle.
+///
+/// Review reconciliation and rendering share this exact snapshot. A caller
+/// supplying reviewed file bytes must prove they still match the parsed
+/// corpus, so a changed file cannot be attributed to stale in-memory text.
+#[derive(Debug)]
+pub struct BibleCorpusSnapshot {
+    root: PathBuf,
+    corpora: HashMap<BibleVersion, CachedBibleData>,
+}
+
+impl BibleCorpusSnapshot {
+    /// Parse every installed translation and reject duplicate identities.
+    ///
+    /// Missing translations are allowed until a plan requests one.
+    pub fn capture(root: PathBuf) -> Result<Self, BibleCorpusError> {
+        let mut hashes = BTreeMap::<[u8; 32], &'static str>::new();
+        let mut corpora = HashMap::new();
+        for version in BibleVersion::all() {
+            let path = root.join(version.file_name());
+            if !path.exists() {
+                continue;
+            }
+            let bytes = read_corpus(*version, &path)?;
+            let source_sha256: [u8; 32] = Sha256::digest(&bytes).into();
+            if let Some(first) = hashes.insert(source_sha256, version.name()) {
+                return Err(BibleCorpusError::DuplicateTranslation {
+                    first,
+                    second: version.name(),
+                });
+            }
+            let data = parse_corpus(*version, &path, &bytes)?;
+            corpora.insert(
+                *version,
+                CachedBibleData {
+                    source_sha256,
+                    data,
+                },
+            );
+        }
+        Ok(Self { root, corpora })
+    }
+
+    /// Verify every installed corpus still matches this snapshot.
+    pub fn verify_current(&self) -> Result<(), BibleCorpusError> {
+        for (version, corpus) in &self.corpora {
+            let path = self.root.join(version.file_name());
+            let bytes = read_corpus(*version, &path)?;
+            Self::verify_bytes(*version, &path, &bytes, corpus)?;
+        }
         Ok(())
     }
 
@@ -583,38 +704,36 @@ impl BibleService {
     ///
     /// Returns a header (with any missing verse numbers) and a `Vec<Verse>`.
     pub fn lookup_verses(
-        &mut self,
+        &self,
         reference: &ScriptureRef,
         version: BibleVersion,
     ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
-        self.load_version(version)?;
-        self.lookup_cached(reference, version)
+        self.lookup_captured(reference, version)
     }
 
     /// Look up verses from exact caller-supplied Bible source bytes.
     ///
     /// The cache is keyed by both version and content hash so a prior build
     /// cannot leak stale translation data into a reviewed build.
-    pub fn lookup_verses_from_bytes(
-        &mut self,
+    pub fn lookup_reviewed_verses(
+        &self,
         reference: &ScriptureRef,
         version: BibleVersion,
         source_bytes: &[u8],
     ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
-        self.load_version_bytes(version, source_bytes, "reviewed Bible source")?;
-        self.lookup_cached(reference, version)
+        let corpus = self.corpus(version)?;
+        let path = self.root.join(version.file_name());
+        Self::verify_bytes(version, &path, source_bytes, corpus)
+            .map_err(|error| crate::error::Error::Scripture(error.to_string()))?;
+        self.lookup_captured(reference, version)
     }
 
-    fn lookup_cached(
+    fn lookup_captured(
         &self,
         reference: &ScriptureRef,
         version: BibleVersion,
     ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
-        let bible = self
-            .cache
-            .get(&version)
-            .map(|cached| &cached.data)
-            .ok_or_else(|| crate::error::Error::Scripture("Bible data not loaded".to_string()))?;
+        let bible = &self.corpus(version)?.data;
 
         let book_data = bible.get(&reference.book).ok_or_else(|| {
             crate::error::Error::Scripture(format!("Book not found: {}", reference.book))
@@ -629,7 +748,7 @@ impl BibleService {
                 ))
             })?;
 
-        let requested_verses = match reference.verses {
+        let requested_verses = match &reference.verses {
             VerseSelection::Chapter => {
                 let mut verses = chapter_data
                     .keys()
@@ -645,8 +764,12 @@ impl BibleService {
                 verses.sort_unstable();
                 verses
             }
-            VerseSelection::Verse(verse) => vec![verse],
-            VerseSelection::Range { start, end } => (start..=end).collect(),
+            VerseSelection::Verse(verse) => vec![*verse],
+            VerseSelection::Range { start, end } => (*start..=*end).collect(),
+            VerseSelection::Disjoint(ranges) => ranges
+                .iter()
+                .flat_map(|range| range.start..=range.end)
+                .collect(),
         };
         let mut verses = Vec::new();
         let mut missing_verses = Vec::new();
@@ -666,7 +789,7 @@ impl BibleService {
         let header = ScriptureHeader {
             book: reference.book.clone(),
             chapter: reference.chapter,
-            verses: reference.verses,
+            verses: reference.verses.clone(),
             version,
             missing_verses,
         };
@@ -674,28 +797,60 @@ impl BibleService {
         Ok((header, verses))
     }
 
-    /// Look up verses and format with superscript verse numbers.
-    ///
-    /// Returns a header for display and the verse text lines.
-    /// Legacy API — delegates to `lookup_verses()` and concatenates.
-    pub fn lookup(
-        &mut self,
-        reference: &ScriptureRef,
-        version: BibleVersion,
-    ) -> Result<(ScriptureHeader, Vec<String>), crate::error::Error> {
-        let (header, verses) = self.lookup_verses(reference, version)?;
-
-        let mut verse_text = String::new();
-        for verse in &verses {
-            if !verse_text.is_empty() {
-                verse_text.push(' ');
-            }
-            let _ = write!(verse_text, "{}{}", to_superscript(verse.number), verse.text);
-        }
-
-        let lines = vec![verse_text, String::new()];
-        Ok((header, lines))
+    fn corpus(&self, version: BibleVersion) -> Result<&CachedBibleData, crate::error::Error> {
+        self.corpora.get(&version).ok_or_else(|| {
+            crate::error::Error::Scripture(format!(
+                "Bible corpus is not installed: {}",
+                self.root.join(version.file_name()).display()
+            ))
+        })
     }
+
+    fn verify_bytes(
+        version: BibleVersion,
+        path: &std::path::Path,
+        bytes: &[u8],
+        corpus: &CachedBibleData,
+    ) -> Result<(), BibleCorpusError> {
+        let actual: [u8; 32] = Sha256::digest(bytes).into();
+        if actual == corpus.source_sha256 {
+            return Ok(());
+        }
+        Err(BibleCorpusError::Changed {
+            version: version.name(),
+            path: path.to_path_buf(),
+            expected: digest_hex(&corpus.source_sha256),
+            actual: digest_hex(&actual),
+        })
+    }
+}
+
+fn read_corpus(version: BibleVersion, path: &std::path::Path) -> Result<Vec<u8>, BibleCorpusError> {
+    std::fs::read(path).map_err(|source| BibleCorpusError::Read {
+        version: version.name(),
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn parse_corpus(
+    version: BibleVersion,
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> Result<BibleData, BibleCorpusError> {
+    serde_json::from_slice(bytes).map_err(|source| BibleCorpusError::Parse {
+        version: version.name(),
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn digest_hex(bytes: &[u8; 32]) -> String {
+    let mut digest = String::with_capacity(64);
+    for byte in bytes {
+        let _ = write!(digest, "{byte:02x}");
+    }
+    digest
 }
 
 /// A single verse with its number and plain text content.
@@ -728,7 +883,7 @@ impl ScriptureHeader {
         let reference = ScriptureRef {
             book: self.book.clone(),
             chapter: self.chapter,
-            verses: self.verses,
+            verses: self.verses.clone(),
         };
         format!("{reference} {}", self.version.name())
     }
@@ -796,6 +951,32 @@ mod tests {
     }
 
     #[test]
+    fn discontinuous_ranges_are_one_reference() {
+        let reference = parse_scripture_ref("Joshua 3:1-5, 9-17")
+            .expect("valid discontinuous same-chapter reference");
+
+        assert_eq!(reference.book, "Joshua");
+        assert_eq!(reference.chapter, 3);
+        assert_eq!(reference.to_string(), "Joshua 3:1-5, 9-17");
+        let VerseSelection::Disjoint(ranges) = &reference.verses else {
+            panic!("expected checked disjoint ranges");
+        };
+        assert_eq!(
+            ranges
+                .iter()
+                .flat_map(|range| range.start..=range.end)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        );
+    }
+
+    #[test]
+    fn discontinuous_ranges_reject_overlap_or_reverse_order() {
+        assert!(parse_scripture_ref("Joshua 3:1-5, 5-9").is_none());
+        assert!(parse_scripture_ref("Joshua 3:9-17, 1-5").is_none());
+    }
+
+    #[test]
     fn whole_chapter_is_a_distinct_reference() {
         let reference =
             parse_scripture_ref("Scripture: Jonah 3 NRSVue").expect("whole chapter reference");
@@ -858,19 +1039,26 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_source_bytes_replace_a_stale_version_cache() {
+    fn reviewed_source_bytes_must_match_the_immutable_snapshot() {
+        let root = tempfile::tempdir().expect("temporary Bible root");
+        let path = root.path().join(BibleVersion::NRSVue.file_name());
+        let original = bible_source("old text");
+        std::fs::write(&path, &original).expect("write Bible source");
         let reference = john_3_16();
-        let mut bible = BibleService::new(PathBuf::new());
+        let bible = BibleCorpusSnapshot::capture(root.path().to_path_buf())
+            .expect("capture Bible snapshot");
 
         let (_, first) = bible
-            .lookup_verses_from_bytes(&reference, BibleVersion::NRSVue, &bible_source("old text"))
+            .lookup_reviewed_verses(&reference, BibleVersion::NRSVue, &original)
             .expect("first reviewed lookup");
-        let (_, second) = bible
-            .lookup_verses_from_bytes(&reference, BibleVersion::NRSVue, &bible_source("new text"))
-            .expect("changed reviewed lookup");
+        let changed = bible.lookup_reviewed_verses(
+            &reference,
+            BibleVersion::NRSVue,
+            &bible_source("new text"),
+        );
 
         assert_eq!(first[0].text, "old text");
-        assert_eq!(second[0].text, "new text");
+        assert!(changed.is_err());
     }
 
     #[test]
@@ -880,10 +1068,14 @@ mod tests {
         }))
         .expect("serialize whole chapter fixture");
         let reference = parse_scripture_ref("Jonah 3").expect("whole chapter reference");
-        let mut bible = BibleService::new(PathBuf::new());
+        let root = tempfile::tempdir().expect("temporary Bible root");
+        std::fs::write(root.path().join(BibleVersion::NRSVue.file_name()), &source)
+            .expect("write whole chapter fixture");
+        let bible = BibleCorpusSnapshot::capture(root.path().to_path_buf())
+            .expect("capture Bible snapshot");
 
         let (header, verses) = bible
-            .lookup_verses_from_bytes(&reference, BibleVersion::NRSVue, &source)
+            .lookup_reviewed_verses(&reference, BibleVersion::NRSVue, &source)
             .expect("whole chapter lookup");
 
         assert_eq!(
@@ -895,22 +1087,23 @@ mod tests {
     }
 
     #[test]
-    fn file_lookup_reloads_when_source_bytes_change_between_builds() {
+    fn snapshot_verification_rejects_corpus_changes() {
         let root = tempfile::tempdir().expect("temporary Bible root");
         let path = root.path().join(BibleVersion::NRSVue.file_name());
         std::fs::write(&path, bible_source("old text")).expect("write first Bible source");
-        let mut bible = BibleService::new(root.path().to_path_buf());
+        let bible = BibleCorpusSnapshot::capture(root.path().to_path_buf())
+            .expect("capture Bible snapshot");
 
         let (_, first) = bible
             .lookup_verses(&john_3_16(), BibleVersion::NRSVue)
             .expect("first file lookup");
         std::fs::write(&path, bible_source("new text")).expect("replace Bible source");
-        let (_, second) = bible
-            .lookup_verses(&john_3_16(), BibleVersion::NRSVue)
-            .expect("second file lookup");
 
         assert_eq!(first[0].text, "old text");
-        assert_eq!(second[0].text, "new text");
+        assert!(matches!(
+            bible.verify_current(),
+            Err(BibleCorpusError::Changed { .. })
+        ));
     }
 
     #[test]

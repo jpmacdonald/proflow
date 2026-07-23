@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use proflow::bible::BibleService;
+use proflow::bible::BibleCorpusSnapshot;
 use proflow::config::Config;
 use proflow::paths::{BuildLocationInputs, BuildLocations};
 use proflow::planning_center::api::PlanningCenterClient;
@@ -122,9 +122,7 @@ async fn run() -> Result<ParityBuildLiveDiffReport> {
 
     let pco_client =
         PlanningCenterClient::new(&config).context("initialize Planning Center HTTP client")?;
-    let bible_service = Arc::new(Mutex::new(BibleService::new(
-        locations.project_data_root().join("bibles"),
-    )));
+    let bible_corpora = BibleCorpusSnapshot::capture(locations.project_data_root().join("bibles"))?;
     let file_index = Arc::new(Mutex::new(
         LibraryCatalog::build(&generated_library_dir)
             .with_context(|| format!("index shadow library {}", generated_library_dir.display()))?,
@@ -133,7 +131,7 @@ async fn run() -> Result<ParityBuildLiveDiffReport> {
     let render_assets = RenderAssetSnapshot::load(mappings, locations)?;
     let executor = ServiceBuildExecutor::new(
         &pco_client,
-        &bible_service,
+        &bible_corpora,
         &file_index,
         &render_assets,
         &playlist_metadata,

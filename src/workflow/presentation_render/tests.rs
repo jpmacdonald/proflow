@@ -418,6 +418,39 @@ fn slide_labels(rendered: &RenderedPresentation) -> Vec<Option<&str>> {
         .collect()
 }
 
+fn assert_resolved_macro_regions(
+    rendered: &RenderedPresentation,
+    style: &RenderStyle,
+    expected: &[(usize, &str)],
+) {
+    let resolved = resolved_macro_regions(rendered, style)
+        .expect("lower rendered role transitions into the final contract");
+    let actual = resolved
+        .iter()
+        .map(|region| {
+            let ExpectedMacroSelector::OperatorCue { index } = &region.selector else {
+                panic!("generated render must use operator-cue selectors");
+            };
+            (*index, region.macro_name.as_str())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+fn assert_alternating_liturgy_macro_contract(rendered: &RenderedPresentation, style: &RenderStyle) {
+    assert_resolved_macro_regions(
+        rendered,
+        style,
+        &[
+            (0, "Scripture/Prayer"),
+            (1, "Scripture/Prayer (Highlighted)"),
+            (2, "Scripture/Prayer"),
+            (3, "Scripture/Prayer (Highlighted)"),
+            (4, "Scripture/Prayer"),
+        ],
+    );
+}
+
 fn rendered_text(rendered: &RenderedPresentation, index: usize) -> String {
     let slide = rendered_slide(rendered, index);
     slide
@@ -486,6 +519,191 @@ fn explicit_body_slot_changes_only_the_named_native_field() {
         Some("Replacement body")
     );
     assert_eq!(body_rtf(slide, "Footer"), original_footer);
+}
+
+#[test]
+fn final_fit_proves_each_field_of_a_multi_field_cue_independently() {
+    use crate::propresenter::presentation_spec::{
+        CueSpec, GroupSpec, PresentationSpec, TextBindings, TextField,
+    };
+    use crate::propresenter::render::{render_presentation, RenderAssets};
+    use crate::propresenter::rtf::StyledSegment;
+
+    let (_root, themes) = theme_cache(vec![("Content", two_field_slide())]);
+    let style = RenderStyle::new(
+        None,
+        role(
+            "content",
+            "Content",
+            BTreeMap::from([
+                ("body".to_string(), "Body".to_string()),
+                ("footer".to_string(), "Footer".to_string()),
+            ]),
+            None,
+        ),
+        None,
+        Some(7),
+    )
+    .expect("valid style");
+    let role_id =
+        crate::propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
+    let resolved = resolve_role(style.content(), role_id.clone(), &themes).expect("resolve role");
+    let assets = RenderAssets::new(resolved, Vec::new()).expect("render assets");
+    let bindings = TextBindings::new(
+        (
+            TextField::body(),
+            vec![StyledSegment::unstyled("Main words")],
+        ),
+        [(
+            TextField::new("footer").expect("footer field"),
+            vec![StyledSegment::unstyled("Footer words")],
+        )],
+    )
+    .expect("multi-field bindings");
+    let spec = PresentationSpec::new(
+        "Multi field",
+        GroupSpec::anonymous(CueSpec::text(role_id, bindings), Vec::new()),
+        Vec::new(),
+    )
+    .expect("presentation spec");
+    let mut rendered = render_presentation(&spec, &assets).expect("render presentation");
+
+    super::text_fit::retain_final_text_fit(
+        &spec,
+        &assets,
+        &mut rendered,
+        &style,
+        None,
+        7,
+        &mut DiagnosticRenderTextFit,
+    )
+    .expect("prove every field");
+
+    assert_eq!(rendered.text_fit_summary().len(), 1);
+    assert_eq!(rendered.text_fit_summary()[0].destination_count(), 2);
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the regression assembles one complete two-field source and audience fixture"
+)]
+fn final_fit_proves_each_multi_field_audience_destination_independently() {
+    use crate::propresenter::presentation_spec::{
+        CueSpec, GroupSpec, PresentationSpec, TextBindings, TextField,
+    };
+    use crate::propresenter::render::{render_presentation, RenderAssets};
+    use crate::propresenter::rtf::StyledSegment;
+
+    let root = tempfile::tempdir().expect("temporary render assets");
+    let locations = render_asset_locations(root.path());
+    let source_slide = two_field_slide();
+    let source_document = rv_data::template::Document {
+        slides: vec![rv_data::template::Slide {
+            base_slide: source_slide.base_slide,
+            name: "Content".to_string(),
+            actions: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let source_path = locations.themes().join("Source Theme/Theme");
+    std::fs::create_dir_all(source_path.parent().expect("source parent"))
+        .expect("create source theme");
+    std::fs::write(source_path, source_document.encode_to_vec()).expect("write source theme");
+
+    let mut audience_slide = two_field_slide();
+    audience_slide
+        .base_slide
+        .as_mut()
+        .expect("audience base")
+        .uuid = Some(rv_data::Uuid {
+        string: AUDIENCE_SLIDE_UUID.to_string(),
+    });
+    let audience_document = rv_data::template::Document {
+        slides: vec![rv_data::template::Slide {
+            base_slide: audience_slide.base_slide,
+            name: "Stream Content".to_string(),
+            actions: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let audience_path = locations.themes().join("Audience Theme/Theme");
+    std::fs::create_dir_all(audience_path.parent().expect("audience parent"))
+        .expect("create audience theme");
+    std::fs::write(&audience_path, audience_document.encode_to_vec())
+        .expect("write audience theme");
+    write_macros(&locations, &["Song"]);
+    write_workspace(&locations, &audience_path);
+
+    let slots = BTreeMap::from([
+        ("body".to_string(), "Body".to_string()),
+        ("footer".to_string(), "Footer".to_string()),
+    ]);
+    let mut raw = RawProjectConfig::default();
+    raw.defaults.theme = Some("Source Theme".to_string());
+    raw.cue_roles.insert(
+        "content".to_string(),
+        CueRoleConfig {
+            slide: "Content".to_string(),
+            text_slots: slots.clone(),
+            enter_macro: Some("Song".to_string()),
+            leader_enter_macro: None,
+            speaker_colors: None,
+        },
+    );
+    let snapshot = RenderAssetSnapshot::load(
+        ProjectConfig::try_from(raw).expect("valid config"),
+        locations,
+    )
+    .expect("load render assets");
+    let style = RenderStyle::new(
+        None,
+        role(
+            "content",
+            "Content",
+            slots,
+            Some(CueMacro::new("Song".to_string(), None).expect("macro")),
+        ),
+        None,
+        Some(7),
+    )
+    .expect("valid style");
+    let role_id =
+        crate::propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
+    let resolved = resolve_role(style.content(), role_id.clone(), snapshot.themes())
+        .expect("resolve source role");
+    let assets = RenderAssets::new(resolved, Vec::new()).expect("render assets");
+    let bindings = TextBindings::new(
+        (
+            TextField::body(),
+            vec![StyledSegment::unstyled("Main words")],
+        ),
+        [(
+            TextField::new("footer").expect("footer field"),
+            vec![StyledSegment::unstyled("Footer words")],
+        )],
+    )
+    .expect("multi-field bindings");
+    let spec = PresentationSpec::new(
+        "Multi field destinations",
+        GroupSpec::anonymous(CueSpec::text(role_id, bindings), Vec::new()),
+        Vec::new(),
+    )
+    .expect("presentation spec");
+    let mut rendered = render_presentation(&spec, &assets).expect("render presentation");
+
+    super::text_fit::retain_final_text_fit(
+        &spec,
+        &assets,
+        &mut rendered,
+        &style,
+        Some(&snapshot),
+        7,
+        &mut DiagnosticRenderTextFit,
+    )
+    .expect("prove all field destinations");
+
+    assert_eq!(rendered.text_fit_summary()[0].destination_count(), 4);
 }
 
 #[test]
@@ -956,6 +1174,7 @@ fn each_explicit_question_answer_pair_is_partitioned_from_its_own_answer() {
         &["Scripture/Prayer", "Scripture/Prayer (Highlighted)"],
     );
     assert_eq!(rendered.presentation().cues.len(), 5);
+    assert_alternating_liturgy_macro_contract(&rendered, &style);
     for (index, expected) in [
         "Scripture/Prayer",
         "Scripture/Prayer (Highlighted)",

@@ -11,6 +11,7 @@ use super::package_validation::media_archive_path;
 use crate::propresenter::arrangement::has_selectable_arrangement;
 use crate::propresenter::deserialize::{decode_presentation_bytes, ProPresenterError};
 use crate::propresenter::generated::rv_data;
+use crate::propresenter::package::PackageError;
 
 /// A field in the native presentation-item contract owned by a [`PlaylistEntry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,13 +73,13 @@ pub enum PlaylistError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Failed to encode the protobuf playlist data.
-    #[error("Encoding error: {0}")]
-    Encode(String),
-
     /// A zip archive error occurred.
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
+
+    /// The independently decoded package did not match the reviewed write plan.
+    #[error("Playlist package read-back failed: {0}")]
+    PackageReadback(#[from] PackageError),
 
     /// A media asset path could not be represented inside the package.
     #[error("Invalid media asset path: {0:?}")]
@@ -95,6 +96,15 @@ pub enum PlaylistError {
     /// The encoded playlist document and supplied package entries disagree.
     #[error("Playlist document does not match package entries: {0}")]
     PackageMismatch(String),
+
+    /// One independently decoded package field disagreed with the reviewed plan.
+    #[error("Playlist package read-back {field} mismatch: {details}")]
+    PackageReadbackMismatch {
+        /// Stable portion of the package contract that disagreed.
+        field: PackageReadbackField,
+        /// Exact diagnostic suitable for an operator receipt or test failure.
+        details: String,
+    },
 
     /// One presentation item field disagreed with its checked package entry.
     #[error(
@@ -179,6 +189,33 @@ pub enum PlaylistError {
         /// Conflicting presentation source path claiming the basename.
         conflicting_presentation_path: String,
     },
+}
+
+/// Independently checked portion of a written playlist package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageReadbackField {
+    /// Exact protobuf bytes stored in the `data` member.
+    Document,
+    /// Semantic presentation-item sequence, including arrangements and keys.
+    Items,
+    /// Global physical ZIP member order.
+    ArchiveOrder,
+    /// Exact bytes of a presentation or media member.
+    MemberBytes,
+    /// ZIP archive comment.
+    ArchiveComment,
+}
+
+impl fmt::Display for PackageReadbackField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Document => "document",
+            Self::Items => "items",
+            Self::ArchiveOrder => "archive order",
+            Self::MemberBytes => "member bytes",
+            Self::ArchiveComment => "archive comment",
+        })
+    }
 }
 
 /// Errors raised while capturing immutable native playlist metadata.

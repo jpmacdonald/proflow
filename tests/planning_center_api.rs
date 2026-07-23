@@ -12,7 +12,7 @@
 )]
 
 use proflow::config::Config;
-use proflow::planning_center::PlanningCenterClient;
+use proflow::planning_center::{PlanLookaheadDays, PlanningCenterClient};
 use std::time::Instant;
 
 fn setup_client() -> PlanningCenterClient {
@@ -27,7 +27,9 @@ fn setup_client() -> PlanningCenterClient {
 async fn test_fetch_services_and_plans() {
     let client = setup_client();
     println!("Testing get_upcoming_services...");
-    let result = client.get_upcoming_services(30).await; // Fetch plans 30 days ahead
+    let result = client
+        .get_upcoming_services(PlanLookaheadDays::DEFAULT)
+        .await; // Fetch plans 30 days ahead
 
     match result {
         Ok((services, plans)) => {
@@ -58,7 +60,9 @@ async fn test_fetch_services_and_plans() {
 async fn test_fetch_items_for_plan() {
     let client = setup_client();
     println!("Fetching plans to get a valid ID for item testing...");
-    let plans_result = client.get_upcoming_services(60).await; // Look further ahead for plans
+    let plans_result = client
+        .get_upcoming_services(PlanLookaheadDays::new(60).expect("valid lookahead"))
+        .await; // Look further ahead for plans
 
     let first_plan_id = match plans_result {
         Ok((_, plans)) if !plans.is_empty() => {
@@ -101,7 +105,9 @@ async fn test_performance() {
     // Measure execution time
     let start = Instant::now();
 
-    let result = client.get_upcoming_services(30).await;
+    let result = client
+        .get_upcoming_services(PlanLookaheadDays::DEFAULT)
+        .await;
 
     let duration = start.elapsed();
 

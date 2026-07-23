@@ -35,6 +35,49 @@ fn existing_preparation_uses_approved_bytes_and_checks_size() {
 }
 
 #[test]
+fn opaque_existing_bytes_are_reused_but_mutation_requires_exact_wire_parity() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let source = root.path().join("future-native.pro");
+    let mut presentation = presentation_with_size("Future Native", 1920.0, 1080.0);
+    presentation.arrangements = vec![rv_data::presentation::Arrangement {
+        uuid: Some(rv_data::Uuid {
+            string: Uuid::new_v4().to_string(),
+        }),
+        name: "Default".to_string(),
+        group_identifiers: vec![presentation.cue_groups[0]
+            .group
+            .as_ref()
+            .and_then(|group| group.uuid.clone())
+            .expect("fixture group identity")],
+    }];
+    let mut bytes = presentation.encode_to_vec();
+    bytes.extend_from_slice(&[0xf8, 0x7f, 0x01]);
+
+    let unchanged = ServiceBuildExecutor::prepare_existing_presentation(
+        "pco:item:main",
+        &source,
+        None,
+        &bytes,
+        crate::propresenter::PresentationSize::FULL_HD,
+    )
+    .expect("unchanged opaque presentation remains reusable");
+    assert_eq!(unchanged.embedded_data, bytes);
+
+    assert!(matches!(
+        ServiceBuildExecutor::prepare_existing_presentation(
+            "pco:item:main",
+            &source,
+            Some("Default"),
+            &bytes,
+            crate::propresenter::PresentationSize::FULL_HD,
+        ),
+        Err(BuildServiceError::NativeEdit(
+            crate::propresenter::native_document::NativeEditError::LossyDecode { .. }
+        ))
+    ));
+}
+
+#[test]
 fn existing_without_arrangements_clears_stale_native_selection() {
     let root = tempfile::tempdir().expect("temporary root");
     let source = root.path().join("existing.pro");

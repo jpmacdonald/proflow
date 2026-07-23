@@ -6,9 +6,8 @@
 mod cue;
 mod model;
 
-use std::collections::BTreeMap;
-
 use crate::propresenter::generated::rv_data;
+use crate::propresenter::presentation_graph::{ReferenceResolution, ResolvedPresentationGraph};
 use cue::{color_signature, summarize_bible_reference, summarize_cue};
 
 pub use model::{
@@ -26,50 +25,8 @@ pub use model::{
 pub fn summarize_presentation_structure(
     presentation: &rv_data::Presentation,
 ) -> PresentationStructureSummary {
-    let cue_indexes_by_uuid = cue_indexes_by_uuid(presentation);
-    let cue_group_indexes_by_uuid = cue_group_indexes_by_uuid(presentation);
-    let arrangement_indexes_by_uuid = arrangement_indexes_by_uuid(presentation);
-    let mut reference_diagnostics = Vec::new();
-    for (uuid, indexes) in &cue_indexes_by_uuid {
-        if indexes.len() > 1 {
-            reference_diagnostics.push(PresentationReferenceDiagnostic::DuplicateCueUuid {
-                uuid: (*uuid).to_string(),
-                cue_indexes: indexes.clone(),
-            });
-        }
-    }
-    for (uuid, indexes) in &cue_group_indexes_by_uuid {
-        if indexes.len() > 1 {
-            reference_diagnostics.push(PresentationReferenceDiagnostic::DuplicateCueGroupUuid {
-                uuid: (*uuid).to_string(),
-                cue_group_indexes: indexes.clone(),
-            });
-        }
-    }
-    for (uuid, indexes) in &arrangement_indexes_by_uuid {
-        if indexes.len() > 1 {
-            reference_diagnostics.push(PresentationReferenceDiagnostic::DuplicateArrangementUuid {
-                uuid: (*uuid).to_string(),
-                arrangement_indexes: indexes.clone(),
-            });
-        }
-    }
-    if let Some(selected) = presentation.selected_arrangement.as_ref() {
-        match resolve_reference(&arrangement_indexes_by_uuid, &selected.string) {
-            ReferenceResolution::Missing => reference_diagnostics.push(
-                PresentationReferenceDiagnostic::DanglingSelectedArrangement {
-                    uuid: selected.string.clone(),
-                },
-            ),
-            ReferenceResolution::Ambiguous(indexes) => reference_diagnostics.push(
-                PresentationReferenceDiagnostic::AmbiguousSelectedArrangement {
-                    uuid: selected.string.clone(),
-                    arrangement_indexes: indexes.to_vec(),
-                },
-            ),
-            ReferenceResolution::Unique(_) => {}
-        }
-    }
+    let graph = ResolvedPresentationGraph::new(presentation);
+    let reference_diagnostics = graph.reference_diagnostics();
 
     let mut cue_group_names_by_cue_index = vec![Vec::new(); presentation.cues.len()];
     let cue_groups = presentation
@@ -88,27 +45,13 @@ pub fn summarize_presentation_structure(
                 })
                 .unwrap_or_default();
             let mut cue_indexes = Vec::new();
-            for (reference_index, cue_id) in cue_group.cue_identifiers.iter().enumerate() {
-                match resolve_reference(&cue_indexes_by_uuid, &cue_id.string) {
+            for cue_id in &cue_group.cue_identifiers {
+                match graph.cue(&cue_id.string) {
                     ReferenceResolution::Unique(cue_index) => {
                         cue_indexes.push(cue_index);
                         cue_group_names_by_cue_index[cue_index].push(name.clone());
                     }
-                    ReferenceResolution::Missing => reference_diagnostics.push(
-                        PresentationReferenceDiagnostic::DanglingCueReference {
-                            cue_group_index: index,
-                            reference_index,
-                            uuid: cue_id.string.clone(),
-                        },
-                    ),
-                    ReferenceResolution::Ambiguous(indexes) => reference_diagnostics.push(
-                        PresentationReferenceDiagnostic::AmbiguousCueReference {
-                            cue_group_index: index,
-                            reference_index,
-                            uuid: cue_id.string.clone(),
-                            cue_indexes: indexes.to_vec(),
-                        },
-                    ),
+                    ReferenceResolution::Missing | ReferenceResolution::Ambiguous(_) => {}
                 }
             }
             CueGroupStructureSummary {
@@ -157,8 +100,8 @@ pub fn summarize_presentation_structure(
         .map(|(index, arrangement)| {
             let mut group_names = Vec::new();
             let mut cue_indexes = Vec::new();
-            for (reference_index, group_id) in arrangement.group_identifiers.iter().enumerate() {
-                match resolve_reference(&cue_group_indexes_by_uuid, &group_id.string) {
+            for group_id in &arrangement.group_identifiers {
+                match graph.group(&group_id.string) {
                     ReferenceResolution::Unique(group_index) => {
                         let group = &presentation.cue_groups[group_index];
                         group_names.push(
@@ -169,28 +112,14 @@ pub fn summarize_presentation_structure(
                                 .unwrap_or_default(),
                         );
                         cue_indexes.extend(group.cue_identifiers.iter().filter_map(|cue_id| {
-                            match resolve_reference(&cue_indexes_by_uuid, &cue_id.string) {
+                            match graph.cue(&cue_id.string) {
                                 ReferenceResolution::Unique(index) => Some(index),
                                 ReferenceResolution::Missing
                                 | ReferenceResolution::Ambiguous(_) => None,
                             }
                         }));
                     }
-                    ReferenceResolution::Missing => reference_diagnostics.push(
-                        PresentationReferenceDiagnostic::DanglingGroupReference {
-                            arrangement_index: index,
-                            reference_index,
-                            uuid: group_id.string.clone(),
-                        },
-                    ),
-                    ReferenceResolution::Ambiguous(indexes) => reference_diagnostics.push(
-                        PresentationReferenceDiagnostic::AmbiguousGroupReference {
-                            arrangement_index: index,
-                            reference_index,
-                            uuid: group_id.string.clone(),
-                            cue_group_indexes: indexes.to_vec(),
-                        },
-                    ),
+                    ReferenceResolution::Missing | ReferenceResolution::Ambiguous(_) => {}
                 }
             }
             ArrangementStructureSummary {
@@ -216,65 +145,6 @@ pub fn summarize_presentation_structure(
         operator_cue_indexes: crate::propresenter::arrangement::operator_cue_indices(presentation),
         reference_diagnostics,
     }
-}
-
-type ReferenceIndex<'a> = BTreeMap<&'a str, Vec<usize>>;
-
-enum ReferenceResolution<'a> {
-    Missing,
-    Unique(usize),
-    Ambiguous(&'a [usize]),
-}
-
-fn resolve_reference<'a>(index: &'a ReferenceIndex<'_>, uuid: &str) -> ReferenceResolution<'a> {
-    match index.get(uuid).map(Vec::as_slice) {
-        None | Some([]) => ReferenceResolution::Missing,
-        Some([index]) => ReferenceResolution::Unique(*index),
-        Some(indexes) => ReferenceResolution::Ambiguous(indexes),
-    }
-}
-
-fn cue_indexes_by_uuid(presentation: &rv_data::Presentation) -> ReferenceIndex<'_> {
-    let mut indexes = BTreeMap::new();
-    for (index, cue) in presentation.cues.iter().enumerate() {
-        if let Some(uuid) = &cue.uuid {
-            indexes
-                .entry(uuid.string.as_str())
-                .or_insert_with(Vec::new)
-                .push(index);
-        }
-    }
-    indexes
-}
-
-fn cue_group_indexes_by_uuid(presentation: &rv_data::Presentation) -> ReferenceIndex<'_> {
-    let mut indexes = BTreeMap::new();
-    for (index, cue_group) in presentation.cue_groups.iter().enumerate() {
-        if let Some(uuid) = cue_group
-            .group
-            .as_ref()
-            .and_then(|group| group.uuid.as_ref())
-        {
-            indexes
-                .entry(uuid.string.as_str())
-                .or_insert_with(Vec::new)
-                .push(index);
-        }
-    }
-    indexes
-}
-
-fn arrangement_indexes_by_uuid(presentation: &rv_data::Presentation) -> ReferenceIndex<'_> {
-    let mut index = BTreeMap::new();
-    for (arrangement_index, arrangement) in presentation.arrangements.iter().enumerate() {
-        if let Some(uuid) = arrangement.uuid.as_ref() {
-            index
-                .entry(uuid.string.as_str())
-                .or_insert_with(Vec::new)
-                .push(arrangement_index);
-        }
-    }
-    index
 }
 
 #[cfg(test)]

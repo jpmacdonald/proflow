@@ -147,6 +147,7 @@ fn measured_render_rejects_changed_text_geometry() {
         .summarize(
             crate::propresenter::text_fit::TextFitDestinationIdentity::SourceTheme {
                 cue_role: "content".to_string(),
+                field: "body".to_string(),
                 theme_slide_uuid: None,
             },
         );

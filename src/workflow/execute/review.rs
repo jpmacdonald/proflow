@@ -163,6 +163,15 @@ impl BuildReview {
         }
     }
 
+    /// Exact materialized build report when every presentation and package has
+    /// already crossed the prepared boundary.
+    pub fn materialized_result(&self) -> Option<&crate::workflow::report::BuildServiceResult> {
+        match self {
+            Self::Prepared(prepared) => Some(prepared.prepared.result()),
+            Self::NeedsReview(_) => None,
+        }
+    }
+
     /// Stable Planning Center plan identity bound to this request.
     pub fn plan_id(&self) -> &str {
         &self.request().plan_id
@@ -337,10 +346,7 @@ impl ServiceBuildExecutor<'_> {
         let overrides = std::mem::take(&mut request.overrides);
         let request = BoundBuildRequest::try_from(request)?;
         let mut plans = resolve_requested_plans(plans, &skip_output_keys, &overrides)?;
-        {
-            let mut bible = self.bible_service.lock().await;
-            reconcile_description_scripture_excerpts(&mut plans, &mut bible)?;
-        }
+        reconcile_description_scripture_excerpts(&mut plans, self.bible_corpora)?;
         if plans.iter().any(ResolvedItemPlan::needs_review) {
             return Ok(BuildReview::NeedsReview(Box::new(
                 NeedsReviewBuildRequest {

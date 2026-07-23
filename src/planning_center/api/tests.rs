@@ -276,7 +276,7 @@ async fn get_upcoming_services_fails_if_any_service_plan_fetch_fails() {
 
     let client = test_client(base_url);
     let error = client
-        .get_upcoming_services(30)
+        .get_upcoming_services(crate::planning_center::PlanLookaheadDays::DEFAULT)
         .await
         .expect_err("partial service plan results should fail");
 
