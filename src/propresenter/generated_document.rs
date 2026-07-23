@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use prost::Message;
 
-use super::arrangement::{checked_operator_cue_indices, OperatorTraversalError};
+use super::arrangement::{checked_operator_cue_indices_in, OperatorTraversalError};
 use super::generated::rv_data::{self, action};
-use super::inspection::{summarize_presentation_structure, PresentationReferenceDiagnostic};
+use super::inspection::PresentationReferenceDiagnostic;
+use super::presentation_graph::{ActionReferenceResolution, ResolvedPresentationGraph};
 use super::render::slide_instance::validate_slide_identity_graph;
 use super::render::SlideInstantiationError;
 
@@ -25,16 +26,17 @@ impl<'a> GeneratedPresentation<'a> {
     pub fn new(
         presentation: &'a rv_data::Presentation,
     ) -> Result<Self, GeneratedPresentationError> {
+        let graph = ResolvedPresentationGraph::new(presentation);
         validate_document_identity(presentation)?;
-        validate_cues(presentation)?;
+        validate_cues(presentation, &graph)?;
         validate_groups(presentation)?;
         validate_arrangements(presentation)?;
 
-        let diagnostics = summarize_presentation_structure(presentation).reference_diagnostics;
+        let diagnostics = graph.reference_diagnostics();
         if !diagnostics.is_empty() {
             return Err(GeneratedPresentationError::ReferenceGraph(diagnostics));
         }
-        checked_operator_cue_indices(presentation)?;
+        checked_operator_cue_indices_in(&graph)?;
         Ok(Self { presentation })
     }
 
@@ -168,12 +170,14 @@ fn validate_document_identity(
     }
 }
 
-fn validate_cues(presentation: &rv_data::Presentation) -> Result<(), GeneratedPresentationError> {
+fn validate_cues(
+    presentation: &rv_data::Presentation,
+    graph: &ResolvedPresentationGraph<'_>,
+) -> Result<(), GeneratedPresentationError> {
     if presentation.cues.is_empty() {
         return Err(GeneratedPresentationError::Empty);
     }
     let mut cue_ids = HashMap::new();
-    let mut action_ids = HashMap::new();
     for (cue_index, cue) in presentation.cues.iter().enumerate() {
         let cue_uuid = native_uuid(cue.uuid.as_ref()).ok_or_else(|| {
             GeneratedPresentationError::InvalidCueIdentity {
@@ -196,16 +200,43 @@ fn validate_cues(presentation: &rv_data::Presentation) -> Result<(), GeneratedPr
                     value: cue_action.uuid.as_ref().map(|uuid| uuid.string.clone()),
                 }
             })?;
-            if let Some((first_cue_index, first_action_index)) =
-                action_ids.insert(action_uuid, (cue_index, action_index))
-            {
-                return Err(GeneratedPresentationError::DuplicateActionIdentity {
-                    uuid: action_uuid.to_string(),
-                    first_cue_index,
-                    first_action_index,
-                    cue_index,
-                    action_index,
-                });
+            match graph.action(
+                cue_action
+                    .uuid
+                    .as_ref()
+                    .map_or("", |uuid| uuid.string.as_str()),
+            ) {
+                ActionReferenceResolution::Missing => {
+                    return Err(GeneratedPresentationError::InvalidActionIdentity {
+                        cue_index,
+                        action_index,
+                        value: cue_action.uuid.as_ref().map(|uuid| uuid.string.clone()),
+                    });
+                }
+                ActionReferenceResolution::Unique(location)
+                    if location.cue_index != cue_index || location.action_index != action_index =>
+                {
+                    return Err(GeneratedPresentationError::DuplicateActionIdentity {
+                        uuid: action_uuid.to_string(),
+                        first_cue_index: location.cue_index,
+                        first_action_index: location.action_index,
+                        cue_index,
+                        action_index,
+                    });
+                }
+                ActionReferenceResolution::Ambiguous { first }
+                    if first.cue_index != cue_index || first.action_index != action_index =>
+                {
+                    return Err(GeneratedPresentationError::DuplicateActionIdentity {
+                        uuid: action_uuid.to_string(),
+                        first_cue_index: first.cue_index,
+                        first_action_index: first.action_index,
+                        cue_index,
+                        action_index,
+                    });
+                }
+                ActionReferenceResolution::Unique(_)
+                | ActionReferenceResolution::Ambiguous { .. } => {}
             }
             if let Some(action::ActionTypeData::Slide(slide_action)) = &cue_action.action_type_data
             {

@@ -48,6 +48,7 @@ pub(crate) use runtime::{
 #[derive(Debug, Clone)]
 pub struct ProjectConfig {
     raw: RawProjectConfig,
+    plan_lookahead_days: crate::planning_center::PlanLookaheadDays,
     presentation_policies: BTreeMap<String, std::sync::Arc<PresentationPolicy>>,
     item_rules: Vec<CompiledItemRule>,
     required_playlist_items: Vec<CompiledRequiredPlaylistItem>,
@@ -70,6 +71,12 @@ impl ProjectConfig {
     #[must_use]
     pub const fn defaults(&self) -> &ProjectDefaults {
         &self.raw.defaults
+    }
+
+    /// Checked Planning Center lookup window compiled from project defaults.
+    #[must_use]
+    pub const fn plan_lookahead_days(&self) -> crate::planning_center::PlanLookaheadDays {
+        self.plan_lookahead_days
     }
 
     /// Checked background assets available to operator overrides and setup.
@@ -180,7 +187,20 @@ impl TryFrom<RawProjectConfig> for ProjectConfig {
     type Error = ProjectConfigValidationError;
 
     fn try_from(raw: RawProjectConfig) -> Result<Self, Self::Error> {
-        let issues = validation::validate_project_config_structure(&raw);
+        let (plan_lookahead_days, mut issues) = match raw.defaults.days_ahead.map_or_else(
+            || Ok(crate::planning_center::PlanLookaheadDays::DEFAULT),
+            crate::planning_center::PlanLookaheadDays::new,
+        ) {
+            Ok(value) => (value, Vec::new()),
+            Err(error) => (
+                crate::planning_center::PlanLookaheadDays::DEFAULT,
+                vec![validation::ConfigValidationIssue {
+                    path: "defaults.days_ahead".to_string(),
+                    message: error.to_string(),
+                }],
+            ),
+        };
+        issues.extend(validation::validate_project_config_structure(&raw));
         if !issues.is_empty() {
             return Err(ProjectConfigValidationError { issues });
         }
@@ -218,6 +238,7 @@ impl TryFrom<RawProjectConfig> for ProjectConfig {
         }
         Ok(Self {
             raw,
+            plan_lookahead_days,
             presentation_policies,
             item_rules,
             required_playlist_items,

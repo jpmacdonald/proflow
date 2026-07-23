@@ -78,7 +78,13 @@ pub(super) fn write_library_presentation(path: &Path) {
 
 fn presentation_cue_with_size(width: f64, height: f64) -> rv_data::Cue {
     rv_data::Cue {
+        uuid: Some(rv_data::Uuid {
+            string: "550e8400-e29b-41d4-a716-446655440010".to_string(),
+        }),
         actions: vec![rv_data::Action {
+            uuid: Some(rv_data::Uuid {
+                string: "550e8400-e29b-41d4-a716-446655440011".to_string(),
+            }),
             action_type_data: Some(rv_data::action::ActionTypeData::Slide(
                 rv_data::action::SlideType {
                     slide: Some(rv_data::action::slide_type::Slide::Presentation(

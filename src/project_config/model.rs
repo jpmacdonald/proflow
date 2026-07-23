@@ -12,11 +12,11 @@ use std::str::FromStr;
 /// cross-references while a candidate is being authored. Runtime planning must
 /// use [`super::ProjectConfig`], which can only be constructed by validating
 /// this raw value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RawProjectConfig {
     /// Schema version — must be 4.
-    #[serde(default = "default_version")]
+    #[schemars(range(min = 4, max = 4))]
     pub version: u16,
     /// Optional descriptive metadata.
     #[serde(default)]
@@ -69,7 +69,7 @@ impl Default for RawProjectConfig {
 }
 
 /// Descriptive project metadata.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectMetadata {
     /// Human-readable project name.
@@ -81,7 +81,7 @@ pub struct ProjectMetadata {
 }
 
 /// Project-wide defaults for runtime behavior.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectDefaults {
     /// Exact registered `ProPresenter` library used for sources and canonical writes.
@@ -92,6 +92,7 @@ pub struct ProjectDefaults {
     /// Default background asset identifier for rendered presentations.
     pub background: Option<BackgroundId>,
     /// Default lookahead window for builds.
+    #[schemars(range(min = 1, max = 365))]
     pub days_ahead: Option<i64>,
     /// Bible translation used only when a scripture item does not name one.
     pub bible_version: Option<crate::bible::BibleVersion>,
@@ -121,7 +122,8 @@ impl Default for ProjectDefaults {
 /// Library names are filesystem identities below `Libraries`, so separators,
 /// traversal components, padding, and control characters are rejected at the
 /// config boundary.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, schemars::JsonSchema)]
+#[schemars(with = "String")]
 pub struct LibraryName(String);
 
 impl LibraryName {
@@ -182,7 +184,8 @@ impl<'de> Deserialize<'de> for LibraryName {
 }
 
 /// Validated identifier for a project-owned background asset.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, schemars::JsonSchema)]
+#[schemars(with = "String")]
 pub struct BackgroundId(String);
 
 impl BackgroundId {
@@ -254,7 +257,8 @@ impl<'de> Deserialize<'de> for BackgroundId {
 }
 
 /// Validated project-relative path to a supported background image.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, schemars::JsonSchema)]
+#[schemars(with = "String")]
 pub struct BackgroundAssetPath(String);
 
 impl BackgroundAssetPath {
@@ -341,7 +345,7 @@ impl<'de> Deserialize<'de> for BackgroundAssetPath {
 }
 
 /// Named binding between a semantic cue role and `ProPresenter` assets.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CueRoleConfig {
     /// Theme slide name used for cues in this role.
@@ -362,7 +366,7 @@ pub struct CueRoleConfig {
 }
 
 /// Editor colors for semantic liturgical speakers.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpeakerColorConfig {
     /// Leader/liturgist text color in the projector-oriented editor theme.
@@ -372,7 +376,8 @@ pub struct SpeakerColorConfig {
 }
 
 /// Checked six-digit RGB color serialized as `#RRGGBB`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
+#[schemars(with = "String")]
 pub struct RgbColor((u8, u8, u8));
 
 impl RgbColor {
@@ -425,7 +430,7 @@ impl<'de> Deserialize<'de> for RgbColor {
 }
 
 /// Binding between presentation regions and named cue roles.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DisplayBindingConfig {
     /// Every generated cue uses one role.
@@ -443,7 +448,7 @@ pub enum DisplayBindingConfig {
 }
 
 /// Named set of service types.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceGroupConfig {
     /// Service type names belonging to the group.
@@ -455,7 +460,7 @@ pub struct ServiceGroupConfig {
 ///
 /// The runtime inserts it only when the exact resolved library file is absent,
 /// so a Planning Center item and this invariant cannot create duplicates.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequiredPlaylistItemConfig {
     /// Stable key used in preview/build decisions.
@@ -471,7 +476,7 @@ pub struct RequiredPlaylistItemConfig {
 }
 
 /// Supported semantic positions for a required playlist item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequiredPlaylistPlacement {
     /// Before all Planning Center-derived entries.
@@ -481,7 +486,7 @@ pub enum RequiredPlaylistPlacement {
 }
 
 /// Presentation type behavior.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PresentationTypeConfig {
     /// Conceptual kind of output.
@@ -512,7 +517,7 @@ pub struct PresentationTypeConfig {
 }
 
 /// Exact macro names for the two valid native presentation entry shapes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RestyleMacroConfig {
     /// Ordered operator regions and their exact entry macros.
@@ -520,7 +525,7 @@ pub struct RestyleMacroConfig {
 }
 
 /// One configured native region transition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RestyleMacroRegionConfig {
     /// Deterministic native selector for the region entry.
@@ -530,7 +535,7 @@ pub struct RestyleMacroRegionConfig {
 }
 
 /// Native evidence used to select a region without guessing from its text.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RestyleMacroSelectorConfig {
     /// Zero-based cue occurrence in selected operator order.
@@ -548,7 +553,8 @@ pub enum RestyleMacroSelectorConfig {
 }
 
 /// Matching rule with explicit precedence for items.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, schemars::JsonSchema)]
+#[schemars(with = "ItemRuleConfigWire")]
 pub struct ItemRuleConfig {
     /// Stable rule identifier.
     pub id: String,
@@ -566,7 +572,9 @@ pub struct ItemRuleConfig {
 ///
 /// The highest matching tier wins. Multiple matches in that tier remain
 /// ambiguous and require review, so array position never decides behavior.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleTier {
     /// Last-resort rule, such as the generic rule for every song.
@@ -638,7 +646,7 @@ impl ExpansionRule {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ItemRuleConfigWire {
     id: String,
@@ -750,7 +758,7 @@ impl Serialize for ItemRuleConfig {
 }
 
 /// Match criteria for a rule.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MatchSpec {
     /// Lowercased title prefixes.
@@ -772,7 +780,7 @@ pub struct MatchSpec {
 }
 
 /// Planning Center category accepted by an item-rule matcher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchCategory {
     /// Text or liturgical content.
@@ -799,7 +807,7 @@ impl MatchSpec {
 }
 
 /// Bounded contextual decision made from PCO fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DecisionConfig {
     /// Choose one existing library file from configured choices.
@@ -818,7 +826,7 @@ pub enum DecisionConfig {
 }
 
 /// Planning Center text field included in a contextual decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionContextField {
     /// The Planning Center item title.
@@ -840,7 +848,7 @@ impl DecisionContextField {
 }
 
 /// One allowed contextual choice.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionChoiceConfig {
     /// Presentation type to use when this choice is selected.
@@ -855,7 +863,7 @@ pub struct DecisionChoiceConfig {
 }
 
 /// Text matchers for a contextual decision choice.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionChoiceMatch {
     /// Any of these tokens/phrases may select the choice.
@@ -870,7 +878,9 @@ pub struct DecisionChoiceMatch {
 }
 
 /// Ambiguous contextual decision behavior.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AmbiguousDecisionPolicy {
     /// Ask the user/LLM supervisor before building.
@@ -881,7 +891,7 @@ pub enum AmbiguousDecisionPolicy {
 }
 
 /// Explicit rule action.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuleAction {
     /// Skip the item entirely.
@@ -897,7 +907,7 @@ pub enum RuleAction {
 }
 
 /// Expansion step used by multi-output rules.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExpansionStep {
     /// Presentation type to use for this step.
@@ -909,7 +919,7 @@ pub struct ExpansionStep {
 }
 
 /// How a speaker value should be resolved.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeakerSource {
     /// Use the resolved speaker for the matched item.
@@ -917,7 +927,7 @@ pub enum SpeakerSource {
 }
 
 /// One explicit output target.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum TargetSpec {
     /// Resolve one exact existing library filename.
@@ -974,7 +984,7 @@ impl TargetSpec {
 }
 
 /// Known person metadata.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PersonConfig {
     /// Last name.
@@ -986,7 +996,7 @@ pub struct PersonConfig {
 }
 
 /// Structured override rule.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OverrideRuleConfig {
     /// When this override applies.
@@ -998,7 +1008,7 @@ pub struct OverrideRuleConfig {
 }
 
 /// Conditions under which an override applies.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OverrideWhen {
     /// Named service group.
@@ -1010,7 +1020,9 @@ pub struct OverrideWhen {
 }
 
 /// Where content data comes from.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentSourceKind {
     /// Reuse static content from an existing file.
@@ -1025,7 +1037,7 @@ pub enum ContentSourceKind {
 }
 
 /// Parser for description-backed presentation content.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DescriptionParserKind {
     /// Liturgical text, including responsive and marker-based descriptions;
@@ -1038,7 +1050,9 @@ pub enum DescriptionParserKind {
 }
 
 /// What the runtime should do with the resolved content.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputStrategy {
     /// Skip this item.
@@ -1057,7 +1071,9 @@ pub enum OutputStrategy {
 }
 
 /// Conceptual kind of item/presentation.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ItemKind {
     /// Song/lyrics item.

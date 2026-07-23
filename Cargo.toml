@@ -69,6 +69,11 @@ path = "src/bin/parity_smoke.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "release_audit"
+path = "src/bin/release_audit.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "summarize_pro"
 path = "src/bin/summarize_pro.rs"
 required-features = ["dev-tools"]

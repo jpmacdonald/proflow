@@ -39,7 +39,7 @@ pub enum SerializeError {
 /// ```ignore
 /// use std::path::Path;
 /// use proflow::propresenter::serialize::write_presentation_file_for_fidelity;
-/// use proflow::propresenter::generated::rv_data;
+/// use proflow::propresenter::unstable_native::rv_data;
 ///
 /// let presentation = rv_data::Presentation {
 ///     uuid: Some(rv_data::Uuid { string: "example-id".to_string() }),

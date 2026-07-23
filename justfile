@@ -132,6 +132,17 @@ parity-library library_dir:
     PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_native_presentations_round_trip_byte_exactly -- --ignored --exact --nocapture
     PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_playlist_document_round_trips_byte_exactly -- --ignored --exact --nocapture
 
+# External 1.0 gate after importing a generated playlist into the current
+# ProPresenter release and exporting its saved-back form. Pass both thumbnail
+# directories to enable the optional decoded-pixel visual oracle.
+release-audit generated saved_back approved_thumbnails="" actual_thumbnails="":
+    if [[ -n "{{ approved_thumbnails }}" || -n "{{ actual_thumbnails }}" ]]; then \
+      [[ -n "{{ approved_thumbnails }}" && -n "{{ actual_thumbnails }}" ]] || { echo "both thumbnail directories are required" >&2; exit 2; }; \
+      {{ cargo }} run --quiet --features dev-tools --bin release_audit -- "{{ generated }}" "{{ saved_back }}" "{{ approved_thumbnails }}" "{{ actual_thumbnails }}"; \
+    else \
+      {{ cargo }} run --quiet --features dev-tools --bin release_audit -- "{{ generated }}" "{{ saved_back }}"; \
+    fi
+
 # Fast local gate for active editing.
 local: fmt check clippy test
 

@@ -14,8 +14,8 @@ use crate::workflow::approval::SourceManifest;
 use crate::workflow::report::BuildServiceEntry;
 use crate::workflow::transaction::{PreparedFileTransaction, StagedArtifact};
 
-use super::playlist_output::PlaylistExportEvidence;
 use super::RenderAssetFingerprint;
+use crate::propresenter::playlist::PlaylistExportEvidence;
 
 const RECEIPT_SCHEMA: &str = "proflow.build-receipt.v3";
 const RECEIPT_SUFFIX: &str = ".proflow-build.json";

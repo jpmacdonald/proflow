@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use proflow::bible::BibleService;
+use proflow::bible::BibleCorpusSnapshot;
 use proflow::config::Config;
 use proflow::paths::{expand_user_path, BuildLocations, PROJECT_CONFIG_FILE};
 use proflow::planning_center::PlanningCenterClient;
@@ -97,9 +97,7 @@ async fn main() -> anyhow::Result<()> {
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let pco_client = PlanningCenterClient::new(&config)?;
-    let bible_service = Arc::new(Mutex::new(BibleService::new(
-        locations.project_data_root().join("bibles"),
-    )));
+    let bible_corpora = BibleCorpusSnapshot::capture(locations.project_data_root().join("bibles"))?;
     let file_index = Arc::new(Mutex::new(LibraryCatalog::build(
         locations.presentation_library(),
     )?));
@@ -109,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
 
     let executor = ServiceBuildExecutor::new(
         &pco_client,
-        &bible_service,
+        &bible_corpora,
         &file_index,
         &render_assets,
         &playlist_metadata,

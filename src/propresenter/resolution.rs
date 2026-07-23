@@ -5,7 +5,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::generated::rv_data;
 
 /// Positive slide-canvas dimensions expected by a `ProPresenter` project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, schemars::JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct PresentationSize {
     width: u32,

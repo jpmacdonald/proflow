@@ -227,13 +227,13 @@ impl PlanningCenterClient {
     /// request fails.
     pub async fn get_upcoming_services(
         &self,
-        days_ahead: i64,
+        days_ahead: crate::planning_center::PlanLookaheadDays,
     ) -> Result<(Vec<Service>, Vec<Plan>)> {
         // Fetch all service types
         let services = self.fetch_service_types().await?;
 
         let start_date = Utc::now();
-        let end_date = start_date + Duration::days(days_ahead);
+        let end_date = start_date + Duration::days(days_ahead.get());
         let mut all_plans = self
             .fetch_plans_for_services(&services, start_date, end_date)
             .await?;
@@ -460,7 +460,7 @@ impl PlanningCenterClient {
             std::slice::from_ref(&service),
             std::slice::from_ref(&plan),
             plan_id,
-            0,
+            crate::planning_center::PlanLookaheadDays::DEFAULT,
         )
         .map_err(|error| Error::pco(error.to_string()))?;
         let items = self.get_service_items(plan_id).await?;

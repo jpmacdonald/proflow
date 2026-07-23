@@ -6,8 +6,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use proflow::propresenter::deserialize::read_presentation_file;
-use proflow::propresenter::generated::rv_data::{self, action, url};
 use proflow::propresenter::rtf::rtf_to_text;
+use proflow::propresenter::unstable_native::rv_data::{self, action, url};
 use std::{collections::HashMap, env, path::Path};
 
 fn main() {

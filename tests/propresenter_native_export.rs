@@ -16,9 +16,9 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use proflow::propresenter::generated::rv_data::{self, playlist, playlist_item, url};
 use proflow::propresenter::media::{presentation_media_dependencies, MediaDependency};
 use proflow::propresenter::package::read_playlist_package;
+use proflow::propresenter::unstable_native::rv_data::{self, playlist, playlist_item, url};
 use prost::Message;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;

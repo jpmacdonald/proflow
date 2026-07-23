@@ -4,9 +4,10 @@ use serde::Serialize;
 use crate::propresenter::inspection::PresentationStructureSummary;
 use crate::propresenter::playlist::PlaylistExportMode;
 use crate::propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
+use crate::workflow::ExpectedPresentationContract;
 
 /// Summary of a single item processed by the service build workflow.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BuildServiceEntry {
     /// Stable source-item identity used by preview overrides.
     pub output_key: String,
@@ -22,6 +23,9 @@ pub struct BuildServiceEntry {
     /// Number of rendered cues, when a presentation was generated or edited.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slides: Option<usize>,
+    /// Semantic native-output promise derived from the reviewed plan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_presentation: Option<ExpectedPresentationContract>,
     /// Semantic inspection of the exact final presentation bytes carried by
     /// the playlist entry.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,7 +45,7 @@ pub struct BuildServiceEntry {
 }
 
 /// Effective arrangement override carried by one playlist item.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlaylistSelectionSummary {
     /// Selected native arrangement UUID.
     pub arrangement_uuid: String,
@@ -52,7 +56,7 @@ pub struct PlaylistSelectionSummary {
 }
 
 /// Result summary from a complete service build.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BuildServiceResult {
     /// Final playlist package path.
     pub playlist_path: String,

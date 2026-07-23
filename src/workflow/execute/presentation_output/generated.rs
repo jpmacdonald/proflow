@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use crate::propresenter::deserialize::decode_presentation_bytes;
 use crate::propresenter::generated::rv_data;
+use crate::propresenter::native_document::OpaquePresentation;
 use crate::propresenter::playlist::{canonical_presentation_name, PlaylistEntry};
 use crate::propresenter::render::{
     apply_application_info, preserve_edited_document_metadata, preserve_generated_target_metadata,
@@ -11,8 +11,10 @@ use crate::propresenter::render::{
 };
 use crate::propresenter::text_fit::{CueTextFitSummary, NativeTextFitOracle};
 use crate::workflow::description_parser::ParsedContent;
-use crate::workflow::plan::{RenderStyle, ResolvedItemPlan};
-use crate::workflow::presentation_render::{render_source_with_native_fit, PresentationSource};
+use crate::workflow::plan::{ExpectedMacroRegion, RenderStyle, ResolvedItemPlan};
+use crate::workflow::presentation_render::{
+    render_source_with_native_fit, resolved_macro_regions, PresentationSource,
+};
 
 use super::super::{BuildServiceError, ServiceBuildExecutor};
 use super::target::{
@@ -28,7 +30,15 @@ impl ServiceBuildExecutor<'_> {
         style: &RenderStyle,
         target: ReviewedRenderTarget<'_>,
         text_fit: &mut NativeTextFitOracle,
-    ) -> Result<(PlaylistEntry, usize, Vec<CueTextFitSummary>), BuildServiceError> {
+    ) -> Result<
+        (
+            PlaylistEntry,
+            usize,
+            Vec<CueTextFitSummary>,
+            Vec<ExpectedMacroRegion>,
+        ),
+        BuildServiceError,
+    > {
         if content.segments().is_empty() {
             return Err(BuildServiceError::EmptyParsedContent {
                 title: entry.pco_title.clone(),
@@ -41,11 +51,12 @@ impl ServiceBuildExecutor<'_> {
                     path: target.final_path.to_path_buf(),
                 })?;
         let existing =
-            decode_presentation_bytes(source_bytes, &target.final_path.display().to_string())?;
+            OpaquePresentation::decode(source_bytes, target.final_path.display().to_string())?
+                .try_into_editable()?;
         let mut rendered =
-            self.render_text_presentation(&existing.name, content, style, text_fit)?;
+            self.render_text_presentation(&existing.presentation().name, content, style, text_fit)?;
         update_rendered_document(&mut rendered, |presentation| {
-            preserve_edited_document_metadata(presentation, &existing);
+            preserve_edited_document_metadata(presentation, existing.presentation());
             Ok(())
         })?;
         self.apply_style(&mut rendered, style, target.background)?;
@@ -57,10 +68,11 @@ impl ServiceBuildExecutor<'_> {
             Ok(())
         })?;
         let text_fit_evidence = rendered.text_fit_summary().to_vec();
+        let macro_regions = resolved_macro_regions(&rendered, style)?;
         let presentation = rendered.into_presentation();
         let (playlist_entry, slides) =
             write_generated_playlist_presentation(entry, &presentation, target)?;
-        Ok((playlist_entry, slides, text_fit_evidence))
+        Ok((playlist_entry, slides, text_fit_evidence, macro_regions))
     }
 
     pub(in crate::workflow::execute) fn generate_description(
@@ -70,7 +82,15 @@ impl ServiceBuildExecutor<'_> {
         style: &RenderStyle,
         target: ReviewedRenderTarget<'_>,
         text_fit: &mut NativeTextFitOracle,
-    ) -> Result<(PlaylistEntry, usize, Vec<CueTextFitSummary>), BuildServiceError> {
+    ) -> Result<
+        (
+            PlaylistEntry,
+            usize,
+            Vec<CueTextFitSummary>,
+            Vec<ExpectedMacroRegion>,
+        ),
+        BuildServiceError,
+    > {
         if content.segments().is_empty() {
             return Err(BuildServiceError::EmptyParsedContent {
                 title: entry.pco_title.clone(),
@@ -90,10 +110,11 @@ impl ServiceBuildExecutor<'_> {
             )
         })?;
         let text_fit_evidence = rendered.text_fit_summary().to_vec();
+        let macro_regions = resolved_macro_regions(&rendered, style)?;
         let presentation = rendered.into_presentation();
         let (playlist_entry, slides) =
             write_generated_playlist_presentation(entry, &presentation, target)?;
-        Ok((playlist_entry, slides, text_fit_evidence))
+        Ok((playlist_entry, slides, text_fit_evidence, macro_regions))
     }
 
     pub(in crate::workflow::execute) fn generate_title(
@@ -103,7 +124,15 @@ impl ServiceBuildExecutor<'_> {
         style: &RenderStyle,
         target: ReviewedRenderTarget<'_>,
         text_fit: &mut NativeTextFitOracle,
-    ) -> Result<(PlaylistEntry, usize, Vec<CueTextFitSummary>), BuildServiceError> {
+    ) -> Result<
+        (
+            PlaylistEntry,
+            usize,
+            Vec<CueTextFitSummary>,
+            Vec<ExpectedMacroRegion>,
+        ),
+        BuildServiceError,
+    > {
         let presentation_name =
             canonical_presentation_name(&entry.playlist_name, entry.slide_type())?;
         let mut rendered = render_source_with_native_fit(
@@ -123,10 +152,11 @@ impl ServiceBuildExecutor<'_> {
             )
         })?;
         let text_fit_evidence = rendered.text_fit_summary().to_vec();
+        let macro_regions = resolved_macro_regions(&rendered, style)?;
         let presentation = rendered.into_presentation();
         let (playlist_entry, slides) =
             write_generated_playlist_presentation(entry, &presentation, target)?;
-        Ok((playlist_entry, slides, text_fit_evidence))
+        Ok((playlist_entry, slides, text_fit_evidence, macro_regions))
     }
 
     fn render_text_presentation(
@@ -154,8 +184,9 @@ impl ServiceBuildExecutor<'_> {
     ) -> Result<(), BuildServiceError> {
         if let Some(source_bytes) = existing_source_bytes {
             let existing =
-                decode_presentation_bytes(source_bytes, &output_path.display().to_string())?;
-            preserve_generated_target_metadata(presentation, &existing);
+                OpaquePresentation::decode(source_bytes, output_path.display().to_string())?
+                    .try_into_editable()?;
+            preserve_generated_target_metadata(presentation, existing.presentation());
         }
         apply_application_info(presentation, Some(application_info));
         Ok(())

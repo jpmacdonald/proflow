@@ -7,8 +7,8 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use proflow::propresenter::deserialize::{detect_presentation_file_format, PresentationFileFormat};
-use proflow::propresenter::generated::rv_data;
 use proflow::propresenter::package::read_playlist_package;
+use proflow::propresenter::unstable_native::rv_data;
 use prost::Message;
 use std::fs;
 use std::io::Read;

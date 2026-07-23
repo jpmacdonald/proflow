@@ -277,6 +277,9 @@ pub(super) struct ReviewedPreviewResponse {
     pub(super) playlist_name: String,
     pub(super) package_mode: PlaylistExportMode,
     pub(super) media_assets: Vec<ReviewedMediaAssetResponse>,
+    /// Exact final native/package evidence for an executable preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) materialized: Option<crate::workflow::report::BuildServiceResult>,
     #[serde(flatten)]
     pub(super) preview: classify::PreviewResult,
 }

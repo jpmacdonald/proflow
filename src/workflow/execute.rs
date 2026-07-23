@@ -17,7 +17,7 @@ use super::plan::PlanSemanticsError;
 use super::plan::ResolvedItemPlan;
 use super::presentation_render::PresentationRenderError;
 use super::report::BuildServiceResult;
-use crate::bible::BibleService;
+use crate::bible::{BibleCorpusError, BibleCorpusSnapshot};
 use crate::planning_center::identity::{resolve_plan_identity, PlanIdentityError};
 use crate::planning_center::PlanningCenterClient;
 use crate::planning_center::{PlanFreshnessError, PlanSnapshot};
@@ -39,6 +39,7 @@ use crate::propresenter::text_fit::FontProgramFreshnessError;
 mod overrides;
 mod plan_rendering;
 mod playlist_output;
+mod presentation_contract;
 mod presentation_output;
 mod receipt;
 mod render_assets;
@@ -48,11 +49,8 @@ pub(crate) mod restyle_text_fit;
 mod review;
 mod run;
 
-const DEFAULT_PLAN_LOOKAHEAD_DAYS: i64 = 30;
-const MIN_PLAN_LOOKAHEAD_DAYS: i64 = 60;
-const MAX_PLAN_LOOKAHEAD_DAYS: i64 = 365;
-
 pub use overrides::{EntryOverride, OverrideAction, OverrideSlideType};
+pub use presentation_contract::PresentationContractError;
 pub use render_assets::{
     NativeAssetDigest, RenderAssetFingerprint, RenderAssetFingerprintError,
     RenderAssetFreshnessError, RenderAssetIssue, RenderAssetIssues, RenderAssetSnapshot,
@@ -79,6 +77,9 @@ use uuid::Uuid;
 /// Errors raised while resolving, reviewing, or executing a service build.
 #[derive(Debug, Error)]
 pub enum BuildServiceError {
+    /// An immutable Bible corpus changed or could not be read.
+    #[error("Bible corpus snapshot failed: {0}")]
+    BibleCorpus(#[from] BibleCorpusError),
     /// A restyled existing presentation could not be proved without guessing
     /// its native text mapping.
     #[error("restyled presentation '{presentation}' text-fit proof requires review: {reason}")]
@@ -307,15 +308,6 @@ pub enum BuildServiceError {
         #[source]
         source: ProPresenterError,
     },
-    /// Media discovery could not decode a rendered playlist presentation.
-    #[error("failed to inspect media dependencies for '{entry}': {source}")]
-    RenderedMediaInspection {
-        /// Playlist entry being inspected.
-        entry: String,
-        /// Native protobuf decode failure.
-        #[source]
-        source: ProPresenterError,
-    },
     /// Receipt evidence could not decode the exact final presentation bytes
     /// carried by a playlist entry.
     #[error("failed to inspect final presentation for '{output_key}': {source}")]
@@ -337,6 +329,19 @@ pub enum BuildServiceError {
         /// Exact semantic reference diagnostics from the final bytes.
         diagnostics: Vec<crate::propresenter::inspection::PresentationReferenceDiagnostic>,
     },
+    /// Exact final native bytes violate the semantic contract derived from the
+    /// reviewed plan.
+    #[error("final presentation for '{output_key}' violates its reviewed contract: {source}")]
+    PresentationContract {
+        /// Stable reviewed output identity.
+        output_key: String,
+        /// First deterministic contract mismatch.
+        #[source]
+        source: PresentationContractError,
+    },
+    /// Existing native bytes cannot be represented exactly enough to edit.
+    #[error(transparent)]
+    NativeEdit(#[from] crate::propresenter::native_document::NativeEditError),
     /// A checked playlist arrangement could not produce an exact effective
     /// operator traversal for receipt evidence.
     #[error("could not derive effective playlist traversal for '{output_key}': {source}")]
@@ -460,7 +465,7 @@ pub enum BuildServiceError {
 /// pure; IO begins only at identity resolution, review capture, and execution.
 pub struct ServiceBuildExecutor<'a> {
     pco_client: &'a PlanningCenterClient,
-    bible_service: &'a Arc<Mutex<BibleService>>,
+    bible_corpora: &'a BibleCorpusSnapshot,
     file_index: &'a Arc<Mutex<LibraryCatalog>>,
     render_assets: &'a RenderAssetSnapshot,
     playlist_metadata: &'a PlaylistMetadata,
@@ -470,14 +475,14 @@ impl<'a> ServiceBuildExecutor<'a> {
     /// Create a service build executor over explicit immutable dependencies.
     pub const fn new(
         pco_client: &'a PlanningCenterClient,
-        bible_service: &'a Arc<Mutex<BibleService>>,
+        bible_corpora: &'a BibleCorpusSnapshot,
         file_index: &'a Arc<Mutex<LibraryCatalog>>,
         render_assets: &'a RenderAssetSnapshot,
         playlist_metadata: &'a PlaylistMetadata,
     ) -> Self {
         Self {
             pco_client,
-            bible_service,
+            bible_corpora,
             file_index,
             render_assets,
             playlist_metadata,
@@ -504,6 +509,7 @@ impl<'a> ServiceBuildExecutor<'a> {
         request: BuildRequest,
     ) -> Result<BuildReview, BuildServiceError> {
         self.render_assets.verify_current()?;
+        self.bible_corpora.verify_current()?;
         let plan_id = request::required_identity("plan_id", request.plan_id.clone())?;
         let planning_center = if let Some(service_name) = request.service_name.as_deref() {
             request::validate_identity("service_name", service_name)?;
@@ -511,13 +517,7 @@ impl<'a> ServiceBuildExecutor<'a> {
                 .capture_plan_snapshot(&plan_id, service_name)
                 .await?
         } else {
-            let days_ahead = self
-                .render_assets
-                .config()
-                .defaults()
-                .days_ahead
-                .unwrap_or(DEFAULT_PLAN_LOOKAHEAD_DAYS)
-                .clamp(MIN_PLAN_LOOKAHEAD_DAYS, MAX_PLAN_LOOKAHEAD_DAYS);
+            let days_ahead = self.render_assets.config().plan_lookahead_days();
             let (services, plans) = self.pco_client.get_upcoming_services(days_ahead).await?;
             let identity = resolve_plan_identity(&services, &plans, &plan_id, days_ahead)
                 .map_err(map_plan_identity_error)?;
@@ -586,7 +586,7 @@ fn map_plan_identity_error(error: PlanIdentityError) -> BuildServiceError {
             days_ahead,
         } => BuildServiceError::PlanNotFound {
             plan_id,
-            days_ahead,
+            days_ahead: days_ahead.get(),
         },
     }
 }

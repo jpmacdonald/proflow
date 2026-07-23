@@ -192,7 +192,7 @@ fn assert_song_recipes(config: &ProjectConfig) {
     assert_eq!(arrangement, None);
     assert_default_background(&song);
     assert_eq!(song.cues(), CueTransform::Preserve);
-    assert_arrangement_macros(&song, &[(0, &["Background", "Blank"], "Song")]);
+    assert_arrangement_macros(&song, &[(0, &["Background", "Blank", "Title"], "Song")]);
 
     let (hymn, arrangement) = restyle(config, "hymn", ItemKind::Song, ExistingSource::Song);
     assert_eq!(arrangement, None);
@@ -376,6 +376,7 @@ fn repo_config_compiles_to_the_reviewed_presentation_contract() {
             .collect::<Vec<_>>(),
         vec![
             "offertory_detail_music",
+            "prayer_of_confession",
             "affirmation_of_faith",
             "organ_prelude",
             "organ_postlude",

@@ -177,7 +177,7 @@ pub(super) fn install_fixture_theme(runtime: &mut TestRuntime) {
 
 pub(super) struct TestRuntime {
     pub(super) pco_client: PlanningCenterClient,
-    pub(super) bible_service: Arc<Mutex<BibleService>>,
+    pub(super) bible_corpora: BibleCorpusSnapshot,
     pub(super) file_index: Arc<Mutex<LibraryCatalog>>,
     pub(super) render_assets: RenderAssetSnapshot,
     pub(super) playlist_metadata: PlaylistMetadata,
@@ -229,7 +229,8 @@ impl TestRuntime {
         .expect("load empty test render assets");
         Self {
             pco_client,
-            bible_service: Arc::new(Mutex::new(BibleService::new(data.join("bibles")))),
+            bible_corpora: BibleCorpusSnapshot::capture(data.join("bibles"))
+                .expect("capture empty test Bible corpora"),
             file_index: Arc::new(Mutex::new(
                 LibraryCatalog::build(&output).expect("build empty test library catalog"),
             )),
@@ -267,7 +268,7 @@ impl TestRuntime {
     pub(super) fn executor(&self) -> ServiceBuildExecutor<'_> {
         ServiceBuildExecutor::new(
             &self.pco_client,
-            &self.bible_service,
+            &self.bible_corpora,
             &self.file_index,
             &self.render_assets,
             &self.playlist_metadata,

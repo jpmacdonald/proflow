@@ -150,6 +150,75 @@ fn catalog_records_complete_and_incomplete_native_arrangements() {
                 .expect("valid full HD size"),
         }
     );
+    let capabilities = catalog.entries()[0].transform_capabilities();
+    assert!(capabilities.exact_editable());
+    assert!(!capabilities.background_entries_editable());
+    assert_eq!(
+        capabilities
+            .traversal(Some("Christmas Eve"))
+            .map(LibraryTraversalCapability::cue_count),
+        Some(1)
+    );
+}
+
+#[test]
+fn catalog_keeps_opaque_documents_searchable_but_not_editable() {
+    let directory = tempdir().expect("create library dir");
+    let mut bytes = native_presentation("Opaque");
+    bytes.extend_from_slice(&[0xf8, 0x7f, 0x01]);
+    fs::write(directory.path().join("Opaque.pro"), bytes).expect("write opaque presentation");
+
+    let catalog = LibraryCatalog::build(directory.path()).expect("build library catalog");
+
+    assert_eq!(catalog.entries().len(), 1);
+    assert!(!catalog.entries()[0]
+        .transform_capabilities()
+        .exact_editable());
+}
+
+#[test]
+fn stale_selection_without_arrangements_uses_checked_group_traversal_for_transforms() {
+    let directory = tempdir().expect("create library dir");
+    let mut presentation = rv_data::Presentation::decode(native_presentation("Stale").as_slice())
+        .expect("decode fixture");
+    presentation.selected_arrangement = Some(rv_data::Uuid {
+        string: "stale-arrangement-id".to_string(),
+    });
+    presentation.cues = vec![rv_data::Cue {
+        uuid: Some(rv_data::Uuid {
+            string: "entry-cue".to_string(),
+        }),
+        ..rv_data::Cue::default()
+    }];
+    presentation.cue_groups = vec![rv_data::presentation::CueGroup {
+        group: Some(rv_data::Group {
+            uuid: Some(rv_data::Uuid {
+                string: "group-id".to_string(),
+            }),
+            name: "Group".to_string(),
+            ..rv_data::Group::default()
+        }),
+        cue_identifiers: vec![rv_data::Uuid {
+            string: "entry-cue".to_string(),
+        }],
+    }];
+    fs::write(
+        directory.path().join("Stale.pro"),
+        presentation.encode_to_vec(),
+    )
+    .expect("write stale selection fixture");
+
+    let catalog = LibraryCatalog::build(directory.path()).expect("build library catalog");
+    let capabilities = catalog.entries()[0].transform_capabilities();
+
+    assert!(capabilities.exact_editable());
+    assert!(capabilities.background_entries_editable());
+    assert_eq!(
+        capabilities
+            .traversal(None)
+            .map(LibraryTraversalCapability::cue_count),
+        Some(1)
+    );
 }
 
 #[test]

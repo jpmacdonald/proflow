@@ -49,6 +49,7 @@ fn tool_router_exposes_exactly_the_supported_surface() {
             "explain_rule_match",
             "fetch_plan",
             "preview_playlist",
+            "project_config_schema",
             "search_library",
             "show_effective_config",
             "write_project_config",
@@ -57,11 +58,45 @@ fn tool_router_exposes_exactly_the_supported_surface() {
 }
 
 #[test]
+fn project_config_schema_exposes_the_complete_v4_surface() {
+    let schema = serde_json::to_value(schemars::schema_for!(RawProjectConfig))
+        .expect("project config schema should serialize");
+    let properties = schema["properties"]
+        .as_object()
+        .expect("root config properties");
+    assert_eq!(
+        properties.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "backgrounds",
+            "cue_roles",
+            "defaults",
+            "item_rules",
+            "metadata",
+            "overrides",
+            "people",
+            "presentation_types",
+            "required_playlist_items",
+            "service_groups",
+            "version",
+        ]
+    );
+    assert_eq!(schema["required"], serde_json::json!(["version"]));
+    assert_eq!(properties["version"]["minimum"], 4);
+    assert_eq!(properties["version"]["maximum"], 4);
+    assert!(schema["$defs"]["ItemRuleConfig"].is_object());
+    assert!(schema["$defs"]["PresentationTypeConfig"].is_object());
+}
+
+#[test]
 fn bounded_arguments_reject_zero_and_oversized_values() {
     assert!(bounded_usize("max_results", Some(0), 10, 100).is_err());
     assert!(bounded_usize("max_results", Some(101), 10, 100).is_err());
-    assert!(bounded_days(Some(0), 30).is_err());
-    assert!(bounded_days(Some(366), 30).is_err());
+    assert!(bounded_days(Some(0), crate::planning_center::PlanLookaheadDays::DEFAULT).is_err());
+    assert!(bounded_days(
+        Some(366),
+        crate::planning_center::PlanLookaheadDays::DEFAULT
+    )
+    .is_err());
 }
 
 #[test]
@@ -71,8 +106,21 @@ fn bounded_arguments_accept_defaults_and_limits() {
         bounded_usize("max_results", Some(100), 10, 100).ok(),
         Some(100)
     );
-    assert_eq!(bounded_days(None, 30).ok(), Some(30));
-    assert_eq!(bounded_days(Some(365), 30).ok(), Some(365));
+    assert_eq!(
+        bounded_days(None, crate::planning_center::PlanLookaheadDays::DEFAULT)
+            .map(crate::planning_center::PlanLookaheadDays::get)
+            .ok(),
+        Some(30)
+    );
+    assert_eq!(
+        bounded_days(
+            Some(365),
+            crate::planning_center::PlanLookaheadDays::DEFAULT
+        )
+        .map(crate::planning_center::PlanLookaheadDays::get)
+        .ok(),
+        Some(365)
+    );
 }
 
 #[test]
@@ -184,6 +232,7 @@ fn unresolved_preview_serializes_without_an_executable_revision() {
         playlist_name: "Needs decisions".to_string(),
         package_mode: PlaylistExportMode::LibraryLinks,
         media_assets: Vec::new(),
+        materialized: None,
         preview: PreviewResult {
             plan_title: "Sunday".to_string(),
             service_name: "Sunday Morning".to_string(),

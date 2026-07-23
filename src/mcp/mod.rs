@@ -11,7 +11,7 @@ use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool_handler, ServerHandler};
 use tokio::sync::Mutex;
 
-use crate::bible::BibleService;
+use crate::bible::BibleCorpusSnapshot;
 use crate::config::Config;
 use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
 use crate::planning_center::PlanningCenterClient;
@@ -42,7 +42,7 @@ pub use schema::{
 pub struct ProFlowServer {
     render_assets: Arc<RenderAssetSnapshot>,
     pco_client: Arc<PlanningCenterClient>,
-    bible_service: Arc<Mutex<BibleService>>,
+    bible_corpora: Arc<BibleCorpusSnapshot>,
     file_index: Arc<Mutex<LibraryCatalog>>,
     group_catalog: Arc<GroupCatalog>,
     playlist_metadata: Arc<PlaylistMetadata>,
@@ -66,6 +66,9 @@ pub enum ProFlowServerInitError {
         /// Underlying load failure.
         message: String,
     },
+    /// Bible corpora could not be captured into one immutable runtime snapshot.
+    #[error("failed to capture Bible corpora: {0}")]
+    BibleCorpora(#[from] crate::bible::BibleCorpusError),
     /// The configured `ProPresenter` library could not be indexed.
     #[error("failed to index ProPresenter library at {path}: {message}")]
     Library {
@@ -110,7 +113,7 @@ impl ProFlowServer {
         let locations = BuildLocations::discover(&mappings.defaults().library)?;
 
         let bible_path = locations.project_data_root().join("bibles");
-        let bible_service = BibleService::new(bible_path);
+        let bible_corpora = BibleCorpusSnapshot::capture(bible_path)?;
 
         let library_path = locations.presentation_library();
         let propresenter_root = locations.propresenter_root();
@@ -144,7 +147,7 @@ impl ProFlowServer {
         Ok(Self {
             render_assets: Arc::new(render_assets),
             pco_client: Arc::new(pco_client),
-            bible_service: Arc::new(Mutex::new(bible_service)),
+            bible_corpora: Arc::new(bible_corpora),
             file_index: Arc::new(Mutex::new(file_index)),
             group_catalog: Arc::new(group_catalog),
             playlist_metadata: Arc::new(playlist_metadata),
@@ -155,7 +158,7 @@ impl ProFlowServer {
     fn service_build_executor(&self) -> ServiceBuildExecutor<'_> {
         ServiceBuildExecutor::new(
             self.pco_client.as_ref(),
-            &self.bible_service,
+            self.bible_corpora.as_ref(),
             &self.file_index,
             self.render_assets.as_ref(),
             self.playlist_metadata.as_ref(),

@@ -15,7 +15,7 @@
     clippy::too_many_lines
 )]
 
-use proflow::propresenter::generated::rv_data;
+use proflow::propresenter::unstable_native::rv_data;
 use prost::Message;
 use std::env;
 use std::fs;

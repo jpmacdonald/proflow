@@ -219,19 +219,13 @@ pub(super) fn retain_final_text_fit(
     max_lines: usize,
     text_fit: &mut dyn RenderTextFit,
 ) -> Result<(), PresentationRenderError> {
-    let mut evidence_by_cue = BTreeMap::new();
+    let mut evidence_by_cue =
+        BTreeMap::<usize, Vec<crate::propresenter::text_fit::TextFitDestinationSummary>>::new();
     let mut audience_evidence_by_cue =
         BTreeMap::<usize, BTreeMap<String, (TextFitDestinationIdentity, TextFitEvidence)>>::new();
     for (cue_index, cue_spec) in spec.groups().flat_map(GroupSpec::cues).enumerate() {
         let CueContent::Text(bindings) = cue_spec.content() else {
             continue;
-        };
-        let fields = bindings.iter().collect::<Vec<_>>();
-        let [(field, segments)] = fields.as_slice() else {
-            return Err(PresentationRenderError::UnsupportedMultiFieldCue {
-                cue_index,
-                field_count: fields.len(),
-            });
         };
         let cue = rendered
             .presentation()
@@ -241,56 +235,57 @@ pub(super) fn retain_final_text_fit(
         let slide = rendered_presentation_slide(cue)
             .ok_or(PresentationRenderError::RenderedPresentationSlideUnavailable { cue_index })?;
         let role = assets.role(cue_spec.role())?;
-        let evidence = text_fit.measure_rendered(role, field, slide, max_lines)?;
-        validate_source_evidence(cue_index, cue_spec.role(), &evidence, max_lines)?;
-        evidence_by_cue.insert(cue_index, (cue_spec.role().clone(), evidence.clone()));
+        let theme_slide_uuid = role
+            .slide()
+            .base_slide
+            .as_ref()
+            .and_then(|slide| slide.uuid.as_ref())
+            .map(|uuid| uuid.string.clone());
+        for (field, segments) in bindings.iter() {
+            let evidence = text_fit.measure_rendered(role, field, slide, max_lines)?;
+            validate_source_evidence(cue_index, cue_spec.role(), &evidence, max_lines)?;
+            evidence_by_cue
+                .entry(cue_index)
+                .or_default()
+                .push(evidence.summarize(TextFitDestinationIdentity::SourceTheme {
+                    cue_role: cue_spec.role().as_str().to_string(),
+                    field: field.as_str().to_string(),
+                    theme_slide_uuid: theme_slide_uuid.clone(),
+                }));
 
-        let Some(audience_assets) = audience_assets else {
-            continue;
-        };
-        let Some((configured_role, macro_name)) = cue_audience_macro(cue_spec.role(), style) else {
-            continue;
-        };
-        let measurements = measure_audience_destinations(
-            AudienceTextCandidate {
-                cue_role: cue_spec.role(),
-                configured_role,
-                macro_name,
-                field,
-                segments,
-                source_evidence: &evidence,
-                max_lines,
-            },
-            audience_assets,
-            text_fit,
-        )?;
-        for measurement in measurements {
-            retain_audience_measurement(
-                &mut audience_evidence_by_cue,
-                cue_index,
-                cue_spec.role(),
-                max_lines,
-                measurement,
+            let (Some(audience_assets), Some((configured_role, macro_name))) =
+                (audience_assets, cue_audience_macro(cue_spec.role(), style))
+            else {
+                continue;
+            };
+            let measurements = measure_audience_destinations(
+                AudienceTextCandidate {
+                    cue_role: cue_spec.role(),
+                    configured_role,
+                    macro_name,
+                    field,
+                    segments,
+                    source_evidence: &evidence,
+                    max_lines,
+                },
+                audience_assets,
+                text_fit,
             )?;
+            for measurement in measurements {
+                retain_audience_measurement(
+                    &mut audience_evidence_by_cue,
+                    cue_index,
+                    cue_spec.role(),
+                    field,
+                    max_lines,
+                    measurement,
+                )?;
+            }
         }
     }
     let summaries = evidence_by_cue
         .into_iter()
-        .map(|(cue_index, (cue_role, source_evidence))| {
-            let role = assets.role(&cue_role)?;
-            let theme_slide_uuid = role
-                .slide()
-                .base_slide
-                .as_ref()
-                .and_then(|slide| slide.uuid.as_ref())
-                .map(|uuid| uuid.string.clone());
-            let mut destinations =
-                vec![
-                    source_evidence.summarize(TextFitDestinationIdentity::SourceTheme {
-                        cue_role: cue_role.as_str().to_string(),
-                        theme_slide_uuid,
-                    }),
-                ];
+        .map(|(cue_index, mut destinations)| {
             if let Some(audience) = audience_evidence_by_cue.remove(&cue_index) {
                 destinations.extend(
                     audience
@@ -333,6 +328,7 @@ fn retain_audience_measurement(
     evidence_by_cue: &mut AudienceEvidenceByCue,
     cue_index: usize,
     cue_role: &CueRoleId,
+    field: &TextField,
     max_lines: usize,
     measurement: AudienceMeasurement,
 ) -> Result<(), PresentationRenderError> {
@@ -349,11 +345,12 @@ fn retain_audience_measurement(
             used_height: used.height(),
         });
     }
+    let destination_key = format!("{}\0{}", measurement.screen_uuid, field.as_str());
     if evidence_by_cue
         .entry(cue_index)
         .or_default()
         .insert(
-            measurement.screen_uuid.clone(),
+            destination_key,
             (measurement.identity, measurement.evidence),
         )
         .is_some()
@@ -458,6 +455,7 @@ fn measure_audience_destinations(
                 screen_uuid: screen_uuid.clone(),
                 screen_name: screen_name.clone(),
                 identity: TextFitDestinationIdentity::AudienceScreen {
+                    field: field.as_str().to_string(),
                     screen_uuid,
                     screen_name,
                     macro_name: macro_name.to_string(),

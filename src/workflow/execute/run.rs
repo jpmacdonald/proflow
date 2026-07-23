@@ -35,15 +35,13 @@ impl ServiceBuildExecutor<'_> {
         } = inputs;
         let bound_request = request.bound();
         let transaction = BuildFileTransaction::from_reviewed(outputs);
-        let mut rendered = self
-            .render_plans(
-                reviewed.plans(),
-                presentation_size,
-                &backgrounds,
-                reviewed.sources(),
-                transaction,
-            )
-            .await?;
+        let mut rendered = self.render_plans(
+            reviewed.plans(),
+            presentation_size,
+            &backgrounds,
+            reviewed.sources(),
+            transaction,
+        )?;
         let expected_playlist_path = crate::propresenter::playlist::playlist_output_path(
             self.render_assets.locations().playlist_output(),
             &bound_request.playlist_name,
@@ -141,6 +139,7 @@ impl ServiceBuildExecutor<'_> {
         let committed_catalog = catalog.with_prepared_updates(&catalog_updates)?;
         sources.verify()?;
         self.render_assets.verify_current()?;
+        self.bible_corpora.verify_current()?;
         font_programs.verify_current()?;
         transaction.commit()?;
         *catalog = committed_catalog;
@@ -154,6 +153,12 @@ pub(super) struct PreparedService {
     catalog_updates: Vec<PreparedLibraryUpdate>,
     font_programs: FontProgramSnapshot,
     result: BuildServiceResult,
+}
+
+impl PreparedService {
+    pub(super) const fn result(&self) -> &BuildServiceResult {
+        &self.result
+    }
 }
 
 #[cfg(test)]

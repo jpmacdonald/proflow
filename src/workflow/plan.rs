@@ -1,6 +1,7 @@
 //! Shared typed workflow plan model.
 
 mod item;
+mod presentation_contract;
 
 pub(crate) use crate::project_config::{
     BackgroundTransform, CueTransform, ExistingTransform, MacroTransform,
@@ -8,6 +9,10 @@ pub(crate) use crate::project_config::{
 pub use item::{
     ItemKind, OutputKey, PlanDisposition, PlanSemanticsError, ReadyAction, ResolvedItemPlan,
     ReviewContext, ScriptureContent, ScriptureRefInfo, ScriptureRequest,
+};
+pub use presentation_contract::{
+    ExpectedCueCount, ExpectedMacroPolicy, ExpectedMacroRegion, ExpectedMacroSelector,
+    ExpectedPresentationContract,
 };
 // Checked constructor errors remain available at the facade boundary even when
 // production callers only need inference to route them into review.

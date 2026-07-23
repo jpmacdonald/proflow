@@ -49,8 +49,7 @@ pub mod audience;
 pub mod background;
 /// File deserialization (reading .pro files).
 pub mod deserialize;
-/// Generated protobuf types.
-pub mod generated;
+pub(crate) mod generated;
 /// Checked final presentation documents produced by the semantic renderer.
 pub mod generated_document;
 /// Installed cue-group metadata.
@@ -66,12 +65,15 @@ pub mod live;
 pub mod macros;
 /// Media dependency discovery.
 pub mod media;
+/// Checked ownership states for unchanged and editable native documents.
+pub mod native_document;
 mod native_url;
 mod native_zip;
 /// Playlist package inspection utilities.
 pub mod package;
 /// Playlist file support (.proplaylist).
 pub mod playlist;
+mod presentation_graph;
 /// Checked renderer-independent presentation specifications.
 pub mod presentation_spec;
 /// Pure presentation-specification renderer.
@@ -90,3 +92,12 @@ pub mod text_fit;
 pub mod text_flow;
 /// Installed theme loading and exact text-box geometry.
 pub mod theme;
+
+/// Unstable raw protobuf bindings for reverse-engineering and fidelity tooling.
+///
+/// Product integrations should prefer checked presentation, playlist, package,
+/// and inspection APIs. These generated types may change whenever the recovered
+/// native schema improves and do not carry semantic invariants by themselves.
+pub mod unstable_native {
+    pub use super::generated::rv_data;
+}

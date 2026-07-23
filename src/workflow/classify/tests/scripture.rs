@@ -190,6 +190,36 @@ fn scripture_plan_prefers_supported_structured_reference_and_translation() {
 }
 
 #[test]
+fn scripture_plan_preserves_discontinuous_same_chapter_ranges() {
+    let config = scripture_config();
+    let item = Item {
+        id: "discontinuous-scripture".to_string(),
+        position: 1,
+        title: "Scripture: Joshua 3:1-5, 9-17 (Adrian)".to_string(),
+        description: None,
+        category: Category::Text,
+        note: None,
+        song: None,
+        scripture: Some(Scripture {
+            reference: "Joshua 3:1-5, 9-17".to_string(),
+            text: None,
+            translation: Some("NRSVue".to_string()),
+        }),
+    };
+
+    let plans = build_plan(&[item], &config, None, None);
+
+    assert!(is_generated(&plans[0]));
+    assert!(matches!(
+        scripture_request(&plans[0]),
+        ScriptureRequest::Single {
+            reference: "Joshua 3:1-5, 9-17",
+            bible_version: "NRSVue"
+        }
+    ));
+}
+
+#[test]
 fn scripture_plan_rejects_unsupported_structured_translation() {
     let config = scripture_config();
     let item = Item {

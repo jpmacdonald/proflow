@@ -2,11 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::propresenter::deserialize::decode_presentation_bytes;
 use crate::propresenter::generated::rv_data;
+use crate::propresenter::native_document::OpaquePresentation;
 use crate::propresenter::playlist::{PlaylistEntry, SelectedArrangement};
 use crate::propresenter::render::apply_application_info;
-use crate::propresenter::serialize::encode_existing_presentation;
 use crate::propresenter::PresentationSize;
 use crate::workflow::plan::{
     BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, ResolvedItemPlan,
@@ -36,32 +35,33 @@ impl ServiceBuildExecutor<'_> {
         source_bytes: &[u8],
         target: ReviewedRenderTarget<'_>,
     ) -> Result<(PlaylistEntry, usize), BuildServiceError> {
-        let mut presentation =
-            decode_presentation_bytes(source_bytes, &source_path.display().to_string())?;
+        let mut editable =
+            OpaquePresentation::decode(source_bytes, source_path.display().to_string())?
+                .try_into_editable()?;
+        let presentation = editable.presentation_mut();
         crate::propresenter::resolution::resize_presentation_canvas(
-            &mut presentation,
+            presentation,
             target.presentation_size,
         )?;
         validate_rendered_presentation_size(
-            &presentation,
+            presentation,
             target.presentation_size,
             entry.output_key.as_str(),
         )?;
-        clear_impossible_selected_arrangement(&mut presentation);
-        let selected_arrangement = resolve_selected_arrangement(&presentation, arrangement)?;
+        crate::propresenter::arrangement::clear_stale_selected_arrangement(presentation);
+        let selected_arrangement = resolve_selected_arrangement(presentation, arrangement)?;
         if let Some(selected) = selected_arrangement.as_ref() {
-            presentation.selected_arrangement =
-                Some(selected_native_uuid(&presentation, selected)?);
+            presentation.selected_arrangement = Some(selected_native_uuid(presentation, selected)?);
         }
         if let CueTransform::RetainOperatorPrefix(limit) = transform.cues() {
-            crate::propresenter::arrangement::retain_first_operator_cues(&mut presentation, limit)?;
+            crate::propresenter::arrangement::retain_first_operator_cues(presentation, limit)?;
         }
         match (transform.background(), target.background) {
             (BackgroundTransform::Replace(_), Some(background)) => {
                 match selected_arrangement.as_ref() {
                     Some(selected) => {
                         crate::propresenter::background::replace_arrangement_entry_backgrounds(
-                            &mut presentation,
+                            presentation,
                             background.path,
                             background.data,
                             self.render_assets.locations().propresenter_root(),
@@ -71,7 +71,7 @@ impl ServiceBuildExecutor<'_> {
                     }
                     None => {
                         crate::propresenter::background::replace_operator_entry_background(
-                            &mut presentation,
+                            presentation,
                             background.path,
                             background.data,
                             self.render_assets.locations().propresenter_root(),
@@ -87,13 +87,13 @@ impl ServiceBuildExecutor<'_> {
             }
         }
         if let MacroTransform::Enforce(policy) = transform.macros() {
-            apply_restyle_macro_policy(&mut presentation, policy, self.render_assets.macros())?;
+            apply_restyle_macro_policy(presentation, policy, self.render_assets.macros())?;
         }
         apply_application_info(
-            &mut presentation,
+            presentation,
             Some(self.playlist_metadata.application_info()),
         );
-        write_existing_playlist_presentation(entry, &presentation, target, selected_arrangement)
+        write_existing_playlist_presentation(entry, &editable, target, selected_arrangement)
     }
 
     pub(in crate::workflow::execute) fn prepare_existing_presentation(
@@ -103,19 +103,25 @@ impl ServiceBuildExecutor<'_> {
         source_bytes: &[u8],
         presentation_size: PresentationSize,
     ) -> Result<PreparedExistingPresentation, BuildServiceError> {
-        let mut presentation =
-            decode_presentation_bytes(source_bytes, &source_path.display().to_string())?;
-        validate_rendered_presentation_size(&presentation, presentation_size, output_key)?;
-        let cleared_impossible_selection = clear_impossible_selected_arrangement(&mut presentation);
-        let selected_arrangement = resolve_selected_arrangement(&presentation, arrangement)?;
-        let embedded_data = if let Some(selected) = selected_arrangement.as_ref() {
-            presentation.selected_arrangement =
-                Some(selected_native_uuid(&presentation, selected)?);
-            encode_existing_presentation(&presentation)?
-        } else if cleared_impossible_selection {
-            encode_existing_presentation(&presentation)?
+        let opaque = OpaquePresentation::decode(source_bytes, source_path.display().to_string())?;
+        validate_rendered_presentation_size(opaque.presentation(), presentation_size, output_key)?;
+        let must_clear_selection = opaque.presentation().arrangements.is_empty()
+            && opaque.presentation().selected_arrangement.is_some();
+        let selected_arrangement =
+            resolve_selected_arrangement(opaque.presentation(), arrangement)?;
+        let embedded_data = if selected_arrangement.is_none() && !must_clear_selection {
+            opaque.into_bytes()
         } else {
-            source_bytes.to_vec()
+            let mut editable = opaque.try_into_editable()?;
+            let presentation = editable.presentation_mut();
+            if must_clear_selection {
+                crate::propresenter::arrangement::clear_stale_selected_arrangement(presentation);
+            }
+            if let Some(selected) = selected_arrangement.as_ref() {
+                presentation.selected_arrangement =
+                    Some(selected_native_uuid(presentation, selected)?);
+            }
+            editable.encode()?
         };
 
         Ok(PreparedExistingPresentation {
@@ -124,10 +130,6 @@ impl ServiceBuildExecutor<'_> {
             file_path: source_path.to_path_buf(),
         })
     }
-}
-
-fn clear_impossible_selected_arrangement(presentation: &mut rv_data::Presentation) -> bool {
-    presentation.arrangements.is_empty() && presentation.selected_arrangement.take().is_some()
 }
 
 fn selected_native_uuid(

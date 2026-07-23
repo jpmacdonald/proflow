@@ -27,6 +27,8 @@ struct RealFixtureManifest {
 struct RealPlaylistFixture {
     path: String,
     provenance: String,
+    #[serde(flatten)]
+    evidence: RealFixtureEvidence,
     independent_native_export: bool,
     mode: PlaylistArchiveShape,
     item_count: usize,
@@ -39,12 +41,29 @@ struct RealPlaylistFixture {
 struct RealPresentationFixture {
     path: String,
     provenance: String,
+    #[serde(flatten)]
+    evidence: RealFixtureEvidence,
     independent_native_export: bool,
     name: String,
     cue_count: usize,
     cue_group_count: usize,
     arrangement_count: usize,
     media_dependency_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct RealFixtureEvidence {
+    producer_version: String,
+    operating_system: String,
+    export_mode: String,
+    covered_native_capabilities: Vec<String>,
+}
+
+fn assert_fixture_evidence(path: &str, evidence: &RealFixtureEvidence) {
+    assert!(!evidence.producer_version.is_empty(), "{path}");
+    assert!(!evidence.operating_system.is_empty(), "{path}");
+    assert!(!evidence.export_mode.is_empty(), "{path}");
+    assert!(!evidence.covered_native_capabilities.is_empty(), "{path}");
 }
 
 fn real_fixture_dir() -> std::path::PathBuf {
@@ -425,6 +444,7 @@ fn real_fixture_manifest_matches_corpus() {
     let manifest = real_manifest();
 
     for fixture in manifest.playlists {
+        assert_fixture_evidence(&fixture.path, &fixture.evidence);
         if fixture.independent_native_export {
             assert_eq!(fixture.provenance, "independent_native_export");
         } else {
@@ -483,6 +503,8 @@ fn real_fixture_manifest_matches_corpus() {
     for fixture in manifest.presentations {
         assert_eq!(fixture.provenance, "native_library_file");
         assert!(fixture.independent_native_export);
+        assert_fixture_evidence(&fixture.path, &fixture.evidence);
+        assert_eq!(fixture.evidence.export_mode, "library_document");
         let data = std::fs::read(fixture_dir.join(&fixture.path)).expect("read presentation");
         let presentation = rv_data::Presentation::decode(data.as_slice())
             .expect("decode real presentation fixture");

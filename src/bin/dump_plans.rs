@@ -24,7 +24,9 @@ async fn main() -> anyhow::Result<()> {
     let (services, plans) = if past {
         client.get_recent_services(days).await?
     } else {
-        client.get_upcoming_services(days).await?
+        client
+            .get_upcoming_services(proflow::planning_center::PlanLookaheadDays::new(days)?)
+            .await?
     };
 
     println!("=== Services ({}) ===", services.len());

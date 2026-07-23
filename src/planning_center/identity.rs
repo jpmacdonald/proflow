@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 
 use super::types::{Plan, Service};
+use super::PlanLookaheadDays;
 
 /// Authoritative plan metadata used by every build transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +21,10 @@ pub struct ResolvedPlanIdentity {
 pub enum PlanIdentityError {
     /// The requested plan was outside the fetched lookup window.
     #[error("plan '{plan_id}' was not found in the next {days_ahead} days")]
-    NotFound { plan_id: String, days_ahead: i64 },
+    NotFound {
+        plan_id: String,
+        days_ahead: PlanLookaheadDays,
+    },
 }
 
 /// Resolve authoritative plan metadata and the one canonical default playlist name.
@@ -28,7 +32,7 @@ pub fn resolve_plan_identity(
     services: &[Service],
     plans: &[Plan],
     plan_id: &str,
-    days_ahead: i64,
+    days_ahead: PlanLookaheadDays,
 ) -> Result<ResolvedPlanIdentity, PlanIdentityError> {
     let plan = plans
         .iter()
@@ -127,9 +131,13 @@ mod tests {
             id: "service-1".to_string(),
             name: "9:00am contemporary".to_string(),
         }];
-        let identity =
-            resolve_plan_identity(&services, &[plan("stale embedded name")], "plan-1", 60)
-                .expect("catalog identity");
+        let identity = resolve_plan_identity(
+            &services,
+            &[plan("stale embedded name")],
+            "plan-1",
+            PlanLookaheadDays::new(60).expect("valid lookahead"),
+        )
+        .expect("catalog identity");
 
         assert_eq!(identity.service_name, "9:00am contemporary");
         assert_eq!(
