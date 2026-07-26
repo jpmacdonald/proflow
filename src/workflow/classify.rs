@@ -17,7 +17,7 @@ use required::ensure_required_playlist_items;
 use scripture::build_scripture_plan;
 use song::{build_song_plan, SongPolicy};
 
-use super::classify_matching::{select_matching_rule, strip_speaker, RuleSelection};
+use super::classify_matching::{select_classification, strip_speaker, ClassificationSelection};
 pub use super::classify_preview::{
     render_preview, PreviewEntry, PreviewResult, PreviewStatus, PreviewSummary,
 };
@@ -46,27 +46,30 @@ pub fn build_plan(
     for item in items {
         let speaker = resolve_speaker(&item.title, item.description.as_deref(), mappings)
             .with_fallback(fallback_speaker.as_deref());
-        let rule = match select_matching_rule(item, mappings, service_name) {
-            RuleSelection::None => {
+        let rule = match select_classification(item, mappings, service_name) {
+            ClassificationSelection::None => {
                 entries.push(unclassified_item_plan(
                     item,
                     "No matching item rule".to_string(),
                 ));
                 continue;
             }
-            RuleSelection::Ambiguous { tier, rules } => {
-                let rule_ids = rules
+            ClassificationSelection::Ambiguous {
+                tier,
+                classifications,
+            } => {
+                let rule_ids = classifications
                     .iter()
                     .map(|rule| format!("'{}'", rule.id()))
                     .collect::<Vec<_>>()
                     .join(", ");
                 entries.push(unclassified_item_plan(
                     item,
-                    format!("Multiple {} item rules matched: {rule_ids}", tier.as_str()),
+                    format!("Multiple {} matches: {rule_ids}", tier.as_str()),
                 ));
                 continue;
             }
-            RuleSelection::Selected(rule) => rule,
+            ClassificationSelection::Selected(rule) => rule,
         };
 
         let first_output = entries.len();
@@ -227,8 +230,8 @@ fn resolve_plan_speaker_fallback(
     let fallback_rule = mappings.defaults().speaker_fallback_rule.as_deref()?;
     let mut sources = items.iter().filter(|item| {
         matches!(
-            select_matching_rule(item, mappings, service_name),
-            RuleSelection::Selected(rule) if rule.id() == fallback_rule
+            select_classification(item, mappings, service_name),
+            ClassificationSelection::Selected(rule) if rule.id() == fallback_rule
         )
     });
     let source = sources.next()?;

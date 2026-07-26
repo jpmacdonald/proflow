@@ -60,6 +60,19 @@ pub(super) fn validate_item_rules(
                 message: format!("duplicate item rule id '{}'", rule.id),
             });
         }
+        if config
+            .library_identities
+            .iter()
+            .any(|identity| identity.id.eq_ignore_ascii_case(&rule.id))
+        {
+            issues.push(ConfigValidationIssue {
+                path: format!("item_rules[{idx}].id"),
+                message: format!(
+                    "item rule id '{}' conflicts with a library identity id",
+                    rule.id
+                ),
+            });
+        }
         validate_match_spec(
             &rule.match_spec,
             &format!("item_rules[{idx}].match"),
@@ -109,6 +122,52 @@ pub(super) fn validate_item_rules(
                 message: format!("unknown item rule ID '{rule_id}'"),
             });
         }
+    }
+}
+
+pub(super) fn validate_library_identities(
+    config: &RawProjectConfig,
+    issues: &mut Vec<ConfigValidationIssue>,
+) {
+    let mut ids = HashSet::new();
+    for (index, identity) in config.library_identities.iter().enumerate() {
+        let path = format!("library_identities[{index}]");
+        validate_exact_identity(
+            &identity.id,
+            &format!("{path}.id"),
+            "library identity id",
+            issues,
+        );
+        if !ids.insert(identity.id.to_ascii_lowercase()) {
+            issues.push(ConfigValidationIssue {
+                path: format!("{path}.id"),
+                message: format!("duplicate library identity id '{}'", identity.id),
+            });
+        }
+        let values = identity.match_spec.values();
+        if values.is_empty() {
+            issues.push(ConfigValidationIssue {
+                path: format!("{path}.match.values"),
+                message: "library identity match must contain at least one value".to_string(),
+            });
+        }
+        validate_identity_values(
+            values,
+            &format!("{path}.match.values"),
+            "library identity match value",
+            issues,
+        );
+        validate_presentation_type_reference(
+            config,
+            &identity.use_type,
+            &format!("{path}.use_type"),
+            issues,
+        );
+        validate_library_filename(
+            &identity.library_file,
+            &format!("{path}.library_file"),
+            issues,
+        );
     }
 }
 

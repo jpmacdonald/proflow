@@ -6,11 +6,13 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod library_identity;
 mod model;
 mod runtime;
 mod storage;
 mod validation;
 
+pub use library_identity::{LibraryIdentityConfig, LibraryIdentityMatch};
 pub use model::{
     AmbiguousDecisionPolicy, BackgroundAssetPath, BackgroundId, ContentSourceKind, CueRoleConfig,
     DecisionChoiceConfig, DecisionChoiceMatch, DecisionConfig, DecisionContextField,
@@ -29,10 +31,10 @@ pub use storage::{
 pub use validation::{validate_project_config, ConfigValidationIssue};
 
 pub(crate) use runtime::{
-    BackgroundTransform, CompiledDecision, CompiledDirectTarget, CompiledExpansionStep,
-    CompiledItemRule, CompiledRequiredPlaylistItem, CompiledRuleOutcome, CompiledSpeakerTarget,
-    CueTransform, ExistingSource, ExistingTransform, ItemMatchInput, MacroTransform,
-    PresentationPolicy, RenderRole, RenderStyle, ResolvedPresentationType,
+    BackgroundTransform, ClassificationTier, CompiledClassification, CompiledDecision,
+    CompiledDirectTarget, CompiledExpansionStep, CompiledRequiredPlaylistItem, CompiledRuleOutcome,
+    CompiledSpeakerTarget, CueTransform, ExistingSource, ExistingTransform, ItemMatchInput,
+    MacroTransform, PresentationPolicy, RenderRole, RenderStyle, ResolvedPresentationType,
     ResolvedRequiredPresentation, RestyleMacroPolicy, RestyleMacroSelector, ReviewPolicy,
 };
 #[cfg(test)]
@@ -50,7 +52,7 @@ pub struct ProjectConfig {
     raw: RawProjectConfig,
     plan_lookahead_days: crate::planning_center::PlanLookaheadDays,
     presentation_policies: BTreeMap<String, std::sync::Arc<PresentationPolicy>>,
-    item_rules: Vec<CompiledItemRule>,
+    classifications: Vec<CompiledClassification>,
     required_playlist_items: Vec<CompiledRequiredPlaylistItem>,
 }
 
@@ -130,8 +132,8 @@ impl ProjectConfig {
         self.presentation_policies.keys().map(String::as_str)
     }
 
-    pub(crate) fn compiled_item_rules(&self) -> &[CompiledItemRule] {
-        &self.item_rules
+    pub(crate) fn compiled_classifications(&self) -> &[CompiledClassification] {
+        &self.classifications
     }
 
     pub(crate) fn compiled_required_playlist_items(&self) -> &[CompiledRequiredPlaylistItem] {
@@ -217,10 +219,10 @@ impl TryFrom<RawProjectConfig> for ProjectConfig {
         }
 
         let mut issues = Vec::new();
-        let item_rules = match runtime::compile_item_rules(&raw, &presentation_policies) {
-            Ok(rules) => rules,
-            Err(rule_issues) => {
-                issues.extend(rule_issues);
+        let classifications = match runtime::compile_classifications(&raw, &presentation_policies) {
+            Ok(classifications) => classifications,
+            Err(classification_issues) => {
+                issues.extend(classification_issues);
                 Vec::new()
             }
         };
@@ -240,7 +242,7 @@ impl TryFrom<RawProjectConfig> for ProjectConfig {
             raw,
             plan_lookahead_days,
             presentation_policies,
-            item_rules,
+            classifications,
             required_playlist_items,
         })
     }

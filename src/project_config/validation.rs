@@ -63,6 +63,7 @@ pub(super) fn validate_project_config_structure(
     rules::validate_service_groups(config, &mut issues);
     presentation::validate_background_references(config, &mut issues);
     presentation::validate_cue_roles(config, &mut issues);
+    rules::validate_library_identities(config, &mut issues);
     rules::validate_item_rules(config, &mut issues);
     rules::validate_required_playlist_items(config, &mut issues);
     presentation::validate_presentation_types(config, &mut issues);

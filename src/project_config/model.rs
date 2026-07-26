@@ -39,6 +39,9 @@ pub struct RawProjectConfig {
     /// Named presentation types.
     #[serde(default)]
     pub presentation_types: BTreeMap<String, PresentationTypeConfig>,
+    /// Exact recurring identities in the configured presentation library.
+    #[serde(default)]
+    pub library_identities: Vec<super::LibraryIdentityConfig>,
     /// Item rules with explicit precedence tiers.
     #[serde(default)]
     pub item_rules: Vec<ItemRuleConfig>,
@@ -61,6 +64,7 @@ impl Default for RawProjectConfig {
             backgrounds: BTreeMap::new(),
             cue_roles: BTreeMap::new(),
             presentation_types: BTreeMap::new(),
+            library_identities: Vec::new(),
             item_rules: Vec::new(),
             people: BTreeMap::new(),
             overrides: Vec::new(),

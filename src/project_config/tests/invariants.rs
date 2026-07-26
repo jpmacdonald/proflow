@@ -132,6 +132,55 @@ fn rules_reject_inexact_and_duplicate_match_values() {
 }
 
 #[test]
+fn library_identities_reject_incomplete_or_conflicting_aliases() {
+    let message = invalid_message(
+        r#"{
+          "version": 4,
+          "presentation_types": {
+            "song": {
+              "kind": "song",
+              "content_source": "song",
+              "output_strategy": "preserve_existing"
+            }
+          },
+          "library_identities": [
+            {
+              "id": "canonical",
+              "match": {"kind": "title_prefix", "values": []},
+              "use_type": "song",
+              "library_file": "../Wrong.pro"
+            },
+            {
+              "id": "CANONICAL",
+              "match": {
+                "kind": "title_contains",
+                "values": ["name", "NAME"]
+              },
+              "use_type": "missing",
+              "library_file": "Right.pro"
+            }
+          ],
+          "item_rules": [{
+            "id": "canonical",
+            "match": {"category": "song"},
+            "use_type": "song"
+          }]
+        }"#,
+    );
+
+    for expected in [
+        "library identity match must contain at least one value",
+        "library_file must be a filename, not a path",
+        "duplicate library identity id",
+        "duplicate library identity match value",
+        "references unknown presentation type 'missing'",
+        "conflicts with a library identity id",
+    ] {
+        assert_has(&message, expected);
+    }
+}
+
+#[test]
 fn match_categories_are_rejected_at_the_typed_json_boundary() {
     let message = invalid_message(
         r#"{

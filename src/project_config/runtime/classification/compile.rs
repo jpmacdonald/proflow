@@ -5,31 +5,50 @@ use std::sync::Arc;
 
 use super::super::{ExistingSource, PresentationPolicy, ServiceScope};
 use super::{
-    normalize_identity, normalize_phrases, CompiledDecision, CompiledDecisionChoice,
-    CompiledDecisionMatcher, CompiledDirectTarget, CompiledExpansionStep, CompiledItemMatcher,
-    CompiledItemRule, CompiledRequiredPlaylistItem, CompiledRuleOutcome, CompiledSpeakerTarget,
-    RequiredPresentation, ResolvedPresentationType,
+    normalize_identity, normalize_phrases, ClassificationTier, CompiledClassification,
+    CompiledDecision, CompiledDecisionChoice, CompiledDecisionMatcher, CompiledDirectTarget,
+    CompiledExpansionStep, CompiledItemMatcher, CompiledRequiredPlaylistItem, CompiledRuleOutcome,
+    CompiledSpeakerTarget, RequiredPresentation, ResolvedPresentationType,
 };
 use crate::project_config::{
     ConfigValidationIssue, DecisionChoiceConfig, DecisionChoiceMatch, DecisionConfig,
-    DecisionContextField, ExpansionStep, ItemRuleOutcome, MatchSpec, RawProjectConfig,
-    SpeakerSource, TargetSpec,
+    DecisionContextField, ExpansionStep, ItemRuleOutcome, LibraryIdentityMatch, MatchSpec,
+    RawProjectConfig, SpeakerSource, TargetSpec,
 };
 
-pub fn compile_item_rules(
+pub fn compile_classifications(
     config: &RawProjectConfig,
     presentations: &BTreeMap<String, Arc<PresentationPolicy>>,
-) -> Result<Vec<CompiledItemRule>, Vec<ConfigValidationIssue>> {
-    let mut compiled = Vec::with_capacity(config.item_rules.len());
+) -> Result<Vec<CompiledClassification>, Vec<ConfigValidationIssue>> {
+    let mut compiled =
+        Vec::with_capacity(config.library_identities.len() + config.item_rules.len());
     let mut issues = Vec::new();
+    for (identity_index, identity) in config.library_identities.iter().enumerate() {
+        let path = format!("library_identities[{identity_index}]");
+        let outcome = ItemRuleOutcome::UseType {
+            type_key: identity.use_type.clone(),
+            target: Some(TargetSpec::ExistingFile {
+                library_file: identity.library_file.clone(),
+            }),
+        };
+        match compile_rule_outcome(presentations, &outcome, &path) {
+            Ok(outcome) => compiled.push(CompiledClassification {
+                id: identity.id.clone(),
+                matcher: compile_library_identity_matcher(&identity.match_spec),
+                outcome,
+                tier: ClassificationTier::LibraryIdentity,
+            }),
+            Err(issue) => issues.push(issue),
+        }
+    }
     for (rule_index, rule) in config.item_rules.iter().enumerate() {
         let path = format!("item_rules[{rule_index}]");
         match compile_rule_outcome(presentations, &rule.outcome, &path) {
-            Ok(outcome) => compiled.push(CompiledItemRule {
+            Ok(outcome) => compiled.push(CompiledClassification {
                 id: rule.id.clone(),
                 matcher: compile_item_matcher(&rule.match_spec),
                 outcome,
-                tier: rule.tier,
+                tier: ClassificationTier::ItemRule(rule.tier),
             }),
             Err(issue) => issues.push(issue),
         }
@@ -38,6 +57,21 @@ pub fn compile_item_rules(
         Ok(compiled)
     } else {
         Err(issues)
+    }
+}
+
+fn compile_library_identity_matcher(matcher: &LibraryIdentityMatch) -> CompiledItemMatcher {
+    let (title_prefix, title_contains) = match matcher {
+        LibraryIdentityMatch::TitlePrefix { values } => (normalize_phrases(values), Vec::new()),
+        LibraryIdentityMatch::TitleContains { values } => (Vec::new(), normalize_phrases(values)),
+    };
+    CompiledItemMatcher {
+        title_prefix,
+        title_contains,
+        description_contains: Vec::new(),
+        category: None,
+        has_scripture_ref: None,
+        service_types: None,
     }
 }
 
