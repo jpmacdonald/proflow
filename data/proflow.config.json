@@ -408,6 +408,131 @@
       "nametag": "Adrian Nametag"
     }
   },
+  "library_identities": [
+    {
+      "id": "youth_choir_psalm_23_surely_goodness",
+      "match": {
+        "kind": "title_contains",
+        "values": [
+          "psalm 23 surely goodness"
+        ]
+      },
+      "use_type": "song",
+      "library_file": "Psalm 23 (Surely Goodness).pro"
+    },
+    {
+      "id": "hymn_356_come_thou_fount",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "#356 come, thou fount of every blessing"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "library_file": "[Hymn] Come, Thou Fount of Every Blessing.pro"
+    },
+    {
+      "id": "hymn_361_how_firm_a_foundation",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "#361 how firm a foundation"
+        ]
+      },
+      "use_type": "hymn",
+      "library_file": "[Hymn] How Firm A Foundation.pro"
+    },
+    {
+      "id": "hymn_384_o_love_that_wilt_not_let_me_go",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "#384 o love that wilt not let me go"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "library_file": "[Hymn] O Love That Wilt Not Let Me Go.pro"
+    },
+    {
+      "id": "hymn_428_i_need_thee_every_hour_hwc",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "hwc #428 i need thee every hour"
+        ]
+      },
+      "use_type": "hymn",
+      "library_file": "[Hymn] I Need Thee Every Hour (HWC).pro"
+    },
+    {
+      "id": "hymn_840_it_is_well_with_my_soul",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "g2g #840 it is well with my soul"
+        ]
+      },
+      "use_type": "hymn",
+      "library_file": "[Hymn] It Is Well With My Soul (G2G).pro",
+      "notes": "G2G identifies a distinct hymnal wording and must remain part of the presentation identity"
+    },
+    {
+      "id": "gloria_patri",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "gloria patri",
+          "#579 gloria patri"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "library_file": "Gloria Patri.pro"
+    },
+    {
+      "id": "nineveh_titled_song",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "nineveh"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "library_file": "Nineveh (Ligertwood).pro"
+    },
+    {
+      "id": "offertory_o_depth_tunny",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "offertory: o, the depth of the love of god"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "library_file": "O, The Depth of the Love of God - Tunny.pro"
+    },
+    {
+      "id": "offertory_at_the_river_copland",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "offertory: at the river"
+        ]
+      },
+      "use_type": "titled_song_static",
+      "library_file": "At the River.pro"
+    },
+    {
+      "id": "offertory_hes_always_been_faithful",
+      "match": {
+        "kind": "title_prefix",
+        "values": [
+          "offertory: he's always been faithful"
+        ]
+      },
+      "use_type": "titled_anthem_static",
+      "library_file": "He's Always Been Faithful - Sara Groves.pro"
+    }
+  ],
   "item_rules": [
     {
       "id": "sermon_title",
@@ -431,18 +556,6 @@
       }
     },
     {
-      "id": "youth_choir_psalm_23_surely_goodness",
-      "match": {
-        "title_contains": [
-          "psalm 23 surely goodness"
-        ]
-      },
-      "use_type": "song",
-      "target": {
-        "library_file": "Psalm 23 (Surely Goodness).pro"
-      }
-    },
-    {
       "id": "choir_anthem",
       "match": {
         "title_prefix": [
@@ -451,66 +564,6 @@
         ]
       },
       "use_type": "song"
-    },
-    {
-      "id": "hymn_356_come_thou_fount",
-      "match": {
-        "title_prefix": [
-          "#356 come, thou fount of every blessing"
-        ]
-      },
-      "use_type": "titled_song_static",
-      "target": {
-        "library_file": "[Hymn] Come, Thou Fount of Every Blessing.pro"
-      }
-    },
-    {
-      "id": "hymn_361_how_firm_a_foundation",
-      "match": {
-        "title_prefix": [
-          "#361 how firm a foundation"
-        ]
-      },
-      "use_type": "hymn",
-      "target": {
-        "library_file": "[Hymn] How Firm A Foundation.pro"
-      }
-    },
-    {
-      "id": "hymn_384_o_love_that_wilt_not_let_me_go",
-      "match": {
-        "title_prefix": [
-          "#384 o love that wilt not let me go"
-        ]
-      },
-      "use_type": "titled_song_static",
-      "target": {
-        "library_file": "[Hymn] O Love That Wilt Not Let Me Go.pro"
-      }
-    },
-    {
-      "id": "hymn_428_i_need_thee_every_hour_hwc",
-      "match": {
-        "title_prefix": [
-          "hwc #428 i need thee every hour"
-        ]
-      },
-      "use_type": "hymn",
-      "target": {
-        "library_file": "[Hymn] I Need Thee Every Hour (HWC).pro"
-      }
-    },
-    {
-      "id": "hymn_840_it_is_well_with_my_soul",
-      "match": {
-        "title_contains": [
-          "#840 it is well with my soul"
-        ]
-      },
-      "use_type": "hymn",
-      "target": {
-        "library_file": "[Hymn] It Is Well With My Soul.pro"
-      }
     },
     {
       "id": "scripture",
@@ -533,15 +586,6 @@
         "kind": "skip",
         "reason": "PCO section header - not a slide"
       }
-    },
-    {
-      "id": "mad_camp_title",
-      "match": {
-        "title_prefix": [
-          "mad camp"
-        ]
-      },
-      "use_type": "generated_content_nametag"
     },
     {
       "id": "skip_invitation_to_worship",
@@ -591,18 +635,6 @@
       "use_type": "title_static",
       "target": {
         "library_file": "Greeting.pro"
-      }
-    },
-    {
-      "id": "nextgen_summer_missions_commissioning",
-      "match": {
-        "title_prefix": [
-          "commissioning of nextgen summer missions"
-        ]
-      },
-      "use_type": "preserved_liturgy_static",
-      "target": {
-        "library_file": "Commissioning of NextGen Summer Missions.pro"
       }
     },
     {
@@ -703,31 +735,6 @@
       "use_type": "liturgical_generated"
     },
     {
-      "id": "gloria_patri",
-      "match": {
-        "title_prefix": [
-          "gloria patri",
-          "#579 gloria patri"
-        ]
-      },
-      "use_type": "titled_song_static",
-      "target": {
-        "library_file": "Gloria Patri.pro"
-      }
-    },
-    {
-      "id": "nineveh_titled_song",
-      "match": {
-        "title_prefix": [
-          "nineveh"
-        ]
-      },
-      "use_type": "titled_song_static",
-      "target": {
-        "library_file": "Nineveh (Ligertwood).pro"
-      }
-    },
-    {
       "id": "heidelberg_confession_q1",
       "match": {
         "title_prefix": [
@@ -777,42 +784,6 @@
       "use_type": "static_graphic",
       "target": {
         "library_file": "Offertory Nametag.pro"
-      }
-    },
-    {
-      "id": "offertory_o_depth_tunny",
-      "match": {
-        "title_prefix": [
-          "offertory: o, the depth of the love of god"
-        ]
-      },
-      "use_type": "titled_song_static",
-      "target": {
-        "library_file": "O, The Depth of the Love of God - Tunny.pro"
-      }
-    },
-    {
-      "id": "offertory_at_the_river_copland",
-      "match": {
-        "title_prefix": [
-          "offertory: at the river"
-        ]
-      },
-      "use_type": "titled_song_static",
-      "target": {
-        "library_file": "At the River.pro"
-      }
-    },
-    {
-      "id": "offertory_hes_always_been_faithful",
-      "match": {
-        "title_prefix": [
-          "offertory: he's always been faithful"
-        ]
-      },
-      "use_type": "titled_anthem_static",
-      "target": {
-        "library_file": "He's Always Been Faithful - Sara Groves.pro"
       }
     },
     {
@@ -1050,6 +1021,15 @@
       ]
     },
     {
+      "id": "all_titles",
+      "tier": "fallback",
+      "match": {
+        "category": "title"
+      },
+      "use_type": "generated_content_nametag",
+      "notes": "Generic title/nametag fallback; specific semantic rules and library identities take precedence"
+    },
+    {
       "id": "traditional_hymns",
       "tier": "fallback",
       "match": {
@@ -1068,6 +1048,5 @@
       "use_type": "song",
       "notes": "Final fallback for otherwise-unclassified songs"
     }
-  ],
-  "overrides": []
+  ]
 }

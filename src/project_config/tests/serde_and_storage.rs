@@ -198,6 +198,32 @@ fn target_spec_requires_exactly_one_target_kind() {
 }
 
 #[test]
+fn typed_library_identity_round_trips() {
+    let value = serde_json::json!({
+        "id": "edition_specific_hymn",
+        "match": {
+            "kind": "title_prefix",
+            "values": ["g2g #840 it is well with my soul"]
+        },
+        "use_type": "hymn",
+        "library_file": "[Hymn] It Is Well With My Soul (G2G).pro",
+        "notes": "Distinct wording"
+    });
+
+    let identity = serde_json::from_value::<LibraryIdentityConfig>(value.clone())
+        .expect("tagged identity should deserialize");
+    assert!(matches!(
+        identity.match_spec,
+        LibraryIdentityMatch::TitlePrefix { ref values }
+            if values.iter().map(String::as_str).eq(["g2g #840 it is well with my soul"])
+    ));
+    assert_eq!(
+        serde_json::to_value(identity).expect("identity should serialize"),
+        value
+    );
+}
+
+#[test]
 fn parses_tagged_single_and_split_display_bindings() {
     let json = r##"
         {

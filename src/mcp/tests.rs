@@ -71,6 +71,7 @@ fn project_config_schema_exposes_the_complete_v4_surface() {
             "cue_roles",
             "defaults",
             "item_rules",
+            "library_identities",
             "metadata",
             "overrides",
             "people",

@@ -3,23 +3,23 @@
 use super::scripture::has_scripture_ref;
 use crate::planning_center::types::{Category, Item};
 use crate::project_config::{
-    CompiledItemRule, ItemMatchInput, MatchCategory, ProjectConfig, RuleTier,
+    ClassificationTier, CompiledClassification, ItemMatchInput, MatchCategory, ProjectConfig,
 };
 
-pub(super) enum RuleSelection<'a> {
+pub(super) enum ClassificationSelection<'a> {
     None,
-    Selected(&'a CompiledItemRule),
+    Selected(&'a CompiledClassification),
     Ambiguous {
-        tier: RuleTier,
-        rules: Vec<&'a CompiledItemRule>,
+        tier: ClassificationTier,
+        classifications: Vec<&'a CompiledClassification>,
     },
 }
 
-pub(super) fn select_matching_rule<'a>(
+pub(super) fn select_classification<'a>(
     item: &Item,
     config: &'a ProjectConfig,
     service_name: Option<&str>,
-) -> RuleSelection<'a> {
+) -> ClassificationSelection<'a> {
     let has_scripture_ref = item.scripture.is_some()
         || has_scripture_ref(&item.title)
         || has_scripture_ref(&strip_title_prefix(&item.title));
@@ -32,7 +32,7 @@ pub(super) fn select_matching_rule<'a>(
     );
     let mut winning_tier = None;
     let mut matching_rules = Vec::new();
-    for rule in config.compiled_item_rules() {
+    for rule in config.compiled_classifications() {
         if !rule.matches(&input) {
             continue;
         }
@@ -52,14 +52,14 @@ pub(super) fn select_matching_rule<'a>(
     }
 
     let Some(winning_tier) = winning_tier else {
-        return RuleSelection::None;
+        return ClassificationSelection::None;
     };
     match matching_rules.as_slice() {
-        [] => RuleSelection::None,
-        [rule] => RuleSelection::Selected(rule),
-        _ => RuleSelection::Ambiguous {
+        [] => ClassificationSelection::None,
+        [rule] => ClassificationSelection::Selected(rule),
+        _ => ClassificationSelection::Ambiguous {
             tier: winning_tier,
-            rules: matching_rules,
+            classifications: matching_rules,
         },
     }
 }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 mod compile;
 
-pub use compile::{compile_item_rules, compile_required_playlist_items};
+pub use compile::{compile_classifications, compile_required_playlist_items};
 
 use super::ExistingTransform;
 use super::{ArrangementPolicy, ExistingTransformPolicy, PresentationPolicy, ServiceScope};
@@ -67,16 +67,41 @@ impl ItemMatchInput {
     }
 }
 
-/// One tiered item rule whose predicates and outcome are runtime-ready.
+/// Precedence across exact identities and semantic item rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassificationTier {
+    /// An exact canonical library identity always wins over generic policy.
+    LibraryIdentity,
+    /// An ordinary semantic item-rule tier.
+    ItemRule(RuleTier),
+}
+
+impl ClassificationTier {
+    pub(crate) const fn precedence(self) -> u8 {
+        match self {
+            Self::LibraryIdentity => 3,
+            Self::ItemRule(tier) => tier.precedence(),
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::LibraryIdentity => "library identity",
+            Self::ItemRule(tier) => tier.as_str(),
+        }
+    }
+}
+
+/// One checked classification whose predicates and outcome are runtime-ready.
 #[derive(Debug, Clone)]
-pub struct CompiledItemRule {
+pub struct CompiledClassification {
     id: String,
     matcher: CompiledItemMatcher,
     outcome: CompiledRuleOutcome,
-    tier: RuleTier,
+    tier: ClassificationTier,
 }
 
-impl CompiledItemRule {
+impl CompiledClassification {
     pub(crate) fn id(&self) -> &str {
         &self.id
     }
@@ -89,7 +114,7 @@ impl CompiledItemRule {
         &self.outcome
     }
 
-    pub(crate) const fn tier(&self) -> RuleTier {
+    pub(crate) const fn tier(&self) -> ClassificationTier {
         self.tier
     }
 }
@@ -463,7 +488,60 @@ mod tests {
             false,
             Some("sunday worship"),
         );
-        assert!(config.compiled_item_rules()[0].matches(&input));
+        assert!(config.compiled_classifications()[0].matches(&input));
+    }
+
+    #[test]
+    fn canonical_library_identity_has_stronger_precedence_than_item_rules() {
+        let config = parse_project_config_str(
+            r#"{
+              "version": 4,
+              "presentation_types": {
+                "song": {
+                  "kind": "song",
+                  "content_source": "song",
+                  "output_strategy": "preserve_existing"
+                }
+              },
+              "library_identities": [{
+                "id": "g2g_hymn",
+                "match": {
+                  "kind": "title_prefix",
+                  "values": ["g2g #840 it is well with my soul"]
+                },
+                "use_type": "song",
+                "library_file": "[Hymn] It Is Well With My Soul (G2G).pro"
+              }],
+              "item_rules": [{
+                "id": "all_songs",
+                "tier": "catch_all",
+                "match": {"category": "song"},
+                "use_type": "song"
+              }]
+            }"#,
+        )
+        .expect("identity config should compile");
+
+        let input = ItemMatchInput::new(
+            MatchCategory::Song,
+            "G2G #840 It Is Well With My Soul",
+            None,
+            false,
+            Some("10:30am Traditional"),
+        );
+        let matches = config
+            .compiled_classifications()
+            .iter()
+            .filter(|classification| classification.matches(&input))
+            .collect::<Vec<_>>();
+
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].id(), "g2g_hymn");
+        assert_eq!(matches[0].tier(), ClassificationTier::LibraryIdentity);
+        assert!(
+            matches[0].tier().precedence() > matches[1].tier().precedence(),
+            "exact identity must win without depending on config array order"
+        );
     }
 
     #[test]

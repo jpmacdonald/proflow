@@ -358,6 +358,25 @@ fn assert_required_graphics(config: &ProjectConfig) {
     );
 }
 
+fn assert_identity_sensitive_targets(config: &ProjectConfig) {
+    let identity = config
+        .as_raw()
+        .library_identities
+        .iter()
+        .find(|identity| identity.id == "hymn_840_it_is_well_with_my_soul")
+        .expect("G2G hymn identity");
+    assert!(matches!(
+        &identity.match_spec,
+        LibraryIdentityMatch::TitlePrefix { values }
+            if values.iter().map(String::as_str).eq(["g2g #840 it is well with my soul"])
+    ));
+    assert_eq!(identity.use_type, "hymn");
+    assert_eq!(
+        identity.library_file,
+        "[Hymn] It Is Well With My Soul (G2G).pro"
+    );
+}
+
 #[test]
 fn repo_config_compiles_to_the_reviewed_presentation_contract() {
     let config = production_config();
@@ -381,6 +400,7 @@ fn repo_config_compiles_to_the_reviewed_presentation_contract() {
             "organ_prelude",
             "organ_postlude",
             "welcome_bundle",
+            "all_titles",
             "traditional_hymns",
             "all_songs",
         ]
@@ -399,4 +419,5 @@ fn repo_config_compiles_to_the_reviewed_presentation_contract() {
     assert_song_recipes(&config);
     assert_generated_recipes(&config);
     assert_required_graphics(&config);
+    assert_identity_sensitive_targets(&config);
 }

@@ -12,9 +12,10 @@ mod existing;
 mod render;
 
 pub use classification::{
-    compile_item_rules, compile_required_playlist_items, CompiledDecision, CompiledDirectTarget,
-    CompiledExpansionStep, CompiledItemRule, CompiledRequiredPlaylistItem, CompiledRuleOutcome,
-    CompiledSpeakerTarget, ItemMatchInput, ResolvedPresentationType, ResolvedRequiredPresentation,
+    compile_classifications, compile_required_playlist_items, ClassificationTier,
+    CompiledClassification, CompiledDecision, CompiledDirectTarget, CompiledExpansionStep,
+    CompiledRequiredPlaylistItem, CompiledRuleOutcome, CompiledSpeakerTarget, ItemMatchInput,
+    ResolvedPresentationType, ResolvedRequiredPresentation,
 };
 pub use existing::{BackgroundTransform, CueTransform, ExistingTransform, MacroTransform};
 #[cfg(test)]

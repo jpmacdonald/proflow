@@ -229,6 +229,18 @@ configuration looks like this:
       }
     }
   },
+  "library_identities": [
+    {
+      "id": "g2g_840_it_is_well",
+      "match": {
+        "kind": "title_prefix",
+        "values": ["g2g #840 it is well with my soul"]
+      },
+      "use_type": "song",
+      "library_file": "[Hymn] It Is Well With My Soul (G2G).pro",
+      "notes": "G2G wording is distinct from the default hymnal"
+    }
+  ],
   "item_rules": [
     {
       "id": "all_songs",
@@ -271,6 +283,9 @@ The complete top-level contract contains:
 - `cue_roles`: semantic cue regions bound to exact ProPresenter assets.
 - `presentation_types`: content source, output strategy, display binding, and
   optional style values.
+- `library_identities`: exact recurring title aliases bound to one canonical
+  library file and the presentation type required by that file. These matches
+  outrank generic item rules and never depend on array position.
 - `item_rules`: deterministic classification rules with exactly one outcome
   each. Rules use explicit `primary` (default), `fallback`, or `catch_all`
   tiers. The highest matching tier wins; multiple matches in that tier require
@@ -285,12 +300,14 @@ The complete top-level contract contains:
 `proflow.config.json` remains the durable church policy. It should contain
 facts expected to survive many service weeks: service groups, semantic cue
 roles, installed macro names, reusable backgrounds, recurring item rules,
-required playlist items, and exact identities for canonical static files or
-edit-in-place slots.
+required playlist items, and canonical `library_identities`.
 
 An exact `library_file` is intentional for a stable identity such as
-`Apostles Creed.pro`, `Call to Worship.pro`, or a person nametag. It is too
-specific when it encodes one week's passage or a temporary musical choice.
+`Apostles Creed.pro`, `Call to Worship.pro`, a person nametag, or a
+wording-sensitive G2G/HWC hymn edition. Reusable title aliases belong in
+`library_identities`; behavioral classification remains in `item_rules`. An
+exact filename is too specific when it encodes one week's passage or a
+temporary musical choice.
 Those choices belong in the reviewed preview override, which can select an
 exact file for that build without teaching the base config a historical
 exception. Unknowns and weak matches remain `needs_review`; ProFlow does not
