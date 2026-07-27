@@ -991,10 +991,10 @@ assets loaded for a different config.
 Native producer metadata has one source as well. At startup, ProFlow reads the
 current `Playlists/Library` document under the active ProPresenter show. New
 playlist documents and newly saved presentations receive that captured
-application and platform metadata; its exact protobuf bytes and digest are
-recorded in the build receipt. A later library edit does not silently mutate the
-active runtime snapshot, and an older theme file is never treated as the
-producer.
+application and platform metadata, and new playlist roots retain the live
+library's expansion state. Its exact protobuf bytes and digest are recorded in
+the build receipt. A later library edit does not silently mutate the active
+runtime snapshot, and an older theme file is never treated as the producer.
 
 ## Native Fidelity Contract
 
@@ -1027,6 +1027,11 @@ presentation bytes, so an entry background removed by restyling is not
 exported. Shared final media is embedded once, and explicitly requested media
 that no final presentation uses is rejected instead of becoming unexplained
 package state.
+
+New weekly playlist items use the embedded presentation's native name rather
+than a Planning Center alias, and default to the C-major key emitted by
+ProPresenter. Exact reconstruction callers can still preserve an explicitly
+absent or non-default source key.
 
 Nested playlist exports use the same `.proplaylist` package format as a single
 playlist. `PlaylistSet` owns one or more checked `NamedPlaylist` children and a

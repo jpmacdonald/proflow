@@ -643,8 +643,8 @@ fn compare_detects_complete_presentation_item_metadata() {
         panic!("presentation item");
     };
     let user_music_key = rv_data::MusicKeyScale {
-        music_key: rv_data::music_key_scale::MusicKey::C as i32,
-        music_scale: rv_data::music_key_scale::MusicScale::Major as i32,
+        music_key: rv_data::music_key_scale::MusicKey::D as i32,
+        music_scale: rv_data::music_key_scale::MusicScale::Minor as i32,
     };
     presentation.user_music_key = Some(user_music_key.clone());
     let actual_entries = vec![entries[0].clone().with_user_music_key(Some(user_music_key))];
