@@ -262,11 +262,12 @@ pub enum PlaylistMetadataError {
     },
 }
 
-/// Immutable producer metadata captured from the live `Playlists/Library`
-/// document once at process startup.
+/// Immutable native document metadata captured from the live
+/// `Playlists/Library` once at process startup.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaylistMetadata {
     pub(super) application_info: rv_data::ApplicationInfo,
+    pub(super) root_expanded: bool,
 }
 
 impl PlaylistMetadata {
@@ -296,7 +297,13 @@ impl PlaylistMetadata {
                 application: application_info.application,
             });
         }
-        Ok(Self { application_info })
+        Ok(Self {
+            application_info,
+            root_expanded: document
+                .root_node
+                .as_ref()
+                .is_some_and(|root| root.expanded),
+        })
     }
 
     /// Read `Playlists/Library` below an explicitly checked `ProPresenter` root.
@@ -341,6 +348,7 @@ impl PlaylistMetadata {
                     build: "352518178".to_string(),
                 }),
             },
+            root_expanded: false,
         }
     }
 }
@@ -502,7 +510,7 @@ impl PlaylistEntry {
             presentation_path: PresentationPath::new(presentation_path)?,
             content,
             selected_arrangement: None,
-            user_music_key: None,
+            user_music_key: Some(default_user_music_key()),
         })
     }
 
@@ -536,7 +544,10 @@ impl PlaylistEntry {
         Ok(self)
     }
 
-    /// Attach a source-supplied music key.
+    /// Override `ProPresenter`'s default C-major playlist-item key.
+    ///
+    /// Passing `None` is reserved for exact reconstruction of a source item
+    /// whose key field was absent.
     #[must_use]
     pub const fn with_user_music_key(
         mut self,
@@ -588,10 +599,17 @@ impl PlaylistEntry {
         self.selected_arrangement.as_ref()
     }
 
-    /// Source-supplied music key, when present.
+    /// Native playlist-item music key, when present.
     #[must_use]
     pub const fn user_music_key(&self) -> Option<&rv_data::MusicKeyScale> {
         self.user_music_key.as_ref()
+    }
+}
+
+const fn default_user_music_key() -> rv_data::MusicKeyScale {
+    rv_data::MusicKeyScale {
+        music_key: rv_data::music_key_scale::MusicKey::C as i32,
+        music_scale: rv_data::music_key_scale::MusicScale::Major as i32,
     }
 }
 

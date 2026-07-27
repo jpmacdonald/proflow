@@ -57,7 +57,7 @@ pub(super) fn write_existing_playlist_presentation(
     )?;
     let encoded = editable.encode()?;
     write_encoded_playlist_presentation(
-        entry,
+        presentation.name.as_str(),
         presentation.cues.len(),
         target,
         encoded,
@@ -76,7 +76,13 @@ pub(super) fn write_generated_playlist_presentation(
         entry.output_key.as_str(),
     )?;
     let encoded = GeneratedPresentation::new(presentation)?.encode();
-    write_encoded_playlist_presentation(entry, presentation.cues.len(), target, encoded, None)
+    write_encoded_playlist_presentation(
+        presentation.name.as_str(),
+        presentation.cues.len(),
+        target,
+        encoded,
+        None,
+    )
 }
 
 pub(super) fn validate_rendered_presentation_size(
@@ -97,7 +103,7 @@ pub(super) fn validate_rendered_presentation_size(
 }
 
 fn write_encoded_playlist_presentation(
-    entry: &ResolvedItemPlan,
+    presentation_name: &str,
     cue_count: usize,
     target: ReviewedRenderTarget<'_>,
     encoded: Vec<u8>,
@@ -105,7 +111,7 @@ fn write_encoded_playlist_presentation(
 ) -> Result<(PlaylistEntry, usize), BuildServiceError> {
     write_presentation_bytes(target.write_path, &encoded)?;
     let playlist_entry = PlaylistEntry::embedded(
-        entry.playlist_name.clone(),
+        presentation_name,
         target.final_path.display().to_string(),
         encoded,
     )

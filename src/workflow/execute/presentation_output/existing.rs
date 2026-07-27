@@ -19,6 +19,7 @@ use super::target::{
 
 #[derive(Debug)]
 pub(in crate::workflow::execute) struct PreparedExistingPresentation {
+    pub(in crate::workflow::execute) name: String,
     pub(in crate::workflow::execute) embedded_data: Vec<u8>,
     pub(in crate::workflow::execute) selected_arrangement: Option<SelectedArrangement>,
     pub(in crate::workflow::execute) file_path: PathBuf,
@@ -104,6 +105,7 @@ impl ServiceBuildExecutor<'_> {
         presentation_size: PresentationSize,
     ) -> Result<PreparedExistingPresentation, BuildServiceError> {
         let opaque = OpaquePresentation::decode(source_bytes, source_path.display().to_string())?;
+        let name = opaque.presentation().name.clone();
         validate_rendered_presentation_size(opaque.presentation(), presentation_size, output_key)?;
         let must_clear_selection = opaque.presentation().arrangements.is_empty()
             && opaque.presentation().selected_arrangement.is_some();
@@ -125,6 +127,7 @@ impl ServiceBuildExecutor<'_> {
         };
 
         Ok(PreparedExistingPresentation {
+            name,
             embedded_data,
             selected_arrangement,
             file_path: source_path.to_path_buf(),

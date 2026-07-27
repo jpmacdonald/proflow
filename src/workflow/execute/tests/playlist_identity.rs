@@ -3,7 +3,7 @@ use prost::Message;
 use super::*;
 
 #[tokio::test]
-async fn generated_item_keeps_reviewed_display_name_separate_from_native_filename() {
+async fn generated_item_uses_native_presentation_name_like_propresenter() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -69,7 +69,7 @@ async fn generated_item_keeps_reviewed_display_name_separate_from_native_filenam
         .expect("read generated playlist");
     let items = crate::propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].name, "Call to Worship (Leader)");
+    assert_eq!(items[0].name, "Call to Worship");
     assert_eq!(
         crate::propresenter::playlist::linked_presentation_filename(&items[0]).as_deref(),
         Some("Call to Worship.pro")
@@ -86,4 +86,39 @@ async fn generated_item_keeps_reviewed_display_name_separate_from_native_filenam
     )
     .expect("decode linked presentation");
     assert_eq!(presentation.name, "Call to Worship");
+}
+
+#[tokio::test]
+async fn unchanged_item_uses_native_presentation_name_like_propresenter() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let source_path = runtime
+        .locations()
+        .presentation_library()
+        .join("Greeting.pro");
+    let presentation = presentation_with_size("Greeting", 1920.0, 1080.0);
+    std::fs::write(&source_path, presentation.encode_to_vec()).expect("write native source");
+    let mut plan = use_existing_plan("pco:item:main", source_path);
+    plan.playlist_name = "Greeting (Planning Center Alias)".to_string();
+
+    let reviewed = runtime
+        .executor()
+        .review_build_request(
+            reviewed_request("Reviewed Playlist"),
+            &[plan],
+            crate::propresenter::PresentationSize::FULL_HD,
+        )
+        .await
+        .expect("review existing item");
+    let result = runtime
+        .executor()
+        .build_prepared_request(expect_prepared(reviewed))
+        .await
+        .expect("build existing item");
+
+    let package = crate::propresenter::package::read_playlist_package(&result.playlist_path)
+        .expect("read playlist");
+    let items = crate::propresenter::package::presentation_items(package.document());
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "Greeting");
 }

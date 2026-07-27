@@ -114,14 +114,11 @@ impl ServiceBuildExecutor<'_> {
             presentation_size,
         )?;
         let prepared_path = prepared.file_path.display().to_string();
-        let playlist_entry = PlaylistEntry::embedded(
-            plan.playlist_name.clone(),
-            prepared_path.clone(),
-            prepared.embedded_data,
-        )
-        .map_err(PlaylistError::from)?
-        .with_selected_arrangement(prepared.selected_arrangement)
-        .map_err(PlaylistError::from)?;
+        let playlist_entry =
+            PlaylistEntry::embedded(prepared.name, prepared_path.clone(), prepared.embedded_data)
+                .map_err(PlaylistError::from)?
+                .with_selected_arrangement(prepared.selected_arrangement)
+                .map_err(PlaylistError::from)?;
         Ok(RenderedPlan::Library {
             playlist_entry,
             summary: library_summary(plan, prepared_path),

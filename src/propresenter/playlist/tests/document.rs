@@ -151,13 +151,38 @@ fn builder_uses_native_fixture_metadata_and_current_node_defaults() {
     );
     let root = built.root_node.expect("root playlist");
     assert_eq!(root.r#type, playlist::Type::Unknown as i32);
-    assert!(!root.expanded);
+    assert_eq!(
+        root.expanded,
+        native
+            .document()
+            .root_node
+            .as_ref()
+            .expect("native root")
+            .expanded
+    );
     let Some(playlist::ChildrenType::Playlists(children)) = root.children_type else {
         panic!("playlist children");
     };
     assert_eq!(children.playlists.len(), 1);
     assert_eq!(children.playlists[0].r#type, playlist::Type::Unknown as i32);
     assert!(!children.playlists[0].expanded);
+}
+
+#[test]
+fn builder_captures_live_root_expansion_state() {
+    let source = rv_data::PlaylistDocument {
+        application_info: Some(test_metadata().application_info().clone()),
+        root_node: Some(rv_data::Playlist {
+            expanded: true,
+            ..rv_data::Playlist::default()
+        }),
+        ..rv_data::PlaylistDocument::default()
+    };
+    let metadata = PlaylistMetadata::from_document(&source).expect("native metadata");
+
+    let built = build_playlist("Current Show", &[], &metadata);
+
+    assert!(built.root_node.expect("built root").expanded);
 }
 
 #[test]
@@ -243,6 +268,19 @@ fn builds_playlist_items_in_entry_order() {
     assert_eq!(items.items.len(), 2);
     assert_eq!(items.items[0].name, "Amazing Grace");
     assert_eq!(items.items[1].name, "How Great Thou Art");
+    for item in &items.items {
+        let Some(rv_data::playlist_item::ItemType::Presentation(presentation)) = &item.item_type
+        else {
+            panic!("expected presentation item");
+        };
+        assert_eq!(
+            presentation.user_music_key,
+            Some(rv_data::MusicKeyScale {
+                music_key: rv_data::music_key_scale::MusicKey::C as i32,
+                music_scale: rv_data::music_key_scale::MusicScale::Major as i32,
+            })
+        );
+    }
 }
 
 #[test]

@@ -23,6 +23,19 @@ structures, arrangements, media membership, and package shape remain
 semantically compatible. Its JSON output is the release evidence. Record the
 ProPresenter version and operating system beside that output.
 
+An export made after operator QA edits is useful as a changed-behavior fixture,
+but it is not a roundtrip fixture. Keep it under a different name. The required
+audit must be an immediate no-edit export so any presentation-byte difference
+is attributable to import/save-back rather than a theme reapplication, text
+edit, or other operator action.
+
+Current ProPresenter 21.4 evidence preserved all 22 embedded presentation
+members byte-for-byte in an immediate no-edit export. ProPresenter rebuilt the
+playlist document around those files: item names used each presentation's
+native name, unset item keys became C major, and the synthetic root retained
+the active show's expansion state. ProFlow reproduces those playlist defaults
+from the checked workflow and live metadata snapshot.
+
 ## Optional thumbnail oracle
 
 Export or capture one approved and one post-import cue thumbnail tree using the

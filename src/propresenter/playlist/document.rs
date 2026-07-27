@@ -90,7 +90,7 @@ fn build_playlist_document(
         uuid: Some(new_uuid()),
         name: "PLAYLIST".to_string(),
         r#type: playlist::Type::Unknown as i32,
-        expanded: false,
+        expanded: metadata.root_expanded,
         targeted_layer_uuid: None,
         smart_directory_path: None,
         hot_key: None,
