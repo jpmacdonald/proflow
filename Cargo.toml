@@ -51,6 +51,7 @@ multiple_crate_versions = "allow"
 [package]
 name = "proflow"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -28,6 +28,8 @@ registries = []
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace path dependencies carry no version by design.
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
