@@ -200,8 +200,12 @@ parse -> normalize -> plan -> render -> validate -> export
 
 - `src/project_config/` parses and validates project policy.
 - `src/planning_center/` retrieves and normalizes source plans.
-- `src/workflow/` classifies items, creates reviewed plans, and coordinates
-  execution.
+- `src/workflow/` classifies items, creates reviewed plans, and executes them.
+  The executor is synchronous and never talks to Planning Center; it describes
+  the plan lookup it needs and consumes the captured snapshot.
+- `src/workstation.rs` is the one composition root. It loads credentials,
+  project config, Bible corpora, the library catalog, and display assets as a
+  unit, and performs the Planning Center reads around the executor.
 - `crates/propresenter/` is the `proflow-propresenter` crate. It owns native
   formats, rendering, arrangements, media discovery, text fit, and package
   serialization, and it cannot depend on workflow or project policy.
