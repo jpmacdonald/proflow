@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
+use std::sync::Mutex;
 use thiserror::Error;
-use tokio::sync::Mutex;
 
 use proflow_propresenter::groups::GroupCatalog;
 use proflow_propresenter::library::LibraryCatalog;
@@ -19,7 +19,11 @@ use crate::config::Config;
 use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
 use crate::planning_center::PlanningCenterClient;
 use crate::project_config::load_project_config;
-use crate::workflow::execute::{RenderAssetSnapshot, ServiceBuildExecutor};
+use crate::workflow::execute::{
+    BuildRequest, BuildReview, BuildServiceError, PreparedBuildRequest, RenderAssetSnapshot,
+    ServiceBuildExecutor,
+};
+use crate::workflow::report::BuildServiceResult;
 
 /// How the `ProPresenter` workspace root is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,12 +163,40 @@ impl Workstation {
     /// Borrow an executor over this workstation's snapshots and catalog.
     pub const fn executor(&self) -> ServiceBuildExecutor<'_> {
         ServiceBuildExecutor::new(
-            &self.planning_center,
             &self.bible_corpora,
             &self.library,
             &self.render_assets,
             &self.playlist_metadata,
         )
+    }
+
+    /// Capture the Planning Center snapshot `request` needs, then review it.
+    pub async fn review_service_request(
+        &self,
+        request: BuildRequest,
+    ) -> Result<BuildReview, BuildServiceError> {
+        review_service_request(&self.planning_center, &self.executor(), request).await
+    }
+
+    /// Refresh the reviewed Planning Center snapshot, then verify and commit.
+    pub async fn build_prepared_request(
+        &self,
+        reviewed: PreparedBuildRequest,
+    ) -> Result<BuildServiceResult, BuildServiceError> {
+        build_prepared_request(&self.planning_center, &self.executor(), reviewed).await
+    }
+
+    /// Review and build one plan in a single pass, for callers that have no
+    /// separate preview step.
+    pub async fn build_service(
+        &self,
+        request: &BuildRequest,
+    ) -> Result<BuildServiceResult, BuildServiceError> {
+        let prepared = self
+            .review_service_request(request.clone())
+            .await?
+            .into_prepared()?;
+        self.build_prepared_request(prepared).await
     }
 
     /// Planning Center API client.
@@ -196,4 +228,30 @@ impl Workstation {
     pub const fn render_assets(&self) -> &RenderAssetSnapshot {
         &self.render_assets
     }
+}
+
+/// The Planning Center boundary around a synchronous review: compute the
+/// lookup, perform it, hand the snapshot to the executor.
+pub async fn review_service_request(
+    planning_center: &PlanningCenterClient,
+    executor: &ServiceBuildExecutor<'_>,
+    request: BuildRequest,
+) -> Result<BuildReview, BuildServiceError> {
+    let snapshot = planning_center
+        .capture_plan(executor.plan_lookup(&request)?)
+        .await?;
+    executor.review_snapshot(request, snapshot)
+}
+
+/// The Planning Center boundary around a synchronous commit: refresh the
+/// reviewed snapshot immediately before the executor verifies and commits.
+pub async fn build_prepared_request(
+    planning_center: &PlanningCenterClient,
+    executor: &ServiceBuildExecutor<'_>,
+    reviewed: PreparedBuildRequest,
+) -> Result<BuildServiceResult, BuildServiceError> {
+    let current = planning_center
+        .refresh_plan_snapshot(reviewed.plan_snapshot())
+        .await?;
+    executor.build_prepared_request(reviewed, &current)
 }

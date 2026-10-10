@@ -101,8 +101,8 @@ fn use_existing_override_canonicalizes_its_native_source() {
     ));
 }
 
-#[tokio::test]
-async fn review_rejects_override_with_wrong_size_before_approval() {
+#[test]
+fn review_rejects_override_with_wrong_size_before_approval() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let source = root.path().join("Legacy.pro");
@@ -124,20 +124,17 @@ async fn review_rejects_override_with_wrong_size_before_approval() {
     }];
 
     assert!(matches!(
-        runtime
-            .executor()
-            .review_build_request(
-                request,
-                &[plan],
-                proflow_propresenter::PresentationSize::FULL_HD,
-            )
-            .await,
+        runtime.executor().review_build_request(
+            request,
+            &[plan],
+            proflow_propresenter::PresentationSize::FULL_HD,
+        ),
         Err(BuildServiceError::PresentationSizeInvariant { .. })
     ));
 }
 
-#[tokio::test]
-async fn review_rejects_override_with_missing_arrangement_before_approval() {
+#[test]
+fn review_rejects_override_with_missing_arrangement_before_approval() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let source = root.path().join("Existing.pro");
@@ -159,14 +156,11 @@ async fn review_rejects_override_with_missing_arrangement_before_approval() {
     }];
 
     assert!(matches!(
-        runtime
-            .executor()
-            .review_build_request(
-                request,
-                &[plan],
-                proflow_propresenter::PresentationSize::FULL_HD,
-            )
-            .await,
+        runtime.executor().review_build_request(
+            request,
+            &[plan],
+            proflow_propresenter::PresentationSize::FULL_HD,
+        ),
         Err(BuildServiceError::ArrangementUnavailable { .. })
     ));
 }
@@ -189,8 +183,8 @@ fn background_override_rejects_read_only_action() {
     assert!(error.to_string().contains("read-only presentation"));
 }
 
-#[tokio::test]
-async fn unresolved_plan_cannot_cross_the_prepared_build_boundary() {
+#[test]
+fn unresolved_plan_cannot_cross_the_prepared_build_boundary() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let mut plan = test_plan(
@@ -205,7 +199,6 @@ async fn unresolved_plan_cannot_cross_the_prepared_build_boundary() {
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("capture unresolved review");
 
     assert!(matches!(&review, BuildReview::NeedsReview(_)));
@@ -216,8 +209,8 @@ async fn unresolved_plan_cannot_cross_the_prepared_build_boundary() {
     assert!(error.to_string().contains("ambiguous classification"));
 }
 
-#[tokio::test]
-async fn unresolved_proposal_does_not_capture_executable_sources() {
+#[test]
+fn unresolved_proposal_does_not_capture_executable_sources() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let missing = root.path().join("missing.pro");
@@ -237,7 +230,6 @@ async fn unresolved_proposal_does_not_capture_executable_sources() {
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("unresolved proposals are diagnostic, not executable");
 
     assert!(matches!(&review, BuildReview::NeedsReview(_)));

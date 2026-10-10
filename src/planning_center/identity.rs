@@ -27,6 +27,40 @@ pub enum PlanIdentityError {
     },
 }
 
+/// What the Planning Center boundary must fetch to review one build request.
+///
+/// The executor computes this from a validated request; only the boundary
+/// performs the network reads it describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanLookup<'a> {
+    /// The caller asserted the service type, so the plan is captured directly
+    /// and the lookup is not bounded by the current date.
+    Asserted {
+        /// Stable Planning Center plan identity.
+        plan_id: &'a str,
+        /// Caller-asserted service type name.
+        service_name: &'a str,
+    },
+    /// Discover the plan among upcoming services within the lookahead window.
+    Upcoming {
+        /// Stable Planning Center plan identity.
+        plan_id: &'a str,
+        /// Discovery window.
+        days_ahead: PlanLookaheadDays,
+    },
+}
+
+/// Failure to capture one stable plan snapshot for a [`PlanLookup`].
+#[derive(Debug, thiserror::Error)]
+pub enum PlanCaptureError {
+    /// The plan could not be bound to authoritative metadata.
+    #[error(transparent)]
+    Identity(#[from] PlanIdentityError),
+    /// A Planning Center read failed or two consecutive reads disagreed.
+    #[error(transparent)]
+    Api(#[from] crate::error::Error),
+}
+
 /// Resolve authoritative plan metadata and the one canonical default playlist name.
 pub fn resolve_plan_identity(
     services: &[Service],

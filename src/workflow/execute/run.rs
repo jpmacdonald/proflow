@@ -22,7 +22,7 @@ use super::{BuildServiceError, ServiceBuildExecutor};
 impl ServiceBuildExecutor<'_> {
     /// Materialize every native artifact while the reviewed source and output
     /// snapshots are still authoritative.
-    pub(super) async fn prepare_reviewed_service(
+    pub(super) fn prepare_reviewed_service(
         &self,
         inputs: super::review::ReviewedBuildInputs,
     ) -> Result<PreparedBuildRequest, BuildServiceError> {
@@ -103,7 +103,7 @@ impl ServiceBuildExecutor<'_> {
         self.render_assets.verify_current()?;
         let artifacts = transaction.presentation_artifacts()?;
         let catalog_updates = {
-            let catalog = self.file_index.lock().await;
+            let catalog = self.lock_library()?;
             artifacts
                 .iter()
                 .map(|(path, bytes)| catalog.prepare_owned_update(path, bytes))
@@ -124,7 +124,7 @@ impl ServiceBuildExecutor<'_> {
         ))
     }
 
-    pub(super) async fn commit_prepared_service(
+    pub(super) fn commit_prepared_service(
         &self,
         reviewed: PreparedBuildRequest,
     ) -> Result<BuildServiceResult, BuildServiceError> {
@@ -135,7 +135,7 @@ impl ServiceBuildExecutor<'_> {
             font_programs,
             result,
         } = prepared;
-        let mut catalog = self.file_index.lock().await;
+        let mut catalog = self.lock_library()?;
         let committed_catalog = catalog.with_prepared_updates(&catalog_updates)?;
         sources.verify()?;
         self.render_assets.verify_current()?;

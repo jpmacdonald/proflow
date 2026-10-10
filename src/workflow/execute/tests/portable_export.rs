@@ -5,8 +5,8 @@ use proflow_propresenter::package::{read_playlist_package, PlaylistPackage};
 use proflow_propresenter::playlist::linked_presentation_filename;
 use proflow_propresenter::SlideType;
 
-#[tokio::test]
-async fn portable_restyle_embeds_exact_canonical_default_files_and_final_media() {
+#[test]
+fn portable_restyle_embeds_exact_canonical_default_files_and_final_media() {
     let fixture = portable_fixture();
     let executor = fixture.runtime.executor();
     let mut request = reviewed_request("Portable Overwrite");
@@ -18,12 +18,10 @@ async fn portable_restyle_embeds_exact_canonical_default_files_and_final_media()
                 &fixture.plans,
                 proflow_propresenter::PresentationSize::FULL_HD,
             )
-            .await
             .expect("review portable restyle"),
     );
     let result = executor
-        .build_prepared_request(prepared)
-        .await
+        .build_prepared_offline(prepared)
         .expect("commit portable restyle");
 
     let package = read_playlist_package(&result.playlist_path).expect("read portable package");
@@ -32,8 +30,8 @@ async fn portable_restyle_embeds_exact_canonical_default_files_and_final_media()
     assert_complete_portable_receipt(&result, &fixture);
 }
 
-#[tokio::test]
-async fn portable_receipt_records_each_missing_native_media_reference_and_warning() {
+#[test]
+fn portable_receipt_records_each_missing_native_media_reference_and_warning() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let missing_media = root.path().join("missing-background.png");
@@ -54,13 +52,11 @@ async fn portable_receipt_records_each_missing_native_media_reference_and_warnin
                 &[plan],
                 proflow_propresenter::PresentationSize::FULL_HD,
             )
-            .await
             .expect("review missing external media"),
     );
     let result = runtime
         .executor()
-        .build_prepared_request(prepared)
-        .await
+        .build_prepared_offline(prepared)
         .expect("export presentation while retaining missing reference");
 
     let missing_path = missing_media.display().to_string();

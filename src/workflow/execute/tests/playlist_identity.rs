@@ -2,8 +2,8 @@ use prost::Message;
 
 use super::*;
 
-#[tokio::test]
-async fn generated_item_uses_native_presentation_name_like_propresenter() {
+#[test]
+fn generated_item_uses_native_presentation_name_like_propresenter() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -25,7 +25,6 @@ async fn generated_item_uses_native_presentation_name_like_propresenter() {
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("review generated item");
     let reviewed = expect_prepared(reviewed);
     let playlist_target = playlist_output_path(
@@ -41,8 +40,7 @@ async fn generated_item_uses_native_presentation_name_like_propresenter() {
         .expect("read prepared playlist")
         .expect("playlist was materialized during review");
     let result = executor
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect("build generated item");
 
     assert_eq!(
@@ -55,7 +53,7 @@ async fn generated_item_uses_native_presentation_name_like_propresenter() {
         prepared_playlist,
         "build must commit the exact playlist bytes prepared before approval"
     );
-    let catalog = runtime.file_index.lock().await;
+    let catalog = runtime.file_index.lock().expect("catalog lock");
     let indexed = catalog
         .entry_at(&expected_target)
         .expect("successful commit installs prepared catalog metadata");
@@ -88,8 +86,8 @@ async fn generated_item_uses_native_presentation_name_like_propresenter() {
     assert_eq!(presentation.name, "Call to Worship");
 }
 
-#[tokio::test]
-async fn unchanged_item_uses_native_presentation_name_like_propresenter() {
+#[test]
+fn unchanged_item_uses_native_presentation_name_like_propresenter() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let source_path = runtime
@@ -108,12 +106,10 @@ async fn unchanged_item_uses_native_presentation_name_like_propresenter() {
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("review existing item");
     let result = runtime
         .executor()
-        .build_prepared_request(expect_prepared(reviewed))
-        .await
+        .build_prepared_offline(expect_prepared(reviewed))
         .expect("build existing item");
 
     let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)

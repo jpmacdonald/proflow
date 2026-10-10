@@ -162,8 +162,8 @@ fn render_asset_snapshot_rejects_changed_native_theme_bytes() {
     ));
 }
 
-#[tokio::test]
-async fn review_rejects_render_asset_drift_before_staging_outputs() {
+#[test]
+fn review_rejects_render_asset_drift_before_staging_outputs() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -180,7 +180,6 @@ async fn review_rejects_render_asset_drift_before_staging_outputs() {
             &[],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("stale native assets must fail before review staging");
 
     assert!(matches!(
@@ -200,8 +199,8 @@ async fn review_rejects_render_asset_drift_before_staging_outputs() {
             .contains("proflow-stage")));
 }
 
-#[tokio::test]
-async fn prepared_build_rejects_render_asset_drift_before_commit() {
+#[test]
+fn prepared_build_rejects_render_asset_drift_before_commit() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -213,7 +212,6 @@ async fn prepared_build_rejects_render_asset_drift_before_commit() {
                 &[generate_title_plan("pco:item:generated", test_style(None))],
                 proflow_propresenter::PresentationSize::FULL_HD,
             )
-            .await
             .expect("prepare reviewed build"),
     );
     let theme = runtime
@@ -224,8 +222,7 @@ async fn prepared_build_rejects_render_asset_drift_before_commit() {
 
     let error = runtime
         .executor()
-        .build_prepared_request(prepared)
-        .await
+        .build_prepared_offline(prepared)
         .expect_err("stale native assets must not commit prepared artifacts");
 
     assert!(matches!(
@@ -374,8 +371,8 @@ fn slide_type_parser_preserves_exact_boundary_semantics() {
     );
 }
 
-#[tokio::test]
-async fn review_rejects_two_generated_overrides_with_one_physical_target() {
+#[test]
+fn review_rejects_two_generated_overrides_with_one_physical_target() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let mut first = generate_title_plan("pco:item:first", test_style(None));
@@ -400,7 +397,6 @@ async fn review_rejects_two_generated_overrides_with_one_physical_target() {
             &[first, second],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("two generated entries cannot share one output target");
 
     assert!(matches!(
@@ -413,8 +409,8 @@ async fn review_rejects_two_generated_overrides_with_one_physical_target() {
     ));
 }
 
-#[tokio::test]
-async fn review_rejects_edit_and_generate_for_one_physical_target() {
+#[test]
+fn review_rejects_edit_and_generate_for_one_physical_target() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let executor = runtime.executor();
@@ -452,7 +448,6 @@ async fn review_rejects_edit_and_generate_for_one_physical_target() {
             &[generated, editable],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("edit and generate cannot share one output target");
 
     assert!(matches!(
@@ -465,8 +460,8 @@ async fn review_rejects_edit_and_generate_for_one_physical_target() {
     ));
 }
 
-#[tokio::test]
-async fn review_rejects_restyle_and_edit_for_one_physical_target() {
+#[test]
+fn review_rejects_restyle_and_edit_for_one_physical_target() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let target = runtime
@@ -502,7 +497,6 @@ async fn review_rejects_restyle_and_edit_for_one_physical_target() {
             &[restyled, edited],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("restyle and edit cannot share one target");
 
     assert!(matches!(
@@ -515,8 +509,8 @@ async fn review_rejects_restyle_and_edit_for_one_physical_target() {
     ));
 }
 
-#[tokio::test]
-async fn review_rejects_generated_target_selected_as_another_entries_source() {
+#[test]
+fn review_rejects_generated_target_selected_as_another_entries_source() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let executor = runtime.executor();
@@ -548,7 +542,6 @@ async fn review_rejects_generated_target_selected_as_another_entries_source() {
             &[generated, selected],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("a generated output cannot also be another entry's source");
 
     assert!(matches!(

@@ -822,8 +822,8 @@ fn assert_no_dangling_group_or_arrangement_references(presentation: &rv_data::Pr
     }
 }
 
-#[tokio::test]
-async fn restyled_song_atomically_rewrites_its_canonical_library_file() {
+#[test]
+fn restyled_song_atomically_rewrites_its_canonical_library_file() {
     let fixture = restyle_fixture();
     let executor = fixture.runtime.executor();
     let managed_path = executor
@@ -842,12 +842,10 @@ async fn restyled_song_atomically_rewrites_its_canonical_library_file() {
                 std::slice::from_ref(&fixture.plan),
                 proflow_propresenter::PresentationSize::FULL_HD,
             )
-            .await
             .expect("review restyled song"),
     );
     let first_result = executor
-        .build_prepared_request(prepared)
-        .await
+        .build_prepared_offline(prepared)
         .expect("commit restyled song");
     let first_managed_bytes = std::fs::read(&managed_path).expect("read managed song");
     assert_restyled_copy(&fixture, &first_managed_bytes);
@@ -863,12 +861,10 @@ async fn restyled_song_atomically_rewrites_its_canonical_library_file() {
                 &[fixture.plan],
                 proflow_propresenter::PresentationSize::FULL_HD,
             )
-            .await
             .expect("review second restyle"),
     );
     executor
-        .build_prepared_request(second)
-        .await
+        .build_prepared_offline(second)
         .expect("commit second restyle");
     assert_eq!(
         std::fs::read(&managed_path).expect("read second managed song"),

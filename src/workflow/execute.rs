@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use std::sync::Mutex;
 use thiserror::Error;
-use tokio::sync::Mutex;
 
 use super::approval::{CapturedSources, OutputReviewError, SourceReviewError};
 use super::classify;
@@ -17,9 +17,8 @@ use super::plan::ResolvedItemPlan;
 use super::presentation_render::PresentationRenderError;
 use super::report::BuildServiceResult;
 use crate::bible::{BibleCorpusError, BibleCorpusSnapshot};
-use crate::planning_center::identity::{resolve_plan_identity, PlanIdentityError};
-use crate::planning_center::PlanningCenterClient;
-use crate::planning_center::{PlanFreshnessError, PlanSnapshot};
+use crate::planning_center::identity::PlanIdentityError;
+use crate::planning_center::{PlanCaptureError, PlanFreshnessError, PlanLookup, PlanSnapshot};
 use proflow_propresenter::arrangement::RetainOperatorCuesError;
 use proflow_propresenter::background::{
     ArrangementBackgroundError, BackgroundImageError, OperatorEntryBackgroundError,
@@ -456,14 +455,34 @@ pub enum BuildServiceError {
     /// A filesystem transaction failed.
     #[error("filesystem transaction failed: {0}")]
     Io(#[from] std::io::Error),
+    /// An earlier failure left the library catalog lock poisoned; the process
+    /// must restart before it can trust the catalog again.
+    #[error("presentation library catalog is unavailable after an earlier failure")]
+    LibraryCatalogPoisoned,
+}
+
+impl From<PlanCaptureError> for BuildServiceError {
+    fn from(error: PlanCaptureError) -> Self {
+        match error {
+            PlanCaptureError::Identity(PlanIdentityError::NotFound {
+                plan_id,
+                days_ahead,
+            }) => Self::PlanNotFound {
+                plan_id,
+                days_ahead: days_ahead.get(),
+            },
+            PlanCaptureError::Api(error) => Self::Application(error),
+        }
+    }
 }
 
 /// Shared executor for full-service builds.
 ///
-/// Every runtime dependency is immutable and explicit. Semantic planning stays
-/// pure; IO begins only at identity resolution, review capture, and execution.
+/// Every runtime dependency is immutable and explicit, and nothing here talks
+/// to Planning Center: the executor describes the lookup it needs through
+/// [`Self::plan_lookup`] and consumes the captured [`PlanSnapshot`]. The
+/// boundary that performs those reads lives in [`crate::workstation`].
 pub struct ServiceBuildExecutor<'a> {
-    pco_client: &'a PlanningCenterClient,
     bible_corpora: &'a BibleCorpusSnapshot,
     file_index: &'a Mutex<LibraryCatalog>,
     render_assets: &'a RenderAssetSnapshot,
@@ -473,14 +492,12 @@ pub struct ServiceBuildExecutor<'a> {
 impl<'a> ServiceBuildExecutor<'a> {
     /// Create a service build executor over explicit immutable dependencies.
     pub const fn new(
-        pco_client: &'a PlanningCenterClient,
         bible_corpora: &'a BibleCorpusSnapshot,
         file_index: &'a Mutex<LibraryCatalog>,
         render_assets: &'a RenderAssetSnapshot,
         playlist_metadata: &'a PlaylistMetadata,
     ) -> Self {
         Self {
-            pco_client,
             bible_corpora,
             file_index,
             render_assets,
@@ -488,45 +505,42 @@ impl<'a> ServiceBuildExecutor<'a> {
         }
     }
 
-    /// Resolve and classify one Planning Center plan, then build it through the
-    /// same review boundary used by explicit previews.
-    pub async fn build_service(
+    /// Describe the Planning Center lookup that reviewing `request` needs.
+    ///
+    /// Identities are validated here so a malformed request never reaches
+    /// Planning Center.
+    pub fn plan_lookup<'r>(
         &self,
-        request: &BuildRequest,
-    ) -> Result<BuildServiceResult, BuildServiceError> {
-        let prepared = self
-            .review_service_request(request.clone())
-            .await?
-            .into_prepared()?;
-        self.build_prepared_request(prepared).await
+        request: &'r BuildRequest,
+    ) -> Result<PlanLookup<'r>, BuildServiceError> {
+        request::validate_identity("plan_id", &request.plan_id)?;
+        match request.service_name.as_deref() {
+            Some(service_name) => {
+                request::validate_identity("service_name", service_name)?;
+                Ok(PlanLookup::Asserted {
+                    plan_id: &request.plan_id,
+                    service_name,
+                })
+            }
+            None => Ok(PlanLookup::Upcoming {
+                plan_id: &request.plan_id,
+                days_ahead: self.render_assets.config().plan_lookahead_days(),
+            }),
+        }
     }
 
-    /// Capture one Planning Center snapshot, classify it, and materialize the
-    /// same reviewed artifacts used by every transport.
-    pub(crate) async fn review_service_request(
+    /// Classify one captured Planning Center snapshot and materialize the same
+    /// reviewed artifacts used by every transport.
+    pub fn review_snapshot(
         &self,
         request: BuildRequest,
+        planning_center: PlanSnapshot,
     ) -> Result<BuildReview, BuildServiceError> {
         self.render_assets.verify_current()?;
         self.bible_corpora.verify_current()?;
-        let plan_id = request::required_identity("plan_id", request.plan_id.clone())?;
-        let planning_center = if let Some(service_name) = request.service_name.as_deref() {
-            request::validate_identity("service_name", service_name)?;
-            self.pco_client
-                .capture_plan_snapshot(&plan_id, service_name)
-                .await?
-        } else {
-            let days_ahead = self.render_assets.config().plan_lookahead_days();
-            let (services, plans) = self.pco_client.get_upcoming_services(days_ahead).await?;
-            let identity = resolve_plan_identity(&services, &plans, &plan_id, days_ahead)
-                .map_err(map_plan_identity_error)?;
-            let items = self.pco_client.get_service_items(&plan_id).await?;
-            let discovered = PlanSnapshot::from_resolved(identity, items);
-            self.pco_client.refresh_plan_snapshot(&discovered).await?
-        };
         let request = Self::bind_request_identity(request, &planning_center)?;
         let mappings = self.render_assets.config();
-        let index_guard = self.file_index.lock().await;
+        let index_guard = self.lock_library()?;
         let plans = classify::build_plan(
             planning_center.items(),
             mappings,
@@ -540,29 +554,37 @@ impl<'a> ServiceBuildExecutor<'a> {
             mappings.defaults().presentation_size,
             review::ReviewedPlanningCenterSource::captured(planning_center),
         )
-        .await
     }
 
     /// Verify and commit exact native artifacts produced by
-    /// [`BuildReview::Prepared`].
-    pub(crate) async fn build_prepared_request(
+    /// [`BuildReview::Prepared`]. `current` is a Planning Center snapshot
+    /// refreshed after review; any difference from the reviewed snapshot
+    /// rejects the commit.
+    pub fn build_prepared_request(
+        &self,
+        reviewed: PreparedBuildRequest,
+        current: &PlanSnapshot,
+    ) -> Result<BuildServiceResult, BuildServiceError> {
+        reviewed.planning_center_source().verify_current(current)?;
+        self.commit_prepared_service(reviewed)
+    }
+
+    /// Commit without a Planning Center freshness check, for tests whose
+    /// reviewed source is offline.
+    #[cfg(test)]
+    pub(crate) fn build_prepared_offline(
         &self,
         reviewed: PreparedBuildRequest,
     ) -> Result<BuildServiceResult, BuildServiceError> {
-        #[cfg(test)]
-        if !reviewed
-            .planning_center_source()
-            .should_verify_before_commit()
-        {
-            return self.commit_prepared_service(reviewed).await;
-        }
+        self.commit_prepared_service(reviewed)
+    }
 
-        let current = self
-            .pco_client
-            .refresh_plan_snapshot(reviewed.planning_center_source().snapshot())
-            .await?;
-        reviewed.planning_center_source().verify_current(&current)?;
-        self.commit_prepared_service(reviewed).await
+    pub(super) fn lock_library(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, LibraryCatalog>, BuildServiceError> {
+        self.file_index
+            .lock()
+            .map_err(|_| BuildServiceError::LibraryCatalogPoisoned)
     }
 
     pub(super) fn presentation_target(
@@ -575,18 +597,6 @@ impl<'a> ServiceBuildExecutor<'a> {
             .locations()
             .presentation_library()
             .join(format!("{name}.pro")))
-    }
-}
-
-fn map_plan_identity_error(error: PlanIdentityError) -> BuildServiceError {
-    match error {
-        PlanIdentityError::NotFound {
-            plan_id,
-            days_ahead,
-        } => BuildServiceError::PlanNotFound {
-            plan_id,
-            days_ahead: days_ahead.get(),
-        },
     }
 }
 

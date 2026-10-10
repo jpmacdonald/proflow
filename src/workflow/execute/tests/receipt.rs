@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
-#[tokio::test]
-async fn receipt_commits_exact_source_artifact_and_structure_evidence() {
+#[test]
+fn receipt_commits_exact_source_artifact_and_structure_evidence() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -15,7 +15,7 @@ async fn receipt_commits_exact_source_artifact_and_structure_evidence() {
     generated.playlist_name = "Generated Evidence".to_string();
     let result = runtime
         .executor()
-        .build_prepared_request(expect_prepared(
+        .build_prepared_offline(expect_prepared(
             runtime
                 .executor()
                 .review_build_request(
@@ -23,10 +23,8 @@ async fn receipt_commits_exact_source_artifact_and_structure_evidence() {
                     &[library, generated],
                     proflow_propresenter::PresentationSize::FULL_HD,
                 )
-                .await
                 .expect("prepare reviewed build"),
         ))
-        .await
         .expect("commit build and receipt");
 
     assert_eq!(
@@ -263,8 +261,8 @@ fn hex_bytes(bytes: &[u8]) -> String {
     encoded
 }
 
-#[tokio::test]
-async fn receipt_target_drift_after_review_aborts_the_whole_build() {
+#[test]
+fn receipt_target_drift_after_review_aborts_the_whole_build() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let reviewed = expect_prepared(
@@ -275,7 +273,6 @@ async fn receipt_target_drift_after_review_aborts_the_whole_build() {
                 &[],
                 proflow_propresenter::PresentationSize::FULL_HD,
             )
-            .await
             .expect("prepare reviewed build"),
     );
     let receipt_path = runtime
@@ -286,8 +283,7 @@ async fn receipt_target_drift_after_review_aborts_the_whole_build() {
 
     let error = runtime
         .executor()
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect_err("changed receipt target must invalidate the transaction");
 
     assert!(matches!(error, BuildServiceError::Io(_)));
@@ -303,8 +299,8 @@ async fn receipt_target_drift_after_review_aborts_the_whole_build() {
         .exists());
 }
 
-#[tokio::test]
-async fn final_presentation_reference_diagnostics_block_preparation() {
+#[test]
+fn final_presentation_reference_diagnostics_block_preparation() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let source = root.path().join("dangling.pro");
@@ -319,7 +315,6 @@ async fn final_presentation_reference_diagnostics_block_preparation() {
             &[use_existing_plan("pco:item:dangling", source)],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("dangling presentation references must block preparation");
 
     assert!(matches!(

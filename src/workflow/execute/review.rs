@@ -64,8 +64,6 @@ pub struct PreparedBuildRequest {
 #[derive(Debug)]
 pub(super) struct ReviewedPlanningCenterSource {
     snapshot: PlanSnapshot,
-    #[cfg(test)]
-    verify_before_commit: bool,
 }
 
 /// One checked request bound to the exact Planning Center source from which
@@ -110,11 +108,7 @@ impl ReviewedRequest {
 
 impl ReviewedPlanningCenterSource {
     pub(super) const fn captured(snapshot: PlanSnapshot) -> Self {
-        Self {
-            snapshot,
-            #[cfg(test)]
-            verify_before_commit: true,
-        }
+        Self { snapshot }
     }
 
     #[cfg(test)]
@@ -124,7 +118,6 @@ impl ReviewedPlanningCenterSource {
                 &request.plan_id,
                 request.service_name.as_deref().unwrap_or("Offline service"),
             ),
-            verify_before_commit: false,
         }
     }
 
@@ -134,11 +127,6 @@ impl ReviewedPlanningCenterSource {
 
     pub(super) fn verify_current(&self, current: &PlanSnapshot) -> Result<(), PlanFreshnessError> {
         self.snapshot.verify_current(current)
-    }
-
-    #[cfg(test)]
-    pub(super) const fn should_verify_before_commit(&self) -> bool {
-        self.verify_before_commit
     }
 }
 
@@ -251,6 +239,11 @@ impl PreparedBuildRequest {
         &self.request.planning_center
     }
 
+    /// The Planning Center snapshot these artifacts were reviewed against.
+    pub const fn plan_snapshot(&self) -> &PlanSnapshot {
+        self.request.planning_center.snapshot()
+    }
+
     /// Exact effective plans from which the artifacts were prepared.
     pub fn plans(&self) -> &[ResolvedItemPlan] {
         &self.plans
@@ -336,7 +329,7 @@ impl PreparedBuildRequest {
 impl ServiceBuildExecutor<'_> {
     /// Bind a fully resolved request to the effective plans, source bytes, and
     /// output target states shown during preview.
-    pub(super) async fn review_planned_request(
+    pub(super) fn review_planned_request(
         &self,
         mut request: BuildRequest,
         plans: &[ResolvedItemPlan],
@@ -426,12 +419,12 @@ impl ServiceBuildExecutor<'_> {
             output_targets.into_iter().map(|target| target.physical),
         )?;
         validate_reviewed_background_bindings(&reviewed)?;
-        let prepared = self.prepare_reviewed_service(reviewed).await?;
+        let prepared = self.prepare_reviewed_service(reviewed)?;
         Ok(BuildReview::Prepared(Box::new(prepared)))
     }
 
     #[cfg(test)]
-    pub(crate) async fn review_build_request(
+    pub(crate) fn review_build_request(
         &self,
         request: BuildRequest,
         plans: &[ResolvedItemPlan],
@@ -439,6 +432,5 @@ impl ServiceBuildExecutor<'_> {
     ) -> Result<BuildReview, BuildServiceError> {
         let planning_center = ReviewedPlanningCenterSource::offline(&request);
         self.review_planned_request(request, plans, presentation_size, planning_center)
-            .await
     }
 }

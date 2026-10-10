@@ -3,7 +3,9 @@
 //! This module translates wire arguments into existing domain operations. The
 //! server remains the sole owner of clients, caches, paths, and reviewed state.
 
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
+
+use proflow_propresenter::library::LibraryCatalog;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
@@ -30,6 +32,14 @@ use super::schema::{
     SearchLibraryArgs, SongResponse, WriteProjectConfigArgs,
 };
 use super::{mcp_err, ProFlowServer};
+
+impl ProFlowServer {
+    fn library_catalog(&self) -> Result<MutexGuard<'_, LibraryCatalog>, rmcp::ErrorData> {
+        self.workstation.library().lock().map_err(|_| {
+            mcp_err("presentation library catalog is unavailable after an earlier failure")
+        })
+    }
+}
 
 fn text_result(text: impl Into<String>) -> CallToolResult {
     CallToolResult::success(vec![Content::text(text.into())])
@@ -116,7 +126,7 @@ impl ProFlowServer {
         let theme_cache = requested_theme
             .as_ref()
             .unwrap_or_else(|| self.workstation.render_assets().themes());
-        let file_index = self.workstation.library().lock().await;
+        let file_index = self.library_catalog()?;
 
         let catalog = setup::catalog_assets(
             mappings,
@@ -254,7 +264,6 @@ impl ProFlowServer {
         };
         let reviewed = self
             .workstation
-            .executor()
             .review_service_request(request)
             .await
             .map_err(|error| mcp_err(error.to_string()))?;
@@ -341,7 +350,7 @@ impl ProFlowServer {
         };
 
         let mappings = self.workstation.render_assets().config();
-        let index_guard = self.workstation.library().lock().await;
+        let index_guard = self.library_catalog()?;
         let entries = classify::build_preview(
             &[item],
             mappings,
@@ -369,7 +378,7 @@ impl ProFlowServer {
         Parameters(args): Parameters<SearchLibraryArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let max = bounded_usize("max_results", args.max_results, 10, 100)?;
-        let index = self.workstation.library().lock().await;
+        let index = self.library_catalog()?;
         let matches = index.find_matches(&args.query, max);
         let results: Vec<FileMatch> = matches
             .iter()
@@ -403,7 +412,6 @@ impl ProFlowServer {
         };
         let result = self
             .workstation
-            .executor()
             .build_prepared_request(reviewed.prepared)
             .await
             .map_err(|e| mcp_err(e.to_string()))?;

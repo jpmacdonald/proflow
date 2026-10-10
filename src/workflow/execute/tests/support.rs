@@ -1,4 +1,5 @@
 use super::*;
+use crate::planning_center::PlanningCenterClient;
 
 pub(super) fn test_background(id: &str) -> ResolvedBackground {
     ResolvedBackground::new(
@@ -267,7 +268,6 @@ impl TestRuntime {
 
     pub(super) fn executor(&self) -> ServiceBuildExecutor<'_> {
         ServiceBuildExecutor::new(
-            &self.pco_client,
             &self.bible_corpora,
             &self.file_index,
             &self.render_assets,

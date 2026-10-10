@@ -14,6 +14,7 @@ pub mod types;
 
 // Re-export key components
 pub use api::PlanningCenterClient;
+pub use identity::{PlanCaptureError, PlanLookup};
 pub use lookahead::{PlanLookaheadDays, PlanLookaheadDaysError};
 pub use snapshot::{PlanFreshnessError, PlanRevision, PlanRevisionError, PlanSnapshot};
 // Re-export core types from the submodule

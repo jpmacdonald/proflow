@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::time::Duration as StdDuration;
 use tokio::time::sleep;
 
+use super::identity::{resolve_plan_identity, PlanCaptureError, PlanLookup};
 use super::normalize::{parse_items, parse_plan, parse_service_types};
 use super::snapshot::PlanSnapshot;
 use crate::config::Config;
@@ -393,6 +394,30 @@ impl PlanningCenterClient {
             }
         };
         self.fetch_stable_plan_snapshot(&service.id, plan_id).await
+    }
+
+    /// Capture one stable plan snapshot for a reviewed build request.
+    pub async fn capture_plan(
+        &self,
+        lookup: PlanLookup<'_>,
+    ) -> std::result::Result<PlanSnapshot, PlanCaptureError> {
+        match lookup {
+            PlanLookup::Asserted {
+                plan_id,
+                service_name,
+            } => Ok(self.capture_plan_snapshot(plan_id, service_name).await?),
+            PlanLookup::Upcoming {
+                plan_id,
+                days_ahead,
+            } => {
+                let (services, plans) = self.get_upcoming_services(days_ahead).await?;
+                let identity = resolve_plan_identity(&services, &plans, plan_id, days_ahead)
+                    .map_err(PlanCaptureError::Identity)?;
+                let items = self.get_service_items(plan_id).await?;
+                let discovered = PlanSnapshot::from_resolved(identity, items);
+                Ok(self.refresh_plan_snapshot(&discovered).await?)
+            }
+        }
     }
 
     /// Directly refetch every normalized field represented by a reviewed plan.

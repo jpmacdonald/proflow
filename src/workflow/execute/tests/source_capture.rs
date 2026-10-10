@@ -8,8 +8,8 @@ use httptest::{
 };
 use serde_json::json;
 
-#[tokio::test]
-async fn changed_reviewed_source_is_rejected_before_commit() {
+#[test]
+fn changed_reviewed_source_is_rejected_before_commit() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let executor = runtime.executor();
@@ -25,14 +25,12 @@ async fn changed_reviewed_source_is_rejected_before_commit() {
             &[use_existing_plan("pco:item:main", source.clone())],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("capture reviewed request");
     let reviewed = expect_prepared(reviewed);
     std::fs::write(&source, b"changed presentation").expect("change reviewed source");
 
     let error = executor
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect_err("changed source must invalidate review");
 
     assert!(matches!(
@@ -47,8 +45,8 @@ async fn changed_reviewed_source_is_rejected_before_commit() {
     );
 }
 
-#[tokio::test]
-async fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
+#[test]
+fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let executor = runtime.executor();
@@ -64,30 +62,23 @@ async fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
             &[use_existing_plan("pco:item:main", source.clone())],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("capture reviewed request");
     let reviewed = expect_prepared(reviewed);
     let playlist_target =
         playlist_output_path(runtime.locations().playlist_output(), "Catalog Wait");
 
-    let catalog_guard = runtime.file_index.lock().await;
-    let mut commit = Box::pin(executor.build_prepared_request(reviewed));
-    std::future::poll_fn(|context| {
-        let poll = std::future::Future::poll(commit.as_mut(), context);
-        assert!(
-            matches!(poll, std::task::Poll::Pending),
-            "commit must wait while the catalog lock is held"
-        );
-        std::task::Poll::Ready(())
-    })
-    .await;
-
-    std::fs::write(&source, b"changed while waiting").expect("change reviewed source");
-    drop(catalog_guard);
-
-    let error = commit
-        .await
-        .expect_err("source drift during catalog lock wait must invalidate review");
+    // Hold the catalog lock so the commit cannot begin verifying sources until
+    // the reviewed file has already changed underneath it.
+    let catalog_guard = runtime.file_index.lock().expect("catalog lock");
+    let error = std::thread::scope(|scope| {
+        let commit = scope.spawn(|| executor.build_prepared_offline(reviewed));
+        std::fs::write(&source, b"changed while waiting").expect("change reviewed source");
+        drop(catalog_guard);
+        commit
+            .join()
+            .expect("commit thread")
+            .expect_err("source drift during catalog lock wait must invalidate review")
+    });
     assert!(matches!(
         error,
         BuildServiceError::SourceReview(SourceReviewError::Changed { .. })
@@ -98,8 +89,8 @@ async fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
     );
 }
 
-#[tokio::test]
-async fn reviewed_build_uses_bound_identity_without_refetch() {
+#[test]
+fn reviewed_build_uses_bound_identity_without_refetch() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let executor = runtime.executor();
@@ -114,14 +105,12 @@ async fn reviewed_build_uses_bound_identity_without_refetch() {
             )],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("review bound request");
     let reviewed = expect_prepared(reviewed);
 
     assert!(reviewed.plans()[0].is_skipped());
     let result = executor
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect("bound request builds without network access");
 
     assert_eq!(result.skipped_count, 1);
@@ -152,16 +141,15 @@ async fn planning_center_drift_invalidates_prepared_artifacts_before_commit() {
             proflow_propresenter::PresentationSize::FULL_HD,
             super::review::ReviewedPlanningCenterSource::captured(freshness_snapshot()),
         )
-        .await
         .expect("capture production-style review");
     let reviewed = expect_prepared(reviewed);
     let playlist_target =
         playlist_output_path(runtime.locations().playlist_output(), "Freshness Review");
 
-    let error = executor
-        .build_prepared_request(reviewed)
-        .await
-        .expect_err("Planning Center drift must invalidate prepared artifacts");
+    let error =
+        crate::workstation::build_prepared_request(&runtime.pco_client, &executor, reviewed)
+            .await
+            .expect_err("Planning Center drift must invalidate prepared artifacts");
 
     assert!(matches!(
         error,
@@ -255,8 +243,8 @@ fn freshness_snapshot() -> PlanSnapshot {
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn additional_portable_media_is_canonicalized_and_embedded() {
+#[test]
+fn additional_portable_media_is_canonicalized_and_embedded() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let executor = runtime.executor();
@@ -275,7 +263,6 @@ async fn additional_portable_media_is_canonicalized_and_embedded() {
             &[],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("additional media is a supported portable package member");
     let reviewed = expect_prepared(reviewed);
     let canonical = media.canonicalize().expect("canonical media path");
@@ -288,8 +275,7 @@ async fn additional_portable_media_is_canonicalized_and_embedded() {
     );
 
     let result = executor
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect("commit portable package");
     let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read portable package");
@@ -318,8 +304,8 @@ async fn additional_portable_media_is_canonicalized_and_embedded() {
     );
 }
 
-#[tokio::test]
-async fn portable_review_captures_managed_background() {
+#[test]
+fn portable_review_captures_managed_background() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     let theme_dir = runtime.locations().themes().join("Background Theme");
@@ -351,7 +337,6 @@ async fn portable_review_captures_managed_background() {
             )],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("capture portable background");
     let reviewed = expect_prepared(reviewed);
     let canonical = background.canonicalize().expect("canonical background");
@@ -360,8 +345,8 @@ async fn portable_review_captures_managed_background() {
     assert!(reviewed.has_reviewed_source(&canonical));
 }
 
-#[tokio::test]
-async fn portable_review_rejects_custom_identity_for_managed_background() {
+#[test]
+fn portable_review_rejects_custom_identity_for_managed_background() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     let theme_dir = runtime.locations().themes().join("Background Theme");
@@ -396,7 +381,6 @@ async fn portable_review_rejects_custom_identity_for_managed_background() {
             )],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("managed media keeps its native archive identity");
 
     assert!(matches!(
@@ -408,8 +392,8 @@ async fn portable_review_rejects_custom_identity_for_managed_background() {
     ));
 }
 
-#[tokio::test]
-async fn portable_review_prefers_show_relative_theme_media_over_stored_absolute_path() {
+#[test]
+fn portable_review_prefers_show_relative_theme_media_over_stored_absolute_path() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     let show_relative_path = Path::new("Media/Assets/theme-fill.png");
@@ -471,7 +455,6 @@ async fn portable_review_prefers_show_relative_theme_media_over_stored_absolute_
             &[generate_title_plan("pco:item:main", test_style(None))],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("capture theme media");
     let reviewed = expect_prepared(reviewed);
     let canonical = media_path.canonicalize().expect("canonical media");
@@ -486,8 +469,7 @@ async fn portable_review_prefers_show_relative_theme_media_over_stored_absolute_
 
     let result = runtime
         .executor()
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect("export show-relative theme media");
     assert_show_relative_export(&result, &runtime, &canonical, &stale_media);
 }

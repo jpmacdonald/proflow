@@ -1,7 +1,7 @@
 use super::*;
 
-#[tokio::test]
-async fn generated_target_appearing_after_preview_is_rejected() {
+#[test]
+fn generated_target_appearing_after_preview_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -16,14 +16,12 @@ async fn generated_target_appearing_after_preview_is_rejected() {
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("review absent target");
     let reviewed = expect_prepared(reviewed);
     std::fs::write(&target, b"external presentation").expect("create target after preview");
 
     let error = executor
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect_err("appeared target cannot be overwritten");
 
     assert!(matches!(error, BuildServiceError::Io(_)));
@@ -35,13 +33,18 @@ async fn generated_target_appearing_after_preview_is_rejected() {
         b"external presentation"
     );
     assert!(
-        runtime.file_index.lock().await.entry_at(&target).is_none(),
+        runtime
+            .file_index
+            .lock()
+            .expect("catalog lock")
+            .entry_at(&target)
+            .is_none(),
         "failed commits must not install prepared catalog metadata"
     );
 }
 
-#[tokio::test]
-async fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
+#[test]
+fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -60,11 +63,9 @@ async fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("wrong-sized generated target can be repaired");
     executor
-        .build_prepared_request(expect_prepared(reviewed))
-        .await
+        .build_prepared_offline(expect_prepared(reviewed))
         .expect("commit rebuilt target");
 
     let rebuilt = rv_data::Presentation::decode(
@@ -80,8 +81,8 @@ async fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
     );
 }
 
-#[tokio::test]
-async fn generated_absent_target_gets_one_fresh_stable_uuid() {
+#[test]
+fn generated_absent_target_gets_one_fresh_stable_uuid() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -99,11 +100,9 @@ async fn generated_absent_target_gets_one_fresh_stable_uuid() {
                 std::slice::from_ref(&plan),
                 proflow_propresenter::PresentationSize::FULL_HD,
             )
-            .await
             .expect("prepare generated target");
         executor
-            .build_prepared_request(expect_prepared(reviewed))
-            .await
+            .build_prepared_offline(expect_prepared(reviewed))
             .expect("commit generated target");
     }
 
@@ -122,11 +121,9 @@ async fn generated_absent_target_gets_one_fresh_stable_uuid() {
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("prepare stable rebuild");
     executor
-        .build_prepared_request(expect_prepared(reviewed))
-        .await
+        .build_prepared_offline(expect_prepared(reviewed))
         .expect("commit stable rebuild");
     let rebuilt = rv_data::Presentation::decode(
         std::fs::read(target)
@@ -137,8 +134,8 @@ async fn generated_absent_target_gets_one_fresh_stable_uuid() {
     assert_eq!(rebuilt.uuid.map(|value| value.string), Some(uuid));
 }
 
-#[tokio::test]
-async fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
+#[test]
+fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
     install_fixture_theme(&mut runtime);
@@ -172,11 +169,9 @@ async fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope()
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("wrong-sized edit source can be repaired");
     executor
-        .build_prepared_request(expect_prepared(reviewed))
-        .await
+        .build_prepared_offline(expect_prepared(reviewed))
         .expect("commit edited target");
 
     let edited = rv_data::Presentation::decode(
@@ -198,8 +193,8 @@ async fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope()
     );
 }
 
-#[tokio::test]
-async fn playlist_changed_after_preview_is_rejected() {
+#[test]
+fn playlist_changed_after_preview_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let executor = runtime.executor();
@@ -211,14 +206,12 @@ async fn playlist_changed_after_preview_is_rejected() {
             &[],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect("review playlist target");
     let reviewed = expect_prepared(reviewed);
     std::fs::write(&playlist_target, b"changed playlist").expect("change playlist");
 
     let error = executor
-        .build_prepared_request(reviewed)
-        .await
+        .build_prepared_offline(reviewed)
         .expect_err("changed playlist cannot be overwritten");
     assert!(matches!(error, BuildServiceError::Io(_)));
     assert!(error
@@ -231,8 +224,8 @@ async fn playlist_changed_after_preview_is_rejected() {
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn review_rejects_a_symlink_output_target() {
+#[test]
+fn review_rejects_a_symlink_output_target() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
     let referent = root.path().join("existing-playlist");
@@ -247,7 +240,6 @@ async fn review_rejects_a_symlink_output_target() {
             &[],
             proflow_propresenter::PresentationSize::FULL_HD,
         )
-        .await
         .expect_err("lexical symlink and physical write targets must not diverge");
 
     assert!(matches!(

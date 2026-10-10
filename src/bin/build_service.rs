@@ -88,9 +88,7 @@ async fn main() -> anyhow::Result<()> {
         .into_iter()
         .map(|pending| resolve_decision_override(pending, workstation.render_assets().config()))
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let executor = workstation.executor();
-
-    let result = executor
+    let result = workstation
         .build_service(&BuildRequest {
             plan_id,
             service_name: Some(service_name),
