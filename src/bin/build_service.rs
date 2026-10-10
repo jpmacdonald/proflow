@@ -2,7 +2,7 @@
 //!
 //! Usage:
 //! ```text
-//! cargo run --bin build_service -- <plan_id> <service_name> [playlist_name] [--skip <output_key> ...] [--decisions decisions.json] [--library-local]
+//! cargo run --bin build_service -- <plan_id> <service_name> [playlist_name] [--skip <output_key> ...] [--decisions decisions.json] [--library-local] [--configured-workspace]
 //! ```
 
 use std::path::PathBuf;
@@ -73,6 +73,7 @@ struct BuildCliArgs {
     skip_output_keys: Vec<String>,
     overrides: Vec<DecisionOverride>,
     playlist_export_mode: PlaylistExportMode,
+    configured_workspace: bool,
 }
 
 #[tokio::main]
@@ -85,12 +86,17 @@ async fn main() -> anyhow::Result<()> {
         skip_output_keys,
         overrides: pending_overrides,
         playlist_export_mode,
+        configured_workspace,
     } = cli;
 
     let config = Config::load()?;
     let project_data_root = BuildLocations::discover_project_data_root()?;
     let mappings = load_project_config(&project_data_root.join(PROJECT_CONFIG_FILE))?;
-    let locations = BuildLocations::discover(&mappings.defaults().library)?;
+    let locations = if configured_workspace {
+        BuildLocations::discover_configured_workspace(&mappings.defaults().library)?
+    } else {
+        BuildLocations::discover(&mappings.defaults().library)?
+    };
     let overrides = pending_overrides
         .into_iter()
         .map(|pending| resolve_decision_override(pending, &mappings))
@@ -145,6 +151,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
     let mut skip_output_keys = Vec::new();
     let mut overrides = Vec::new();
     let mut playlist_export_mode = PlaylistExportMode::default();
+    let mut configured_workspace = false;
     let mut package_mode_was_set = false;
 
     while let Some(arg) = args.next() {
@@ -157,6 +164,8 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
             let decisions = read_decision_file(&path)?;
             skip_output_keys.extend(decisions.skip_output_keys);
             overrides.extend(decisions.overrides);
+        } else if arg == "--configured-workspace" {
+            configured_workspace = true;
         } else if arg == "--override-file" {
             let output_key = args
                 .next()
@@ -207,6 +216,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
         skip_output_keys,
         overrides,
         playlist_export_mode,
+        configured_workspace,
     })
 }
 

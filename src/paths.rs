@@ -114,9 +114,31 @@ impl BuildLocations {
 
     /// Discover and validate one immutable workstation snapshot.
     pub fn discover(library_name: &LibraryName) -> Result<Self, BuildLocationsError> {
+        Self::discover_with_active_check(library_name, true)
+    }
+
+    /// Discover the explicitly configured workspace without consulting the
+    /// currently active macOS show.
+    ///
+    /// This is for isolated QA/export workspaces. Callers must opt into it so
+    /// a normal build still fails closed when its configured root differs from
+    /// the live `ProPresenter` show.
+    pub fn discover_configured_workspace(
+        library_name: &LibraryName,
+    ) -> Result<Self, BuildLocationsError> {
+        Self::discover_with_active_check(library_name, false)
+    }
+
+    fn discover_with_active_check(
+        library_name: &LibraryName,
+        check_active_show: bool,
+    ) -> Result<Self, BuildLocationsError> {
         let project_data_root = Self::discover_project_data_root()?;
         let configured_root = env_path("PROPRESENTER_DIR");
-        let active_root = active_macos_show_directory()?;
+        let active_root = check_active_show
+            .then(active_macos_show_directory)
+            .transpose()?
+            .flatten();
         let propresenter_root =
             select_propresenter_root(configured_root, active_root, default_propresenter_root())?;
         let presentation_library = propresenter_root
