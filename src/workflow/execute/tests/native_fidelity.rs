@@ -1069,7 +1069,7 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
         .any(|name| *name == "old-background.png"));
 }
 
-fn assert_local_playlist_link(playlist_path: &str, managed_path: &Path, arrangement_uuid: Uuid) {
+fn assert_local_playlist_link(playlist_path: &Path, managed_path: &Path, arrangement_uuid: Uuid) {
     let package = proflow_propresenter::package::read_playlist_package(playlist_path)
         .expect("read local playlist");
     assert_eq!(package.embedded_file_count(), 0);

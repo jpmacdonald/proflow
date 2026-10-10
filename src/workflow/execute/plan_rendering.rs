@@ -121,7 +121,7 @@ impl ServiceBuildExecutor<'_> {
                 .map_err(PlaylistError::from)?;
         Ok(RenderedPlan::Library {
             playlist_entry,
-            summary: library_summary(plan, prepared_path),
+            summary: library_summary(plan, PathBuf::from(prepared_path)),
         })
     }
 
@@ -150,7 +150,7 @@ impl ServiceBuildExecutor<'_> {
         };
         let (playlist_entry, slides, text_fit_evidence, resolved_macro_regions) =
             self.edit_description(plan, content, style, target, text_fit)?;
-        let file_path = playlist_entry.presentation_path().to_string();
+        let file_path = PathBuf::from(playlist_entry.presentation_path());
         Ok(RenderedPlan::Generated {
             playlist_entry,
             summary: edited_summary(plan, file_path, slides),
@@ -205,7 +205,7 @@ impl ServiceBuildExecutor<'_> {
             presentation: plan.playlist_name.clone(),
             reason: source.to_string(),
         })?;
-        let file_path = playlist_entry.presentation_path().to_string();
+        let file_path = PathBuf::from(playlist_entry.presentation_path());
         Ok(RenderedPlan::Generated {
             playlist_entry,
             summary: restyled_summary(plan, file_path, slides),

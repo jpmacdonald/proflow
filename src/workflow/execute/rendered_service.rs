@@ -1,7 +1,9 @@
 //! Rendered-service aggregation and receipt-facing presentation evidence.
 
+use std::path::PathBuf;
+
 use crate::workflow::plan::{ExpectedMacroPolicy, ExpectedMacroRegion, ResolvedItemPlan};
-use crate::workflow::report::{BuildServiceEntry, PlaylistSelectionSummary};
+use crate::workflow::report::{BuildEntryAction, BuildServiceEntry, PlaylistSelectionSummary};
 use crate::workflow::transaction::BuildFileTransaction;
 use proflow_propresenter::inspection::{
     summarize_presentation_structure, PresentationStructureSummary,
@@ -205,7 +207,9 @@ pub(super) fn skipped_summary(plan: &ResolvedItemPlan) -> BuildServiceEntry {
         output_key: plan.output_key.to_string(),
         position: plan.position,
         name: plan.pco_title.clone(),
-        action: format!("skipped: {}", plan.reason),
+        action: BuildEntryAction::Skipped {
+            reason: plan.reason.clone(),
+        },
         file_path: None,
         slides: None,
         expected_presentation: None,
@@ -216,12 +220,12 @@ pub(super) fn skipped_summary(plan: &ResolvedItemPlan) -> BuildServiceEntry {
     }
 }
 
-pub(super) fn library_summary(plan: &ResolvedItemPlan, file_path: String) -> BuildServiceEntry {
+pub(super) fn library_summary(plan: &ResolvedItemPlan, file_path: PathBuf) -> BuildServiceEntry {
     BuildServiceEntry {
         output_key: plan.output_key.to_string(),
         position: plan.position,
         name: plan.playlist_name.clone(),
-        action: "library".to_string(),
+        action: BuildEntryAction::Library,
         file_path: Some(file_path),
         slides: None,
         expected_presentation: None,
@@ -234,14 +238,14 @@ pub(super) fn library_summary(plan: &ResolvedItemPlan, file_path: String) -> Bui
 
 pub(super) fn edited_summary(
     plan: &ResolvedItemPlan,
-    file_path: String,
+    file_path: PathBuf,
     slides: usize,
 ) -> BuildServiceEntry {
     BuildServiceEntry {
         output_key: plan.output_key.to_string(),
         position: plan.position,
         name: plan.playlist_name.clone(),
-        action: "edited".to_string(),
+        action: BuildEntryAction::Edited,
         file_path: Some(file_path),
         slides: Some(slides),
         expected_presentation: None,
@@ -254,14 +258,14 @@ pub(super) fn edited_summary(
 
 pub(super) fn restyled_summary(
     plan: &ResolvedItemPlan,
-    file_path: String,
+    file_path: PathBuf,
     slides: usize,
 ) -> BuildServiceEntry {
     BuildServiceEntry {
         output_key: plan.output_key.to_string(),
         position: plan.position,
         name: plan.playlist_name.clone(),
-        action: "restyled".to_string(),
+        action: BuildEntryAction::Restyled,
         file_path: Some(file_path),
         slides: Some(slides),
         expected_presentation: None,
@@ -279,14 +283,14 @@ pub(super) fn generated_plan(
     text_fit_evidence: Vec<CueTextFitSummary>,
     resolved_macro_regions: Vec<ExpectedMacroRegion>,
 ) -> RenderedPlan {
-    let file_path = playlist_entry.presentation_path().to_string();
+    let file_path = PathBuf::from(playlist_entry.presentation_path());
     RenderedPlan::Generated {
         playlist_entry,
         summary: BuildServiceEntry {
             output_key: plan.output_key.to_string(),
             position: plan.position,
             name: plan.playlist_name.clone(),
-            action: "generated".to_string(),
+            action: BuildEntryAction::Generated,
             file_path: Some(file_path),
             slides: Some(slides),
             expected_presentation: None,

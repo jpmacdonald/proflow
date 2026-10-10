@@ -1,10 +1,31 @@
 //! Structured workflow result summaries.
+use std::path::PathBuf;
+
 use serde::Serialize;
 
 use crate::workflow::ExpectedPresentationContract;
 use proflow_propresenter::inspection::PresentationStructureSummary;
 use proflow_propresenter::playlist::PlaylistExportMode;
 use proflow_propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
+
+/// What the build did for one plan entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildEntryAction {
+    /// A new native presentation was rendered from plan content.
+    Generated,
+    /// An existing library presentation is linked unchanged.
+    Library,
+    /// An existing presentation had plan content rendered into it.
+    Edited,
+    /// An existing presentation had configured transforms applied.
+    Restyled,
+    /// The entry produced no output.
+    Skipped {
+        /// Operator-facing reason recorded on the plan.
+        reason: String,
+    },
+}
 
 /// Summary of a single item processed by the service build workflow.
 #[derive(Debug, Clone, Serialize)]
@@ -15,11 +36,11 @@ pub struct BuildServiceEntry {
     pub position: usize,
     /// Operator-visible presentation name.
     pub name: String,
-    /// Concise description of the operation performed.
-    pub action: String,
+    /// The operation performed.
+    pub action: BuildEntryAction,
     /// Existing or generated presentation path, when applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_path: Option<String>,
+    pub file_path: Option<PathBuf>,
     /// Number of rendered cues, when a presentation was generated or edited.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slides: Option<usize>,
@@ -59,9 +80,9 @@ pub struct PlaylistSelectionSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildServiceResult {
     /// Final playlist package path.
-    pub playlist_path: String,
+    pub playlist_path: PathBuf,
     /// Atomic machine-readable evidence sidecar committed with the playlist.
-    pub receipt_path: String,
+    pub receipt_path: PathBuf,
     /// Aggregate content revision recorded inside the receipt.
     pub receipt_revision: String,
     /// Native layout implementation identity bound into the receipt.

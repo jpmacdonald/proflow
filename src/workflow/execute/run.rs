@@ -1,7 +1,7 @@
 //! Execution of an approved plan through one filesystem transaction.
 
 #[cfg(test)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::BuildFileTransaction;
@@ -84,8 +84,8 @@ impl ServiceBuildExecutor<'_> {
         })?;
         receipt.write_to(&staged_receipt)?;
         let result = BuildServiceResult {
-            playlist_path: playlist_export.path.display().to_string(),
-            receipt_path: receipt_path.display().to_string(),
+            playlist_path: playlist_export.path.clone(),
+            receipt_path: receipt_path.clone(),
             receipt_revision: receipt.revision().to_string(),
             text_fit_contract: rendered.text_fit_contract,
             package_mode: bound_request.playlist_export.mode(),
@@ -173,8 +173,8 @@ impl PreparedService {
             catalog_updates: Vec::new(),
             font_programs: FontProgramSnapshot::diagnostic(),
             result: BuildServiceResult {
-                playlist_path: String::new(),
-                receipt_path: String::new(),
+                playlist_path: PathBuf::new(),
+                receipt_path: PathBuf::new(),
                 receipt_revision: String::new(),
                 text_fit_contract: TextFitContractSummary::diagnostic(),
                 package_mode: proflow_propresenter::playlist::PlaylistExportMode::LibraryLinks,

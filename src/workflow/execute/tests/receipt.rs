@@ -230,7 +230,7 @@ fn assert_receipt_files(
     assert!(artifacts.len() >= 2);
     assert!(artifacts
         .iter()
-        .all(|artifact| artifact["path"] != result.receipt_path));
+        .all(|artifact| artifact["path"] != result.receipt_path.display().to_string()));
     for artifact in artifacts {
         let path = PathBuf::from(artifact["path"].as_str().expect("artifact path"));
         let bytes = std::fs::read(&path).expect("committed artifact");
@@ -245,7 +245,7 @@ fn assert_receipt_files(
     }
     let playlist = artifacts.last().expect("playlist artifact");
     assert_eq!(playlist["kind"], "playlist");
-    assert_eq!(playlist["path"], result.playlist_path);
+    assert_eq!(playlist["path"], result.playlist_path.display().to_string());
     assert!(artifacts
         .iter()
         .any(|artifact| artifact["kind"] == "presentation"));
