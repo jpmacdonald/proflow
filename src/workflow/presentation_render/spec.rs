@@ -90,7 +90,7 @@ impl<'a, 'theme> CueCompiler<'a, 'theme> {
                 )
             };
             pack_description_for_slides(content, &mut fits)
-                .map_err(|error| map_partition_error(error, self.content_role.id()))?
+                .map_err(|error| map_partition_error(error, self.content_role.id().as_str()))?
         };
         for segments in slides {
             let role = self.content_role_id(starts_with_leader(&segments));
@@ -164,7 +164,7 @@ impl<'a, 'theme> CueCompiler<'a, 'theme> {
             )
         };
         split_verses_with_fit(verses, &mut fits)
-            .map_err(|error| map_partition_error(error, self.content_role.id()))?
+            .map_err(|error| map_partition_error(error, self.content_role.id().as_str()))?
             .into_iter()
             .map(|slide| {
                 let label = format!("{label_prefix}{}", slide.label());

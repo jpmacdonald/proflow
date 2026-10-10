@@ -9,6 +9,7 @@ use std::{
 use serde::Serialize;
 
 use crate::project_config::{BackgroundAssetPath, BackgroundId};
+use proflow_propresenter::presentation_spec::{CueRoleId, PresentationSpecError};
 
 /// A background identifier resolved to the exact project asset used by a plan.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -233,7 +234,7 @@ impl RestyleMacroSelector {
 #[derive(Debug, Clone, Serialize)]
 pub struct RenderRole {
     /// Stable cue-role identifier from project config.
-    id: String,
+    id: CueRoleId,
     /// Exact theme slide used for this cue region.
     slide: String,
     /// Semantic text field to exact named native graphics element.
@@ -334,6 +335,10 @@ impl RenderRole {
         if speaker_palette.is_some_and(|palette| palette.leader == palette.audience) {
             return Err(RenderPlanError::IndistinguishableSpeakerColors { role_id: id });
         }
+        let id = CueRoleId::new(id.clone()).map_err(|source| RenderPlanError::RoleIdRejected {
+            role_id: id,
+            source,
+        })?;
         Ok(Self {
             id,
             slide,
@@ -344,7 +349,7 @@ impl RenderRole {
     }
 
     /// Return the stable cue-role identifier from project config.
-    pub fn id(&self) -> &str {
+    pub const fn id(&self) -> &CueRoleId {
         &self.id
     }
 
@@ -402,7 +407,7 @@ impl RenderStyle {
             .is_some_and(|title| title.id() == content.id())
         {
             return Err(RenderPlanError::DuplicateRoleId {
-                role_id: content.id().to_string(),
+                role_id: content.id().as_str().to_string(),
             });
         }
         let max_lines_per_slide = max_lines_per_slide
@@ -527,6 +532,13 @@ pub enum RenderPlanError {
     InvalidRoleId {
         role_id: String,
         problem: IdentifierProblem,
+    },
+    /// The renderer's cue-role identity rules rejected a configured role id.
+    #[error("render role '{role_id}' is not a valid cue role identity: {source}")]
+    RoleIdRejected {
+        role_id: String,
+        #[source]
+        source: PresentationSpecError,
     },
     /// A render role contains no usable theme slide.
     #[error("render role '{role_id}' slide cannot be blank")]

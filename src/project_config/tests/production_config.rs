@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::workflow::plan::{
-    BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, RenderRole, RenderStyle,
+    BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, RenderStyle,
     RestyleMacroSelector,
 };
 use std::{collections::BTreeSet, path::Path};
@@ -256,7 +256,10 @@ fn assert_generated_recipes(config: &ProjectConfig) {
     );
     assert_background(&responsive, "default", "backgrounds/default.png");
     assert_eq!(responsive.max_lines_per_slide(), Some(8));
-    assert_eq!(responsive.title().map(RenderRole::id), Some("title"));
+    assert_eq!(
+        responsive.title().map(|role| role.id().as_str()),
+        Some("title")
+    );
     assert_eq!(responsive.content().id(), "responsive_scripture_prayer");
     let macro_pair = responsive
         .content()
@@ -290,7 +293,7 @@ fn assert_generated_recipes(config: &ProjectConfig) {
         );
         assert_background(&style, "default", "backgrounds/default.png");
         assert_eq!(style.max_lines_per_slide(), Some(8));
-        assert_eq!(style.title().map(RenderRole::id), Some("title"));
+        assert_eq!(style.title().map(|role| role.id().as_str()), Some("title"));
         assert_eq!(style.content().id(), "responsive_scripture_prayer");
     }
 

@@ -290,16 +290,21 @@ fn render_source_with_fit(
     audience_assets: Option<&RenderAssetSnapshot>,
     text_fit: &mut dyn RenderTextFit,
 ) -> Result<RenderedPresentation, PresentationRenderError> {
-    let content_id = CueRoleId::new(style.content().id())?;
+    let content_id = style.content().id().clone();
     let leader_content_id = style
         .content()
         .cue_macro()
         .and_then(|binding| binding.leader_enter())
-        .map(|_| CueRoleId::new(format!("{}{LEADER_ROLE_SUFFIX}", style.content().id())))
+        .map(|_| {
+            CueRoleId::new(format!(
+                "{}{LEADER_ROLE_SUFFIX}",
+                style.content().id().as_str()
+            ))
+        })
         .transpose()?;
     let title_id = match style.title() {
         Some(title) => {
-            let id = CueRoleId::new(title.id())?;
+            let id = title.id().clone();
             if id == content_id {
                 return Err(PresentationRenderError::DuplicateRole {
                     role: id.as_str().to_string(),
@@ -414,7 +419,7 @@ pub(crate) fn apply_role_macros(
         .and_then(|binding| binding.leader_enter())
         .is_some()
     {
-        let leader_id = format!("{}{LEADER_ROLE_SUFFIX}", style.content().id());
+        let leader_id = CueRoleId::new(format!("{}{LEADER_ROLE_SUFFIX}", style.content().id()))?;
         apply_macro_for_role(
             &mut presentation,
             rendered.cue_roles(),
@@ -443,8 +448,8 @@ pub(crate) fn resolved_macro_regions(
     let mut regions = Vec::new();
 
     for transition in rendered.cue_roles().transitions() {
-        let role_id = transition.role().as_str();
-        let binding = if role_id == leader_id {
+        let role_id = transition.role();
+        let binding = if role_id.as_str() == leader_id {
             style
                 .content()
                 .cue_macro()
@@ -481,7 +486,7 @@ pub(crate) fn resolved_macro_regions(
 fn apply_macro_for_role(
     presentation: &mut proflow_propresenter::unstable_native::rv_data::Presentation,
     cue_roles: &RenderedCueRoles,
-    role_id: &str,
+    role_id: &CueRoleId,
     starts_with_leader: bool,
     role: &RenderRole,
     macros: &MacroCache,
@@ -489,8 +494,7 @@ fn apply_macro_for_role(
     let Some(binding) = role.cue_macro() else {
         return Ok(());
     };
-    let role_id = CueRoleId::new(role_id)?;
-    for &index in cue_roles.entries(&role_id) {
+    for &index in cue_roles.entries(role_id) {
         let cue_count = presentation.cues.len();
         let cue = presentation
             .cues

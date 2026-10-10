@@ -368,7 +368,7 @@ fn cue_audience_macro<'a>(
     style: &'a RenderStyle,
 ) -> Option<(&'a RenderRole, &'a str)> {
     if let Some(title) = style.title() {
-        if cue_role.as_str() == title.id() {
+        if cue_role == title.id() {
             return title
                 .cue_macro()
                 .map(|binding| (title, binding.select(false)));

@@ -11,7 +11,7 @@ use thiserror::Error;
 use super::rtf::StyledSegment;
 
 /// Failure to construct a checked presentation specification.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum PresentationSpecError {
     /// A semantic identifier is blank or padded with whitespace.
     #[error("{kind} must be non-empty, unpadded, and contain no control characters")]
@@ -59,7 +59,8 @@ pub enum PresentationSpecError {
 }
 
 /// Stable semantic identity of one cue role.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(transparent)]
 pub struct CueRoleId(String);
 
 impl CueRoleId {
@@ -71,6 +72,24 @@ impl CueRoleId {
     /// Return the role identity text.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl std::fmt::Display for CueRoleId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for CueRoleId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for CueRoleId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
     }
 }
 
