@@ -273,7 +273,11 @@ pub(super) struct EffectiveConfigResponse {
 #[derive(Serialize)]
 pub(super) struct ReviewedPreviewResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) preview_revision: Option<String>,
+    pub(super) preview_revision: Option<super::review::PreviewRevision>,
+    /// An earlier executable preview for this plan that this preview replaced;
+    /// its revision can no longer be built.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) superseded_preview_revision: Option<super::review::PreviewRevision>,
     pub(super) playlist_name: String,
     pub(super) package_mode: PlaylistExportMode,
     pub(super) media_assets: Vec<ReviewedMediaAssetResponse>,

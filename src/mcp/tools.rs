@@ -22,7 +22,7 @@ use proflow_propresenter::theme::ThemeCache;
 use super::config::write_config_reviewed;
 use super::review::{
     bounded_days, bounded_usize, consume_reviewed_plan, parse_media_assets,
-    replace_prepared_snapshot, resolve_entry_override,
+    replace_prepared_snapshot, resolve_entry_override, PreviewRevision,
 };
 use super::schema::{
     format_category, BuildServiceArgs, CatalogAssetsArgs, ConfigValidationResponse,
@@ -296,13 +296,14 @@ impl ProFlowServer {
             crate::workflow::execute::BuildReview::Prepared(prepared) => Some(*prepared),
             crate::workflow::execute::BuildReview::NeedsReview(_) => None,
         };
-        let preview_revision = {
+        let replacement = {
             let mut snapshots = self.reviewed_plans.lock().await;
             replace_prepared_snapshot(&mut snapshots, args.plan_id, prepared)
         };
 
         json_result(&ReviewedPreviewResponse {
-            preview_revision,
+            preview_revision: replacement.revision,
+            superseded_preview_revision: replacement.superseded,
             playlist_name,
             package_mode,
             media_assets,
@@ -401,12 +402,14 @@ impl ProFlowServer {
         &self,
         Parameters(args): Parameters<BuildServiceArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let preview_revision = PreviewRevision::parse(&args.preview_revision)
+            .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))?;
         let reviewed = {
             let mut reviewed_plans = self.reviewed_plans.lock().await;
             consume_reviewed_plan(
                 &mut reviewed_plans,
                 &args.plan_id,
-                &args.preview_revision,
+                preview_revision,
                 args.service_name.as_deref(),
             )
             .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))?

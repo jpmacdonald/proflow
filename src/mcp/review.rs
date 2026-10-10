@@ -15,9 +15,42 @@ use proflow_propresenter::playlist::PlaylistMediaAsset;
 use super::mcp_err;
 use super::schema::{EntryOverride, EntryOverrideAction, PlaylistMediaAssetArg};
 
+/// One-time token naming a sealed preview held by this server process.
+///
+/// A revision is minted when a fully resolved preview is stored and is
+/// consumed by exactly one build attempt. It has no meaning to another
+/// process or after a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(transparent)]
+pub(super) struct PreviewRevision(uuid::Uuid);
+
+impl PreviewRevision {
+    fn fresh() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+
+    /// Parse a revision the caller echoed back from `preview_playlist`.
+    pub(super) fn parse(value: &str) -> Result<Self, ReviewedPlanError> {
+        uuid::Uuid::parse_str(value)
+            .map(Self)
+            .map_err(|_| ReviewedPlanError::MalformedRevision {
+                value: value.to_string(),
+            })
+    }
+}
+
 pub(super) struct PreparedPlanSnapshot {
-    pub(super) revision: String,
+    pub(super) revision: PreviewRevision,
     pub(super) prepared: PreparedBuildRequest,
+}
+
+/// Outcome of storing one preview for a plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PreviewReplacement {
+    /// Revision of the newly stored executable preview, if it was executable.
+    pub(super) revision: Option<PreviewRevision>,
+    /// Revision of the earlier executable preview this one invalidated.
+    pub(super) superseded: Option<PreviewRevision>,
 }
 
 /// Replace the executable snapshot for one plan with its latest successful
@@ -26,20 +59,16 @@ pub(super) fn replace_prepared_snapshot(
     snapshots: &mut HashMap<String, PreparedPlanSnapshot>,
     plan_id: String,
     prepared: Option<PreparedBuildRequest>,
-) -> Option<String> {
-    if let Some(prepared) = prepared {
-        let revision = uuid::Uuid::new_v4().to_string();
-        snapshots.insert(
-            plan_id,
-            PreparedPlanSnapshot {
-                revision: revision.clone(),
-                prepared,
-            },
-        );
-        Some(revision)
-    } else {
-        snapshots.remove(&plan_id);
-        None
+) -> PreviewReplacement {
+    let superseded = snapshots.remove(&plan_id).map(|old| old.revision);
+    let revision = prepared.map(|prepared| {
+        let revision = PreviewRevision::fresh();
+        snapshots.insert(plan_id, PreparedPlanSnapshot { revision, prepared });
+        revision
+    });
+    PreviewReplacement {
+        revision,
+        superseded,
     }
 }
 
@@ -49,6 +78,8 @@ pub(super) enum ReviewedPlanError {
     Missing { plan_id: String },
     #[error("preview_revision for plan '{plan_id}' is stale or invalid")]
     RevisionMismatch { plan_id: String },
+    #[error("preview_revision '{value}' is not a revision issued by preview_playlist")]
+    MalformedRevision { value: String },
     #[error(
         "service_name must match Planning Center metadata '{actual}' for the reviewed preview"
     )]
@@ -195,7 +226,7 @@ pub(super) fn bounded_days(
 pub(super) fn consume_reviewed_plan(
     snapshots: &mut HashMap<String, PreparedPlanSnapshot>,
     plan_id: &str,
-    preview_revision: &str,
+    preview_revision: PreviewRevision,
     supplied_service_name: Option<&str>,
 ) -> Result<PreparedPlanSnapshot, ReviewedPlanError> {
     let reviewed = snapshots

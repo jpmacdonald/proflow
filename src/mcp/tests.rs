@@ -3,7 +3,7 @@
 use super::config::{backup_config_path, candidate_locations, write_config_reviewed};
 use super::review::{
     bounded_days, bounded_usize, consume_reviewed_plan, replace_prepared_snapshot,
-    resolve_entry_override, PreparedPlanSnapshot, ReviewedPlanError,
+    resolve_entry_override, PreviewRevision, ReviewedPlanError,
 };
 use super::{BuildServiceArgs, EntryOverride, EntryOverrideAction, ProFlowServer};
 use crate::paths::{BuildLocationInputs, BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
@@ -230,6 +230,7 @@ fn build_tool_rejects_output_options_that_were_not_bound_by_preview() {
 fn unresolved_preview_serializes_without_an_executable_revision() {
     let response = super::schema::ReviewedPreviewResponse {
         preview_revision: None,
+        superseded_preview_revision: None,
         playlist_name: "Needs decisions".to_string(),
         package_mode: PlaylistExportMode::LibraryLinks,
         media_assets: Vec::new(),
@@ -260,23 +261,40 @@ fn preview_entry_override_rejects_misspelled_decisions() {
 
 #[test]
 fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview() {
-    let mut snapshots = HashMap::from([(
+    let mut snapshots = HashMap::new();
+    let first = replace_prepared_snapshot(
+        &mut snapshots,
         "plan-1".to_string(),
-        PreparedPlanSnapshot {
-            revision: "revision-2".to_string(),
-            prepared: PreparedBuildRequest::offline_test(
+        Some(
+            PreparedBuildRequest::offline_test("plan-1", "Sunday Morning", "First preview")
+                .expect("empty reviewed request should capture"),
+        ),
+    );
+    let stale_revision = first.revision.expect("executable preview mints a revision");
+    assert_eq!(first.superseded, None);
+
+    let second = replace_prepared_snapshot(
+        &mut snapshots,
+        "plan-1".to_string(),
+        Some(
+            PreparedBuildRequest::offline_test(
                 "plan-1",
                 "Sunday Morning",
                 "May 24, 2026 - Sunday Morning",
             )
             .expect("empty reviewed request should capture"),
-        },
-    )]);
+        ),
+    );
+    let current_revision = second
+        .revision
+        .expect("executable preview mints a revision");
+    assert_eq!(second.superseded, Some(stale_revision));
+    assert_ne!(stale_revision, current_revision);
 
     let stale = consume_reviewed_plan(
         &mut snapshots,
         "plan-1",
-        "revision-1",
+        stale_revision,
         Some("Sunday Morning"),
     );
     assert_eq!(
@@ -290,7 +308,7 @@ fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview()
     let mismatch = consume_reviewed_plan(
         &mut snapshots,
         "plan-1",
-        "revision-2",
+        current_revision,
         Some("Christmas Eve"),
     );
     assert_eq!(
@@ -304,7 +322,7 @@ fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview()
     let consumed = consume_reviewed_plan(
         &mut snapshots,
         "plan-1",
-        "revision-2",
+        current_revision,
         Some("Sunday Morning"),
     )
     .expect("matching revision should be consumed");
@@ -314,7 +332,7 @@ fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview()
     let reused = consume_reviewed_plan(
         &mut snapshots,
         "plan-1",
-        "revision-2",
+        current_revision,
         Some("Sunday Morning"),
     );
     assert_eq!(
@@ -326,23 +344,35 @@ fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview()
 }
 
 #[test]
+fn malformed_preview_revisions_are_rejected_before_lookup() {
+    let error = PreviewRevision::parse("revision-1").expect_err("not a minted revision");
+    assert_eq!(
+        error,
+        ReviewedPlanError::MalformedRevision {
+            value: "revision-1".to_string(),
+        }
+    );
+}
+
+#[test]
 fn unresolved_repreview_invalidates_an_older_prepared_revision() {
-    let mut snapshots = HashMap::from([(
+    let mut snapshots = HashMap::new();
+    let prepared = replace_prepared_snapshot(
+        &mut snapshots,
         "plan-1".to_string(),
-        PreparedPlanSnapshot {
-            revision: "stale-revision".to_string(),
-            prepared: PreparedBuildRequest::offline_test(
-                "plan-1",
-                "Sunday Morning",
-                "Old prepared playlist",
-            )
-            .expect("old prepared snapshot"),
-        },
-    )]);
+        Some(
+            PreparedBuildRequest::offline_test("plan-1", "Sunday Morning", "Old prepared playlist")
+                .expect("old prepared snapshot"),
+        ),
+    );
+    let stale_revision = prepared
+        .revision
+        .expect("executable preview mints a revision");
 
-    let revision = replace_prepared_snapshot(&mut snapshots, "plan-1".to_string(), None);
+    let replacement = replace_prepared_snapshot(&mut snapshots, "plan-1".to_string(), None);
 
-    assert!(revision.is_none());
+    assert_eq!(replacement.revision, None);
+    assert_eq!(replacement.superseded, Some(stale_revision));
     assert!(!snapshots.contains_key("plan-1"));
 }
 
