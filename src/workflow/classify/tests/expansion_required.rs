@@ -4,11 +4,11 @@ use super::super::expansion::{resolve_speaker, SpeakerResolution};
 use super::support::*;
 use crate::planning_center::types::{Category, Item};
 use crate::project_config::parse_project_config_str;
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify::build_plan;
 use crate::workflow::plan::{
     CueTransform, ItemKind, MacroTransform, ReadyAction, ResolvedItemPlan,
 };
+use proflow_propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 fn assert_managed_speaker_nametag(plan: &ResolvedItemPlan) {

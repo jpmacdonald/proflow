@@ -7,19 +7,19 @@
 
 use std::collections::BTreeSet;
 
-use crate::propresenter::audience::{
+use proflow_propresenter::audience::{
     AudienceLookDestinations, AudienceScreenDestination, PresentationDestination,
 };
-use crate::propresenter::generated::rv_data;
-use crate::propresenter::macros::macro_action_name;
-use crate::propresenter::presentation_spec::{CueRoleId, PresentationSpecError, TextField};
-use crate::propresenter::render::{ResolvedCueRole, TemplateSlotError};
-use crate::propresenter::rtf::{rtf_to_text, StyledSegment};
-use crate::propresenter::text_fit::{
+use proflow_propresenter::macros::macro_action_name;
+use proflow_propresenter::presentation_spec::{CueRoleId, PresentationSpecError, TextField};
+use proflow_propresenter::render::{ResolvedCueRole, TemplateSlotError};
+use proflow_propresenter::rtf::{rtf_to_text, StyledSegment};
+use proflow_propresenter::text_fit::{
     AudienceTextRendering, CueTextFitSummary, NativeTextFitOracle, NativeTextRequestError,
     TextFitDestinationIdentity, TextFitDestinationSummary, TextFitError, TextFitEvidence,
     TextFitRequest,
 };
+use proflow_propresenter::unstable_native::rv_data;
 
 use super::RenderAssetSnapshot;
 
@@ -30,7 +30,7 @@ pub(super) fn prove_restyled_text_fit(
 ) -> Result<Vec<CueTextFitSummary>, RestyleTextFitError> {
     let destination_role_id = CueRoleId::new("restyled_existing")?;
     let operator_cues =
-        crate::propresenter::arrangement::checked_operator_cue_indices(presentation)?;
+        proflow_propresenter::arrangement::checked_operator_cue_indices(presentation)?;
     let mut active_macro = None::<String>;
     let mut summaries = Vec::new();
 
@@ -332,7 +332,7 @@ fn digest_hex(digest: [u8; 32]) -> String {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum RestyleTextFitError {
     #[error(transparent)]
-    OperatorTraversal(#[from] crate::propresenter::arrangement::OperatorTraversalError),
+    OperatorTraversal(#[from] proflow_propresenter::arrangement::OperatorTraversalError),
     #[error(transparent)]
     Spec(#[from] PresentationSpecError),
     #[error(transparent)]

@@ -134,7 +134,7 @@ fn render_asset_snapshot_rejects_theme_slide_canvas_mismatch() {
             expected,
             problem: ThemeSlideSizeProblem::Mismatch(actual),
             ..
-        } if *expected == crate::propresenter::PresentationSize::FULL_HD
+        } if *expected == proflow_propresenter::PresentationSize::FULL_HD
             && actual.width() == 1280
             && actual.height() == 720
     )));
@@ -178,7 +178,7 @@ async fn review_rejects_render_asset_drift_before_staging_outputs() {
         .review_build_request(
             reviewed_request("Stale Review"),
             &[],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect_err("stale native assets must fail before review staging");
@@ -211,7 +211,7 @@ async fn prepared_build_rejects_render_asset_drift_before_commit() {
             .review_build_request(
                 reviewed_request("Stale Assets"),
                 &[generate_title_plan("pco:item:generated", test_style(None))],
-                crate::propresenter::PresentationSize::FULL_HD,
+                proflow_propresenter::PresentationSize::FULL_HD,
             )
             .await
             .expect("prepare reviewed build"),
@@ -398,7 +398,7 @@ async fn review_rejects_two_generated_overrides_with_one_physical_target() {
         .review_build_request(
             request,
             &[first, second],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect_err("two generated entries cannot share one output target");
@@ -450,7 +450,7 @@ async fn review_rejects_edit_and_generate_for_one_physical_target() {
         .review_build_request(
             request,
             &[generated, editable],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect_err("edit and generate cannot share one output target");
@@ -500,7 +500,7 @@ async fn review_rejects_restyle_and_edit_for_one_physical_target() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[restyled, edited],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect_err("restyle and edit cannot share one target");
@@ -546,7 +546,7 @@ async fn review_rejects_generated_target_selected_as_another_entries_source() {
         .review_build_request(
             request,
             &[generated, selected],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect_err("a generated output cannot also be another entry's source");

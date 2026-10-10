@@ -4,8 +4,10 @@
 use std::path::Path;
 
 use crate::planning_center::{PlanFreshnessError, PlanSnapshot};
-use crate::propresenter::playlist::{playlist_output_path, PlaylistExportMode, PlaylistMediaAsset};
-use crate::propresenter::PresentationSize;
+use proflow_propresenter::playlist::{
+    playlist_output_path, PlaylistExportMode, PlaylistMediaAsset,
+};
+use proflow_propresenter::PresentationSize;
 
 use super::overrides::resolve_requested_plans;
 use super::receipt::receipt_path_for_playlist;

@@ -1,14 +1,66 @@
+[workspace]
+members = ["crates/propresenter", "tools/proto-gen", "tools/schema-audit"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/jpmacdonald/proflow"
+
+# Versions shared by every workspace member live here so the format crate and
+# the host crate cannot drift apart.
+[workspace.dependencies]
+proflow-propresenter = { path = "crates/propresenter" }
+anyhow = "1.0.80"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff"] }
+proptest = "1.7"
+prost = "0.12"
+schemars = "1"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+sha2 = "0.10"
+tempfile = "3.10"
+thiserror = "2"
+tracing = "0.1.37"
+uuid = { version = "1.7", features = ["v4"] }
+walkdir = "2.4"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+# Specific denials
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+clone_on_ref_ptr = "deny"
+# Relaxations for this codebase
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+multiple_crate_versions = "allow"
+
 [package]
 name = "proflow"
 version = "0.1.0"
-edition = "2021"
-build = "build.rs"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 autobins = false
 description = "Planning Center to ProPresenter worship service workflow tool"
-license = "MIT"
-repository = "https://github.com/jimmy/proflow"
 keywords = ["propresenter", "planning-center", "worship"]
 categories = ["command-line-utilities"]
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "proflow_mcp"
@@ -64,77 +116,41 @@ path = "src/bin/release_audit.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
-# ProPresenter integration
-prost = "0.12"
-uuid = { version = "1.7", features = ["v4"] }
-regex = "1.9.0"
+proflow-propresenter.workspace = true
 
 # Planning Center integration
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 futures = "0.3"
-
-# Async
 tokio = { version = "1.36.0", features = ["full"] }
 
-# Serialization
-serde = { version = "1.0.197", features = ["derive"] }
-serde_json = "1.0.114"
+# Native document handling in the workflow and diagnostic binaries
+prost.workspace = true
+uuid.workspace = true
+image.workspace = true
+walkdir.workspace = true
+sha2.workspace = true
 
-# Date & time
-chrono = { version = "0.4", features = ["serde"] }
-
-# Error handling
-thiserror = "2"
-anyhow = "1.0.80"
-
-# Logging
-tracing = "0.1.37"
+# Serialization, time, errors, logging
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
 dotenv = { package = "dotenvy", version = "0.15.7" }
-
-# Common utilities
-fuzzy-matcher = "0.3"
-walkdir = "2.4"
-unicode-width = "0.1.11"
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
-crc32fast = "1.5"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff"] }
-
-# Additional dependencies
-dirs = "6"
-rayon = "1.10.0"
-sha2 = "0.10"
+dirs.workspace = true
 
 # MCP server
 rmcp = { version = "=1.4.0", features = ["server", "transport-io"] }
-schemars = "1"
+schemars.workspace = true
 
 [dev-dependencies]
-tempfile = "3.10"
+proflow-propresenter = { workspace = true, features = ["diagnostics"] }
+tempfile.workspace = true
 httptest = "0.16.4"
-proptest = "1.7"
+proptest.workspace = true
 
 [features]
 default = []
-dev-tools = []
+dev-tools = ["proflow-propresenter/dev-tools"]
 integration_test = []
-
-[lints.rust]
-unsafe_code = "forbid"
-missing_docs = "deny"
-
-[lints.clippy]
-all = { level = "deny", priority = -1 }
-pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-cargo = { level = "deny", priority = -1 }
-# Specific denials
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
-clone_on_ref_ptr = "deny"
-# Relaxations for this codebase
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-module_name_repetitions = "allow"
-must_use_candidate = "allow"
-multiple_crate_versions = "allow"

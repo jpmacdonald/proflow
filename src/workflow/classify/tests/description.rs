@@ -1,10 +1,10 @@
 use super::support::*;
 use crate::planning_center::types::{Category, Item};
 use crate::project_config::{parse_project_config_str, ExistingSource, PresentationPolicy};
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify::{build_plan, PreviewEntry};
 use crate::workflow::description_parser::{ParsedContent, ParsedSegment, SpeakerRole};
 use crate::workflow::plan::{CueMacro, PlanDisposition, ReadyAction, RenderRole};
+use proflow_propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 #[test]

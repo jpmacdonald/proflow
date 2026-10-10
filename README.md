@@ -202,8 +202,9 @@ parse -> normalize -> plan -> render -> validate -> export
 - `src/planning_center/` retrieves and normalizes source plans.
 - `src/workflow/` classifies items, creates reviewed plans, and coordinates
   execution.
-- `src/propresenter/` owns native formats, rendering, layout, arrangements,
-  media discovery, and package serialization.
+- `crates/propresenter/` is the `proflow-propresenter` crate. It owns native
+  formats, rendering, arrangements, media discovery, text fit, and package
+  serialization, and it cannot depend on workflow or project policy.
 - `src/mcp/` exposes the workflow without owning domain policy.
 - `src/setup/` reports installed asset facts.
 

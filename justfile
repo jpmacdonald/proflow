@@ -116,16 +116,16 @@ live-data:
       echo "skipped live-data: no project data root at $root (set PROFLOW_DATA)"; \
       exit 0; \
     fi; \
-    {{ cargo }} test --lib --all-features -- --ignored
+    {{ cargo }} test -p proflow --lib --all-features -- --ignored
 
 # Native ProPresenter fidelity: schema-exact codecs and an independently
 # exported playlist reconstructed through the production writer.
 parity:
-    {{ cargo }} test --test propresenter_codec_fidelity
-    {{ cargo }} test --test propresenter_native_export committed_independent_portable_export_has_complete_media_and_links -- --exact
-    {{ cargo }} test --lib propresenter::native_zip::tests::writes_native_forced_zip64_records_and_global_member_order
-    {{ cargo }} test --lib propresenter::package::tests::native_package_reconstruction_matches_evidenced_shape
-    {{ cargo }} test --lib propresenter::render::slide_instance::tests::every_committed_native_template_instantiates_a_closed_local_graph -- --exact
+    {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity
+    {{ cargo }} test -p proflow-propresenter --test propresenter_native_export committed_independent_portable_export_has_complete_media_and_links -- --exact
+    {{ cargo }} test -p proflow-propresenter --lib native_zip::tests::writes_native_forced_zip64_records_and_global_member_order
+    {{ cargo }} test -p proflow-propresenter --lib package::tests::native_package_reconstruction_matches_evidenced_shape
+    {{ cargo }} test -p proflow-propresenter --lib render::slide_instance::tests::every_committed_native_template_instantiates_a_closed_local_graph -- --exact
     {{ cargo }} run --quiet --features dev-tools --bin parity_smoke >/dev/null
 
 # The checked-in prost output must match the authoritative ProPresenter schema.
@@ -141,14 +141,14 @@ schema-audit app="/Applications/ProPresenter.app":
 # Audit a local directory of independent native exports without making that
 # machine-specific corpus part of the normal repository gate.
 parity-corpus corpus_dir:
-    PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_exported_playlist_documents_round_trip_byte_exactly -- --ignored --exact --nocapture
-    PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test --test propresenter_native_export native_export_corpus_matches_evidenced_archive_and_media_shape -- --ignored --exact --nocapture
+    PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity live_exported_playlist_documents_round_trip_byte_exactly -- --ignored --exact --nocapture
+    PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_native_export native_export_corpus_matches_evidenced_archive_and_media_shape -- --ignored --exact --nocapture
 
 # Audit a workstation library and its raw playlist document in place. The
 # tests are read-only and deliberately stay outside deterministic CI.
 parity-library library_dir:
-    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_native_presentations_round_trip_byte_exactly -- --ignored --exact --nocapture
-    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test --test propresenter_codec_fidelity live_playlist_document_round_trips_byte_exactly -- --ignored --exact --nocapture
+    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity live_native_presentations_round_trip_byte_exactly -- --ignored --exact --nocapture
+    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity live_playlist_document_round_trips_byte_exactly -- --ignored --exact --nocapture
 
 # External 1.0 gate after importing a generated playlist into the current
 # ProPresenter release and exporting its saved-back form. Pass both thumbnail

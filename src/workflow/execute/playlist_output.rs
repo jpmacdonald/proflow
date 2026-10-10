@@ -2,13 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::propresenter::playlist::{
+use crate::workflow::approval::CapturedSources;
+use crate::workflow::transaction::BuildFileTransaction;
+use proflow_propresenter::playlist::{
     playlist_output_path, resolve_playlist_export, write_playlist_set_file_with_reviewed_media,
     PlaylistEntry, PlaylistError, PlaylistExportEvidence, PlaylistMetadata, PlaylistSet,
     ResolvedPlaylistExport, ReviewedPlaylistExportIntent,
 };
-use crate::workflow::approval::CapturedSources;
-use crate::workflow::transaction::BuildFileTransaction;
 
 use super::request::BoundBuildRequest;
 use super::{captured_source_bytes, BuildServiceError, ServiceBuildExecutor};

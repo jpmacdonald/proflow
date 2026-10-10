@@ -129,7 +129,7 @@ async fn review_rejects_override_with_wrong_size_before_approval() {
             .review_build_request(
                 request,
                 &[plan],
-                crate::propresenter::PresentationSize::FULL_HD,
+                proflow_propresenter::PresentationSize::FULL_HD,
             )
             .await,
         Err(BuildServiceError::PresentationSizeInvariant { .. })
@@ -164,7 +164,7 @@ async fn review_rejects_override_with_missing_arrangement_before_approval() {
             .review_build_request(
                 request,
                 &[plan],
-                crate::propresenter::PresentationSize::FULL_HD,
+                proflow_propresenter::PresentationSize::FULL_HD,
             )
             .await,
         Err(BuildServiceError::ArrangementUnavailable { .. })
@@ -203,7 +203,7 @@ async fn unresolved_plan_cannot_cross_the_prepared_build_boundary() {
         .review_build_request(
             reviewed_request("Blocked"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("capture unresolved review");
@@ -235,7 +235,7 @@ async fn unresolved_proposal_does_not_capture_executable_sources() {
         .review_build_request(
             reviewed_request("Blocked"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("unresolved proposals are diagnostic, not executable");

@@ -8,15 +8,15 @@ use sha2::{Digest, Sha256};
 use crate::bible::BibleCorpusError;
 use crate::paths::BuildLocations;
 use crate::project_config::ProjectConfig;
-use crate::propresenter::audience::{
+use proflow_propresenter::audience::{
     AudienceDestinationError, AudienceLookDestinations, AudienceWorkspaceLoadError,
 };
-use crate::propresenter::background::BackgroundImageError;
-use crate::propresenter::macros::{MacroCache, MacroCacheLoadError};
-use crate::propresenter::render::TemplateSlotError;
-use crate::propresenter::resolution::PresentationSizeError;
-use crate::propresenter::theme::{ThemeCache, ThemeCacheLoadError, ThemeSlideError};
-use crate::propresenter::PresentationSize;
+use proflow_propresenter::background::BackgroundImageError;
+use proflow_propresenter::macros::{MacroCache, MacroCacheLoadError};
+use proflow_propresenter::render::TemplateSlotError;
+use proflow_propresenter::resolution::PresentationSizeError;
+use proflow_propresenter::theme::{ThemeCache, ThemeCacheLoadError, ThemeSlideError};
+use proflow_propresenter::PresentationSize;
 
 mod audience;
 mod fingerprint;

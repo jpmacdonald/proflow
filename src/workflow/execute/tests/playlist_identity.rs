@@ -23,7 +23,7 @@ async fn generated_item_uses_native_presentation_name_like_propresenter() {
         .review_build_request(
             reviewed_request("Reviewed Playlist"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("review generated item");
@@ -62,16 +62,16 @@ async fn generated_item_uses_native_presentation_name_like_propresenter() {
     assert_eq!(indexed.file_name(), "Call to Worship");
     assert!(indexed
         .presentation_size()
-        .matches(crate::propresenter::PresentationSize::FULL_HD));
+        .matches(proflow_propresenter::PresentationSize::FULL_HD));
     drop(catalog);
 
-    let package = crate::propresenter::package::read_playlist_package(&result.playlist_path)
+    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read generated playlist");
-    let items = crate::propresenter::package::presentation_items(package.document());
+    let items = proflow_propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "Call to Worship");
     assert_eq!(
-        crate::propresenter::playlist::linked_presentation_filename(&items[0]).as_deref(),
+        proflow_propresenter::playlist::linked_presentation_filename(&items[0]).as_deref(),
         Some("Call to Worship.pro")
     );
 
@@ -106,7 +106,7 @@ async fn unchanged_item_uses_native_presentation_name_like_propresenter() {
         .review_build_request(
             reviewed_request("Reviewed Playlist"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("review existing item");
@@ -116,9 +116,9 @@ async fn unchanged_item_uses_native_presentation_name_like_propresenter() {
         .await
         .expect("build existing item");
 
-    let package = crate::propresenter::package::read_playlist_package(&result.playlist_path)
+    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read playlist");
-    let items = crate::propresenter::package::presentation_items(package.document());
+    let items = proflow_propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "Greeting");
 }

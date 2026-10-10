@@ -3,13 +3,13 @@
 #[cfg(test)]
 use std::path::Path;
 
-use crate::propresenter::library::PreparedLibraryUpdate;
-use crate::propresenter::text_fit::FontProgramSnapshot;
-#[cfg(test)]
-use crate::propresenter::text_fit::TextFitContractSummary;
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::BuildFileTransaction;
 use crate::workflow::transaction::PreparedFileTransaction;
+use proflow_propresenter::library::PreparedLibraryUpdate;
+use proflow_propresenter::text_fit::FontProgramSnapshot;
+#[cfg(test)]
+use proflow_propresenter::text_fit::TextFitContractSummary;
 
 use super::receipt::{
     prepare_build_receipt, receipt_path_for_playlist, verify_sealed_build_artifacts,
@@ -42,7 +42,7 @@ impl ServiceBuildExecutor<'_> {
             reviewed.sources(),
             transaction,
         )?;
-        let expected_playlist_path = crate::propresenter::playlist::playlist_output_path(
+        let expected_playlist_path = proflow_propresenter::playlist::playlist_output_path(
             self.render_assets.locations().playlist_output(),
             &bound_request.playlist_name,
         );
@@ -177,7 +177,7 @@ impl PreparedService {
                 receipt_path: String::new(),
                 receipt_revision: String::new(),
                 text_fit_contract: TextFitContractSummary::diagnostic(),
-                package_mode: crate::propresenter::playlist::PlaylistExportMode::LibraryLinks,
+                package_mode: proflow_propresenter::playlist::PlaylistExportMode::LibraryLinks,
                 media_asset_count: 0,
                 total_items: 0,
                 entries: Vec::new(),

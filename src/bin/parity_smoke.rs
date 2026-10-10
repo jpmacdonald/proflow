@@ -9,16 +9,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use proflow::propresenter::media::presentation_media_dependencies;
-use proflow::propresenter::package::{
+use proflow_propresenter::media::presentation_media_dependencies;
+use proflow_propresenter::package::{
     compare_playlist_packages, embedded_presentation_summaries, infer_archive_shape,
     presentation_items, read_playlist_package, PlaylistArchiveShape, PlaylistPackageIssue,
 };
-use proflow::propresenter::playlist::{
+use proflow_propresenter::playlist::{
     build_playlist, linked_presentation_filename, write_playlist_document_for_fidelity,
     PlaylistEntry, PlaylistMetadata, SelectedArrangement,
 };
-use proflow::propresenter::unstable_native::rv_data::{self, playlist};
+use proflow_propresenter::unstable_native::rv_data::{self, playlist};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -170,7 +170,7 @@ fn run() -> Result<SmokeReport> {
 }
 
 fn default_fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/propresenter/native/corpus")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/propresenter/tests/fixtures/native/corpus")
 }
 
 fn read_manifest(fixture_root: &Path) -> Result<Manifest> {
@@ -285,8 +285,8 @@ fn inspect_playlist_fixture(
 
 fn round_trip_compare(
     expected_path: &Path,
-    package: &proflow::propresenter::package::PlaylistPackage,
-) -> Result<proflow::propresenter::package::PlaylistPackageComparison> {
+    package: &proflow_propresenter::package::PlaylistPackage,
+) -> Result<proflow_propresenter::package::PlaylistPackageComparison> {
     let items = presentation_items(package.document());
     let entries = items
         .iter()
@@ -352,7 +352,7 @@ fn round_trip_compare(
 }
 
 fn selected_arrangement(
-    item: &proflow::propresenter::package::PlaylistItemSummary,
+    item: &proflow_propresenter::package::PlaylistItemSummary,
     embedded_data: Option<&[u8]>,
 ) -> Result<Option<SelectedArrangement>> {
     let Some(uuid) = item.arrangement_uuid.as_deref() else {

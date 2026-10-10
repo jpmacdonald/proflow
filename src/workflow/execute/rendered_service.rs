@@ -1,13 +1,13 @@
 //! Rendered-service aggregation and receipt-facing presentation evidence.
 
-use crate::propresenter::inspection::{
-    summarize_presentation_structure, PresentationStructureSummary,
-};
-use crate::propresenter::playlist::PlaylistEntry;
-use crate::propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
 use crate::workflow::plan::{ExpectedMacroPolicy, ExpectedMacroRegion, ResolvedItemPlan};
 use crate::workflow::report::{BuildServiceEntry, PlaylistSelectionSummary};
 use crate::workflow::transaction::BuildFileTransaction;
+use proflow_propresenter::inspection::{
+    summarize_presentation_structure, PresentationStructureSummary,
+};
+use proflow_propresenter::playlist::PlaylistEntry;
+use proflow_propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
 
 use super::BuildServiceError;
 
@@ -36,7 +36,7 @@ impl RenderedService {
     pub(super) fn record(
         &mut self,
         plan: &ResolvedItemPlan,
-        presentation_size: crate::propresenter::PresentationSize,
+        presentation_size: proflow_propresenter::PresentationSize,
         rendered: RenderedPlan,
     ) -> Result<(), BuildServiceError> {
         let mut expected_presentation =
@@ -111,7 +111,7 @@ fn presentation_evidence(
             .ok_or_else(|| BuildServiceError::MissingPresentationEvidence {
                 output_key: output_key.to_string(),
             })?;
-    let presentation = crate::propresenter::deserialize::decode_presentation_bytes(
+    let presentation = proflow_propresenter::deserialize::decode_presentation_bytes(
         bytes,
         entry.presentation_path(),
     )
@@ -132,7 +132,7 @@ fn presentation_evidence(
         .map(
             |selected| -> Result<PlaylistSelectionSummary, BuildServiceError> {
                 let native_uuid =
-                    crate::propresenter::arrangement::selectable_arrangement_by_identity(
+                    proflow_propresenter::arrangement::selectable_arrangement_by_identity(
                         &presentation,
                         selected.uuid(),
                         selected.name(),
@@ -147,11 +147,11 @@ fn presentation_evidence(
                     .ok_or_else(|| BuildServiceError::PresentationSelectionEvidence {
                         output_key: output_key.to_string(),
                         arrangement: selected.name().to_string(),
-                        source: crate::propresenter::arrangement::ArrangementSelectionError::Unavailable,
+                        source: proflow_propresenter::arrangement::ArrangementSelectionError::Unavailable,
                     })?;
                 effective.selected_arrangement = Some(native_uuid);
                 let operator_cue_indexes =
-                    crate::propresenter::arrangement::checked_operator_cue_indices(&effective)
+                    proflow_propresenter::arrangement::checked_operator_cue_indices(&effective)
                         .map_err(|source| BuildServiceError::PresentationTraversalEvidence {
                             output_key: output_key.to_string(),
                             source,
@@ -169,7 +169,7 @@ fn presentation_evidence(
         &summary,
         entry
             .selected_arrangement()
-            .map(crate::propresenter::playlist::SelectedArrangement::name),
+            .map(proflow_propresenter::playlist::SelectedArrangement::name),
         expected,
     )
     .map_err(|source| BuildServiceError::PresentationContract {

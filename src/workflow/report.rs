@@ -1,10 +1,10 @@
 //! Structured workflow result summaries.
 use serde::Serialize;
 
-use crate::propresenter::inspection::PresentationStructureSummary;
-use crate::propresenter::playlist::PlaylistExportMode;
-use crate::propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
 use crate::workflow::ExpectedPresentationContract;
+use proflow_propresenter::inspection::PresentationStructureSummary;
+use proflow_propresenter::playlist::PlaylistExportMode;
+use proflow_propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
 
 /// Summary of a single item processed by the service build workflow.
 #[derive(Debug, Clone, Serialize)]

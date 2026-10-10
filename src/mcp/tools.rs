@@ -11,11 +11,11 @@ use rmcp::{tool, tool_router};
 use serde::Serialize;
 
 use crate::project_config::{parse_project_config_value, RawProjectConfig};
-use crate::propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode};
-use crate::propresenter::theme::ThemeCache;
 use crate::setup;
 use crate::workflow::classify;
 use crate::workflow::execute::BuildRequest;
+use proflow_propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode};
+use proflow_propresenter::theme::ThemeCache;
 
 use super::config::write_config_reviewed;
 use super::review::{

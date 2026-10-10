@@ -3,7 +3,7 @@
 ProFlow claims byte-fidelity with ProPresenter documents. The authoritative
 schema is not the published API documentation; it is the `FileDescriptorProto`
 set compiled into the ProCore engine. This audit compares the checked-in protos
-in `src/propresenter/proto/` against those embedded descriptors.
+in `crates/propresenter/proto/` against those embedded descriptors.
 
 Tooling: `tools/schema-audit` (Rust bin) and `tools/proto-gen` (emits the
 descriptor set as a sidecar). The drift gate is `just schema-audit`.

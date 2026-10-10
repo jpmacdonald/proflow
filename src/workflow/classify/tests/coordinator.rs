@@ -5,7 +5,6 @@ use crate::planning_center::types::{Category, Item};
 use crate::project_config::{
     parse_project_config_str, validate_project_config, DescriptionParserKind,
 };
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify::{
     build_plan, build_preview, render_preview, PreviewEntry, PreviewStatus, PreviewSummary,
 };
@@ -14,6 +13,7 @@ use crate::workflow::plan::{
     BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, OutputKey,
     PlanDisposition, ReadyAction, ResolvedItemPlan,
 };
+use proflow_propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 #[test]

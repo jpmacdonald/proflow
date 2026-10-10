@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use crate::paths::expand_user_path;
 use crate::planning_center::PlanLookaheadDays;
 use crate::project_config::{BackgroundId, ProjectConfig};
-use crate::propresenter::playlist::PlaylistMediaAsset;
 use crate::workflow::execute::{
     EntryOverride as WorkflowEntryOverride, OverrideAction, PreparedBuildRequest,
 };
 use crate::workflow::plan::ResolvedBackground;
+use proflow_propresenter::playlist::PlaylistMediaAsset;
 
 use super::mcp_err;
 use super::schema::{EntryOverride, EntryOverrideAction, PlaylistMediaAssetArg};

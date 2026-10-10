@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use super::item::OutputKeyError;
 use super::*;
-use crate::propresenter::SlideType;
+use proflow_propresenter::SlideType;
 
 #[test]
 fn output_keys_reject_invalid_ad_hoc_identities() {

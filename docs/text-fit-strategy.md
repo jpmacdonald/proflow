@@ -57,5 +57,5 @@ Deterministic, self-contained, mirrors the engine structure:
   is needed at all)
 - Font matching: what does the render machine substitute when fonts are
   missing, and can we pin fonts to avoid divergence?
-- tools/text-fit-oracle: current status, and whether it already does the
+- crates/propresenter/text-fit-oracle: current status, and whether it already does the
   shaped-layout simulation.

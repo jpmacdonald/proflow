@@ -8,11 +8,11 @@ use crate::project_config::{
     CompiledDirectTarget, CompiledExpansionStep, CompiledSpeakerTarget, ProjectConfig,
     ResolvedPresentationType,
 };
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify_matching::strip_speaker;
 use crate::workflow::plan::{
     ItemKind, OutputKey, PlanDisposition, ResolvedItemPlan, ReviewContext,
 };
+use proflow_propresenter::library::LibraryCatalog;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn process_expansion(

@@ -8,14 +8,14 @@ use prost::Message;
 use super::*;
 use crate::paths::{BuildLocationInputs, BuildLocations};
 use crate::project_config::{CueRoleConfig, ProjectConfig, RawProjectConfig};
-use crate::propresenter::generated::rv_data;
-use crate::propresenter::macros::{cue_has_macro_named, macro_action_name};
-use crate::propresenter::rtf::rtf_to_text;
 use crate::workflow::plan::{CueMacro, SpeakerPalette};
+use proflow_propresenter::macros::{cue_has_macro_named, macro_action_name};
+use proflow_propresenter::rtf::rtf_to_text;
+use proflow_propresenter::unstable_native::rv_data;
 
 fn fixture_slide() -> rv_data::PresentationSlide {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/propresenter/native/templates/scripture-template.pro");
+        .join("crates/propresenter/tests/fixtures/native/templates/scripture-template.pro");
     let bytes = std::fs::read(path).expect("read presentation fixture");
     let presentation =
         rv_data::Presentation::decode(bytes.as_slice()).expect("decode presentation fixture");
@@ -523,11 +523,11 @@ fn explicit_body_slot_changes_only_the_named_native_field() {
 
 #[test]
 fn final_fit_proves_each_field_of_a_multi_field_cue_independently() {
-    use crate::propresenter::presentation_spec::{
+    use proflow_propresenter::presentation_spec::{
         CueSpec, GroupSpec, PresentationSpec, TextBindings, TextField,
     };
-    use crate::propresenter::render::{render_presentation, RenderAssets};
-    use crate::propresenter::rtf::StyledSegment;
+    use proflow_propresenter::render::{render_presentation, RenderAssets};
+    use proflow_propresenter::rtf::StyledSegment;
 
     let (_root, themes) = theme_cache(vec![("Content", two_field_slide())]);
     let style = RenderStyle::new(
@@ -546,7 +546,7 @@ fn final_fit_proves_each_field_of_a_multi_field_cue_independently() {
     )
     .expect("valid style");
     let role_id =
-        crate::propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
+        proflow_propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
     let resolved = resolve_role(style.content(), role_id.clone(), &themes).expect("resolve role");
     let assets = RenderAssets::new(resolved, Vec::new()).expect("render assets");
     let bindings = TextBindings::new(
@@ -589,11 +589,11 @@ fn final_fit_proves_each_field_of_a_multi_field_cue_independently() {
     reason = "the regression assembles one complete two-field source and audience fixture"
 )]
 fn final_fit_proves_each_multi_field_audience_destination_independently() {
-    use crate::propresenter::presentation_spec::{
+    use proflow_propresenter::presentation_spec::{
         CueSpec, GroupSpec, PresentationSpec, TextBindings, TextField,
     };
-    use crate::propresenter::render::{render_presentation, RenderAssets};
-    use crate::propresenter::rtf::StyledSegment;
+    use proflow_propresenter::render::{render_presentation, RenderAssets};
+    use proflow_propresenter::rtf::StyledSegment;
 
     let root = tempfile::tempdir().expect("temporary render assets");
     let locations = render_asset_locations(root.path());
@@ -669,7 +669,7 @@ fn final_fit_proves_each_multi_field_audience_destination_independently() {
     )
     .expect("valid style");
     let role_id =
-        crate::propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
+        proflow_propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
     let resolved = resolve_role(style.content(), role_id.clone(), snapshot.themes())
         .expect("resolve source role");
     let assets = RenderAssets::new(resolved, Vec::new()).expect("render assets");

@@ -14,7 +14,7 @@ async fn generated_target_appearing_after_preview_is_rejected() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("review absent target");
@@ -58,7 +58,7 @@ async fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("wrong-sized generated target can be repaired");
@@ -75,8 +75,8 @@ async fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
     .expect("decode rebuilt target");
     assert_eq!(rebuilt.uuid, existing_uuid);
     assert!(
-        crate::propresenter::resolution::inspect_presentation_size(&rebuilt)
-            .matches(crate::propresenter::PresentationSize::FULL_HD)
+        proflow_propresenter::resolution::inspect_presentation_size(&rebuilt)
+            .matches(proflow_propresenter::PresentationSize::FULL_HD)
     );
 }
 
@@ -97,7 +97,7 @@ async fn generated_absent_target_gets_one_fresh_stable_uuid() {
             .review_build_request(
                 reviewed_request(&format!("Reviewed {build}")),
                 std::slice::from_ref(&plan),
-                crate::propresenter::PresentationSize::FULL_HD,
+                proflow_propresenter::PresentationSize::FULL_HD,
             )
             .await
             .expect("prepare generated target");
@@ -120,7 +120,7 @@ async fn generated_absent_target_gets_one_fresh_stable_uuid() {
         .review_build_request(
             reviewed_request("Reviewed stable"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("prepare stable rebuild");
@@ -170,7 +170,7 @@ async fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope()
         .review_build_request(
             reviewed_request("Edited"),
             &[plan],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("wrong-sized edit source can be repaired");
@@ -193,8 +193,8 @@ async fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope()
         Some("Preserved author")
     );
     assert!(
-        crate::propresenter::resolution::inspect_presentation_size(&edited)
-            .matches(crate::propresenter::PresentationSize::FULL_HD)
+        proflow_propresenter::resolution::inspect_presentation_size(&edited)
+            .matches(proflow_propresenter::PresentationSize::FULL_HD)
     );
 }
 
@@ -209,7 +209,7 @@ async fn playlist_changed_after_preview_is_rejected() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("review playlist target");
@@ -245,7 +245,7 @@ async fn review_rejects_a_symlink_output_target() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect_err("lexical symlink and physical write targets must not diverge");
@@ -283,7 +283,7 @@ fn reviewed_background_keeps_canonical_identity_after_symlink_retarget() {
         super::review::ReviewedRequest::offline(reviewed_request("Reviewed"))
             .expect("reviewed request"),
         vec![generate_title_plan("pco:item:main", style)],
-        crate::propresenter::PresentationSize::FULL_HD,
+        proflow_propresenter::PresentationSize::FULL_HD,
         root.path(),
         root.path(),
         std::iter::empty(),

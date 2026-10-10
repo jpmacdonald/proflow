@@ -2,9 +2,9 @@ use super::support::*;
 use crate::bible::BibleVersion;
 use crate::planning_center::types::{Category, Item, Scripture};
 use crate::project_config::{parse_project_config_str, PersonConfig, ProjectConfig};
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify::build_plan;
 use crate::workflow::plan::{ItemKind, ScriptureRequest};
+use proflow_propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 #[test]

@@ -23,20 +23,20 @@ use super::execute::RenderAssetSnapshot;
 use super::plan::{RenderRole, RenderStyle};
 use super::{ExpectedMacroRegion, ExpectedMacroSelector};
 use crate::bible::Verse;
-use crate::propresenter::arrangement::OperatorTraversalError;
-use crate::propresenter::macros::{replace_entry_macro, MacroApplyError, MacroCache};
-use crate::propresenter::presentation_spec::{
+use proflow_propresenter::arrangement::OperatorTraversalError;
+use proflow_propresenter::macros::{replace_entry_macro, MacroApplyError, MacroCache};
+use proflow_propresenter::presentation_spec::{
     CueRoleId, GroupSpec, PresentationSpec, PresentationSpecError, TextField,
 };
-use crate::propresenter::render::{
+use proflow_propresenter::render::{
     render_presentation, RenderAssets, RenderError, RenderedCueRoles, RenderedPresentation,
     ResolvedCueRole, TemplateSlotError,
 };
-use crate::propresenter::text_fit::{NativeTextFitOracle, NativeTextRequestError, TextFitError};
-use crate::propresenter::theme::{ThemeCache, ThemeSlideError, DEFAULT_MAX_LINES_PER_SLIDE};
+use proflow_propresenter::text_fit::{NativeTextFitOracle, NativeTextRequestError, TextFitError};
+use proflow_propresenter::theme::{ThemeCache, ThemeSlideError, DEFAULT_MAX_LINES_PER_SLIDE};
 
 #[cfg(test)]
-use crate::propresenter::text_flow::{TextLayout, TextLayoutError};
+use proflow_propresenter::text_flow::{TextLayout, TextLayoutError};
 
 const SCRIPTURE_DIVIDER_ROLE: &str = "__proflow_scripture_divider";
 pub(super) const LEADER_ROLE_SUFFIX: &str = "::leader_first";
@@ -436,7 +436,7 @@ pub(crate) fn resolved_macro_regions(
     style: &RenderStyle,
 ) -> Result<Vec<ExpectedMacroRegion>, PresentationRenderError> {
     let traversal =
-        crate::propresenter::arrangement::checked_operator_cue_indices(rendered.presentation())?;
+        proflow_propresenter::arrangement::checked_operator_cue_indices(rendered.presentation())?;
     let content_id = style.content().id();
     let leader_id = format!("{content_id}{LEADER_ROLE_SUFFIX}");
     let title = style.title();
@@ -479,7 +479,7 @@ pub(crate) fn resolved_macro_regions(
 }
 
 fn apply_macro_for_role(
-    presentation: &mut crate::propresenter::generated::rv_data::Presentation,
+    presentation: &mut proflow_propresenter::unstable_native::rv_data::Presentation,
     cue_roles: &RenderedCueRoles,
     role_id: &str,
     starts_with_leader: bool,
@@ -517,7 +517,7 @@ fn resolve_role<'a>(
 pub(super) fn bind_role_to_slide<'a>(
     role: &RenderRole,
     id: CueRoleId,
-    slide: &'a crate::propresenter::generated::rv_data::PresentationSlide,
+    slide: &'a proflow_propresenter::unstable_native::rv_data::PresentationSlide,
 ) -> Result<ResolvedCueRole<'a>, PresentationRenderError> {
     if role.text_slots().is_empty() {
         return ResolvedCueRole::body(id, slide).map_err(PresentationRenderError::from);
@@ -550,7 +550,7 @@ pub(super) fn bind_role_to_slide<'a>(
 pub(super) fn bind_role_to_audience_slide<'a>(
     role: &RenderRole,
     id: CueRoleId,
-    slide: &'a crate::propresenter::generated::rv_data::PresentationSlide,
+    slide: &'a proflow_propresenter::unstable_native::rv_data::PresentationSlide,
 ) -> Result<ResolvedCueRole<'a>, PresentationRenderError> {
     if role.text_slots().len() <= 1 {
         return ResolvedCueRole::body(id, slide).map_err(PresentationRenderError::from);

@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use super::request::{canonical_presentation_source, validate_identity, validate_path_identity};
 use super::BuildServiceError;
-use crate::propresenter::SlideType;
 use crate::workflow::plan::{ReadyAction, ResolvedBackground, ResolvedItemPlan};
+use proflow_propresenter::SlideType;
 
 /// Per-entry override applied during service build execution.
 ///

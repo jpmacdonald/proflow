@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use super::{ExistingTransform, RenderStyle, ResolvedBackground};
 use crate::bible::BibleVersion;
-use crate::propresenter::SlideType;
 use crate::workflow::description_parser::ParsedContent;
+use proflow_propresenter::SlideType;
 
 pub use crate::project_config::ItemKind;
 

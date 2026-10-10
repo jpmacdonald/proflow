@@ -16,13 +16,13 @@ use proflow::planning_center::PlanningCenterClient;
 #[cfg(test)]
 use proflow::project_config::RawProjectConfig;
 use proflow::project_config::{load_project_config, BackgroundId, ProjectConfig};
-use proflow::propresenter::library::LibraryCatalog;
-use proflow::propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode, PlaylistMetadata};
 use proflow::workflow::execute::{
     BuildRequest, EntryOverride, OverrideAction, OverrideSlideType, RenderAssetSnapshot,
     ServiceBuildExecutor,
 };
 use proflow::workflow::ResolvedBackground;
+use proflow_propresenter::library::LibraryCatalog;
+use proflow_propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode, PlaylistMetadata};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 

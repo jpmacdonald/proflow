@@ -11,6 +11,5 @@ pub mod mcp;
 pub mod paths;
 pub mod planning_center;
 pub mod project_config;
-pub mod propresenter;
 pub(crate) mod setup;
 pub mod workflow;

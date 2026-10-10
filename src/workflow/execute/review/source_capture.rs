@@ -3,14 +3,14 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::propresenter::media::{
-    presentation_media_dependencies_from_bytes, MediaDependencyResolution,
-};
-use crate::propresenter::playlist::PlaylistExportMode;
-use crate::propresenter::PresentationSize;
 use crate::workflow::approval::{OutputManifest, PhysicalPath, ReviewedServicePlan};
 use crate::workflow::plan::{ReadyAction, ResolvedItemPlan};
 use crate::workflow::presentation_render::PresentationRenderError;
+use proflow_propresenter::media::{
+    presentation_media_dependencies_from_bytes, MediaDependencyResolution,
+};
+use proflow_propresenter::playlist::PlaylistExportMode;
+use proflow_propresenter::PresentationSize;
 
 use super::{ReviewedRequest, ServiceBuildExecutor};
 use crate::workflow::execute::request::canonical_media_source;
@@ -195,7 +195,7 @@ fn resolve_reviewed_backgrounds(
         let Some(background) = plan.background() else {
             continue;
         };
-        let path = crate::propresenter::background::resolve_background_image(
+        let path = proflow_propresenter::background::resolve_background_image(
             project_data_root,
             background.file().as_path(),
         )?;
@@ -217,7 +217,7 @@ fn validate_captured_backgrounds(
                 output_key: background.output_key.clone(),
             }
         })?;
-        crate::propresenter::background::validate_background_image_bytes(&background.path, bytes)?;
+        proflow_propresenter::background::validate_background_image_bytes(&background.path, bytes)?;
     }
     Ok(())
 }
@@ -228,7 +228,7 @@ mod tests {
     use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 
     use super::*;
-    use crate::propresenter::background::{resolve_background_image, BackgroundImageError};
+    use proflow_propresenter::background::{resolve_background_image, BackgroundImageError};
 
     fn minimal_png(width: u32, height: u32) -> Vec<u8> {
         let pixel_count = usize::try_from(width).expect("width fits usize")

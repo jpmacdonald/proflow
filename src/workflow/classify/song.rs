@@ -2,7 +2,6 @@
 
 use super::file_stem;
 use crate::planning_center::types::Item;
-use crate::propresenter::library::{LibraryArrangement, LibraryCatalog, LibraryEntry};
 use crate::workflow::classify_matching::strip_title_prefix;
 use crate::workflow::library_search::{
     resolve_exact_library_file, resolve_song_library_match, strip_hymn_number,
@@ -12,6 +11,7 @@ use crate::workflow::plan::{
     ExistingTransform, ItemKind, OutputKey, PlanDisposition, ReadyAction, ResolvedItemPlan,
     ReviewContext,
 };
+use proflow_propresenter::library::{LibraryArrangement, LibraryCatalog, LibraryEntry};
 
 pub(super) enum SongPolicy {
     Review,

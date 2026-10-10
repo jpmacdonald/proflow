@@ -9,8 +9,8 @@ fn main() -> Result<()> {
     let check_only = env::args().skip(1).any(|arg| arg == "--check");
 
     let repo_root = repo_root()?;
-    let proto_dir = repo_root.join("src/propresenter/proto");
-    let generated_dir = repo_root.join("src/propresenter/generated");
+    let proto_dir = repo_root.join("crates/propresenter/proto");
+    let generated_dir = repo_root.join("crates/propresenter/src/generated");
     let target_file = generated_dir.join("rv_data.rs");
     let fds_file = repo_root.join("target/schema-audit/proflow.pb");
 

@@ -10,9 +10,9 @@ use crate::paths::{BuildLocationInputs, BuildLocations, BuildLocationsError, PRO
 use crate::project_config::{
     BackgroundAssetPath, BackgroundId, LibraryName, ProjectConfig, RawProjectConfig,
 };
-use crate::propresenter::playlist::PlaylistExportMode;
 use crate::workflow::classify::{PreviewResult, PreviewSummary};
 use crate::workflow::execute::{OverrideAction, PreparedBuildRequest};
+use proflow_propresenter::playlist::PlaylistExportMode;
 use std::collections::HashMap;
 use std::path::Path;
 

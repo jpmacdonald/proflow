@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::propresenter::library::{normalize_name, LibraryCatalog, LibraryEntry};
+use proflow_propresenter::library::{normalize_name, LibraryCatalog, LibraryEntry};
 
 /// Result of resolving a configured `library_file` target.
 ///
@@ -589,7 +589,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::propresenter::generated::rv_data;
+    use proflow_propresenter::unstable_native::rv_data;
     use prost::Message;
     use std::fs;
     use std::path::Path;

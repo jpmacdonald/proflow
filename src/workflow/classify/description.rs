@@ -3,7 +3,6 @@
 use super::file_stem;
 use crate::planning_center::types::Item;
 use crate::project_config::{DescriptionParserKind, ItemKind};
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify_matching::strip_speaker;
 use crate::workflow::description_parser::{self, ParsedContent};
 use crate::workflow::library_search::{resolve_exact_library_file, ExactLibraryFileMatch};
@@ -11,6 +10,7 @@ use crate::workflow::plan::{
     ExistingTransform, OutputKey, PlanDisposition, ReadyAction, RenderStyle, ResolvedItemPlan,
     ReviewContext,
 };
+use proflow_propresenter::library::LibraryCatalog;
 
 pub(super) enum StaticPolicy {
     Review,

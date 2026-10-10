@@ -141,7 +141,7 @@ pub(super) fn presentation_with_size(name: &str, width: f64, height: f64) -> rv_
 
 pub(super) fn fixture_template_slide() -> rv_data::PresentationSlide {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/propresenter/native/templates/scripture-template.pro");
+        .join("crates/propresenter/tests/fixtures/native/templates/scripture-template.pro");
     let bytes = std::fs::read(path).expect("read template fixture");
     let presentation = rv_data::Presentation::decode(bytes.as_slice()).expect("decode fixture");
     presentation

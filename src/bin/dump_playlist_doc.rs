@@ -5,8 +5,8 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use proflow::propresenter::package::read_playlist_package;
-use proflow::propresenter::unstable_native::rv_data::{self, playlist, playlist_item};
+use proflow_propresenter::package::read_playlist_package;
+use proflow_propresenter::unstable_native::rv_data::{self, playlist, playlist_item};
 use prost::Message;
 use std::{env, fs, path::Path};
 
@@ -18,7 +18,7 @@ fn main() {
             let data = fs::read(path).expect("read playlist document");
             rv_data::PlaylistDocument::decode(data.as_slice()).expect("decode PlaylistDocument")
         },
-        proflow::propresenter::package::PlaylistPackage::into_document,
+        proflow_propresenter::package::PlaylistPackage::into_document,
     );
 
     println!(

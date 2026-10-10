@@ -23,7 +23,7 @@ async fn changed_reviewed_source_is_rejected_before_commit() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[use_existing_plan("pco:item:main", source.clone())],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("capture reviewed request");
@@ -62,7 +62,7 @@ async fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
         .review_build_request(
             reviewed_request("Catalog Wait"),
             &[use_existing_plan("pco:item:main", source.clone())],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("capture reviewed request");
@@ -112,7 +112,7 @@ async fn reviewed_build_uses_bound_identity_without_refetch() {
                 "pco:item:main",
                 PlanDisposition::NeedsReview(ReviewContext::new(None)),
             )],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("review bound request");
@@ -149,7 +149,7 @@ async fn planning_center_drift_invalidates_prepared_artifacts_before_commit() {
         .review_planned_request(
             reviewed_request("Freshness Review"),
             &[test_plan("pco:item:main", PlanDisposition::Skip)],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
             super::review::ReviewedPlanningCenterSource::captured(freshness_snapshot()),
         )
         .await
@@ -270,7 +270,11 @@ async fn additional_portable_media_is_canonicalized_and_embedded() {
         archive_path: Some("extras/background.png".to_string()),
     }]);
     let reviewed = executor
-        .review_build_request(request, &[], crate::propresenter::PresentationSize::FULL_HD)
+        .review_build_request(
+            request,
+            &[],
+            proflow_propresenter::PresentationSize::FULL_HD,
+        )
         .await
         .expect("additional media is a supported portable package member");
     let reviewed = expect_prepared(reviewed);
@@ -287,7 +291,7 @@ async fn additional_portable_media_is_canonicalized_and_embedded() {
         .build_prepared_request(reviewed)
         .await
         .expect("commit portable package");
-    let package = crate::propresenter::package::read_playlist_package(&result.playlist_path)
+    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read portable package");
     assert_eq!(result.media_asset_count, 1);
     assert_eq!(
@@ -345,7 +349,7 @@ async fn portable_review_captures_managed_background() {
                 "pco:item:main",
                 test_style(Some(test_background("default"))),
             )],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("capture portable background");
@@ -390,7 +394,7 @@ async fn portable_review_rejects_custom_identity_for_managed_background() {
                 "pco:item:main",
                 test_style(Some(test_background("default"))),
             )],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect_err("managed media keeps its native archive identity");
@@ -465,7 +469,7 @@ async fn portable_review_prefers_show_relative_theme_media_over_stored_absolute_
         .review_build_request(
             request,
             &[generate_title_plan("pco:item:main", test_style(None))],
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         )
         .await
         .expect("capture theme media");
@@ -494,7 +498,7 @@ fn assert_show_relative_export(
     canonical: &Path,
     stale_media: &Path,
 ) {
-    let package = crate::propresenter::package::read_playlist_package(&result.playlist_path)
+    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read portable theme package");
     let canonical_string = canonical.display().to_string();
     assert_eq!(
@@ -514,7 +518,7 @@ fn assert_show_relative_export(
         .embedded_file_details()
         .find(|member| member.is_presentation)
         .expect("embedded generated presentation");
-    let dependencies = crate::propresenter::media::presentation_media_dependencies_from_bytes(
+    let dependencies = proflow_propresenter::media::presentation_media_dependencies_from_bytes(
         package
             .embedded_file(&presentation_member.name)
             .expect("embedded generated presentation bytes"),
@@ -525,7 +529,7 @@ fn assert_show_relative_export(
         dependencies[0].source(),
         format!("file://{}", stale_media.display())
     );
-    let crate::propresenter::media::MediaDependencyResolution::Available(resolved) =
+    let proflow_propresenter::media::MediaDependencyResolution::Available(resolved) =
         dependencies[0].resolve(Some(runtime.locations().propresenter_root()))
     else {
         panic!("ROOT_SHOW locator did not resolve to available media");

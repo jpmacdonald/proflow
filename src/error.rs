@@ -132,20 +132,20 @@ impl Error {
 }
 
 // Domain error conversions
-impl From<crate::propresenter::deserialize::ProPresenterError> for Error {
-    fn from(e: crate::propresenter::deserialize::ProPresenterError) -> Self {
+impl From<proflow_propresenter::deserialize::ProPresenterError> for Error {
+    fn from(e: proflow_propresenter::deserialize::ProPresenterError) -> Self {
         Self::ProPresenter(e.to_string())
     }
 }
 
-impl From<crate::propresenter::serialize::SerializeError> for Error {
-    fn from(e: crate::propresenter::serialize::SerializeError) -> Self {
+impl From<proflow_propresenter::serialize::SerializeError> for Error {
+    fn from(e: proflow_propresenter::serialize::SerializeError) -> Self {
         Self::ProPresenter(e.to_string())
     }
 }
 
-impl From<crate::propresenter::playlist::PlaylistError> for Error {
-    fn from(e: crate::propresenter::playlist::PlaylistError) -> Self {
+impl From<proflow_propresenter::playlist::PlaylistError> for Error {
+    fn from(e: proflow_propresenter::playlist::PlaylistError) -> Self {
         Self::Playlist(e.to_string())
     }
 }

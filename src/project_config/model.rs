@@ -104,7 +104,7 @@ pub struct ProjectDefaults {
     pub speaker_fallback_rule: Option<String>,
     /// Required slide-canvas size for generated and selected presentations.
     #[serde(default)]
-    pub presentation_size: crate::propresenter::PresentationSize,
+    pub presentation_size: proflow_propresenter::PresentationSize,
 }
 
 impl Default for ProjectDefaults {
@@ -116,7 +116,7 @@ impl Default for ProjectDefaults {
             days_ahead: None,
             bible_version: None,
             speaker_fallback_rule: None,
-            presentation_size: crate::propresenter::PresentationSize::FULL_HD,
+            presentation_size: proflow_propresenter::PresentationSize::FULL_HD,
         }
     }
 }

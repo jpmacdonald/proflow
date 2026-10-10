@@ -23,4 +23,5 @@ pub use plan::{
 pub use presentation_render::PresentationRenderError;
 pub mod report;
 mod scripture;
+mod scripture_layout;
 mod transaction;

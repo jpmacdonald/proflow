@@ -2,12 +2,12 @@ use std::path::Path;
 
 use crate::planning_center::types::{Category, Item, Scripture, Song};
 use crate::project_config::{parse_project_config_str, ProjectConfig};
-use crate::propresenter::generated::rv_data;
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::plan::{
     CueMacro, ItemKind, OutputKey, PlanDisposition, ReadyAction, RenderRole, RenderStyle,
     ResolvedItemPlan, ScriptureRequest, SpeakerPalette,
 };
+use proflow_propresenter::library::LibraryCatalog;
+use proflow_propresenter::unstable_native::rv_data;
 use prost::Message;
 use serde::Deserialize;
 use tempfile::tempdir;

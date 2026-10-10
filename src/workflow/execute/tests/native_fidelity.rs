@@ -1,6 +1,6 @@
 use super::super::presentation_output::ReviewedRenderTarget;
 use super::*;
-use crate::propresenter::SlideType;
+use proflow_propresenter::SlideType;
 use std::num::NonZeroUsize;
 
 #[test]
@@ -15,7 +15,7 @@ fn existing_preparation_uses_approved_bytes_and_checks_size() {
         &source,
         None,
         &approved,
-        crate::propresenter::PresentationSize::FULL_HD,
+        proflow_propresenter::PresentationSize::FULL_HD,
     )
     .expect("approved bytes prepare");
     assert_eq!(prepared.embedded_data, approved);
@@ -27,7 +27,7 @@ fn existing_preparation_uses_approved_bytes_and_checks_size() {
             &source,
             None,
             &legacy,
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         ),
         Err(BuildServiceError::PresentationSizeInvariant { output_key, .. })
             if output_key == "pco:item:main"
@@ -58,7 +58,7 @@ fn opaque_existing_bytes_are_reused_but_mutation_requires_exact_wire_parity() {
         &source,
         None,
         &bytes,
-        crate::propresenter::PresentationSize::FULL_HD,
+        proflow_propresenter::PresentationSize::FULL_HD,
     )
     .expect("unchanged opaque presentation remains reusable");
     assert_eq!(unchanged.embedded_data, bytes);
@@ -69,10 +69,10 @@ fn opaque_existing_bytes_are_reused_but_mutation_requires_exact_wire_parity() {
             &source,
             Some("Default"),
             &bytes,
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         ),
         Err(BuildServiceError::NativeEdit(
-            crate::propresenter::native_document::NativeEditError::LossyDecode { .. }
+            proflow_propresenter::native_document::NativeEditError::LossyDecode { .. }
         ))
     ));
 }
@@ -92,7 +92,7 @@ fn existing_without_arrangements_clears_stale_native_selection() {
         &source,
         None,
         &source_bytes,
-        crate::propresenter::PresentationSize::FULL_HD,
+        proflow_propresenter::PresentationSize::FULL_HD,
     )
     .expect("stale selection without arrangements is mechanically repairable");
     let embedded = rv_data::Presentation::decode(prepared.embedded_data.as_slice())
@@ -130,7 +130,7 @@ fn existing_arrangement_resolves_native_identity() {
         &source,
         Some("default"),
         &bytes,
-        crate::propresenter::PresentationSize::FULL_HD,
+        proflow_propresenter::PresentationSize::FULL_HD,
     )
     .expect("arrangement resolves case-insensitively");
     let embedded = rv_data::Presentation::decode(prepared.embedded_data.as_slice())
@@ -168,7 +168,7 @@ fn existing_arrangement_rejects_dangling_native_traversal() {
         &source,
         Some("Default"),
         &presentation.encode_to_vec(),
-        crate::propresenter::PresentationSize::FULL_HD,
+        proflow_propresenter::PresentationSize::FULL_HD,
     )
     .expect_err("dangling arrangement cannot be selected");
 
@@ -197,7 +197,7 @@ fn existing_arrangement_rejects_duplicate_case_insensitive_names() {
             &source,
             Some("DEFAULT"),
             &presentation.encode_to_vec(),
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         ),
         Err(BuildServiceError::ArrangementAmbiguous { matches: 2, .. })
     ));
@@ -254,7 +254,7 @@ fn arrangement_group_macro_policy_rejects_unexpected_name_atomically() {
 
     assert!(matches!(
         error,
-        crate::propresenter::macros::MacroApplyError::UnexpectedGroup { .. }
+        proflow_propresenter::macros::MacroApplyError::UnexpectedGroup { .. }
     ));
     assert_eq!(presentation, original);
 }
@@ -271,10 +271,10 @@ fn existing_preparation_rejects_decodable_document_without_native_identity() {
             &source,
             None,
             &identity_less,
-            crate::propresenter::PresentationSize::FULL_HD,
+            proflow_propresenter::PresentationSize::FULL_HD,
         ),
         Err(BuildServiceError::Deserialize(
-            crate::propresenter::deserialize::ProPresenterError::UnsupportedFormat { .. }
+            proflow_propresenter::deserialize::ProPresenterError::UnsupportedFormat { .. }
         ))
     ));
 }
@@ -362,28 +362,28 @@ fn styled_cue_orders_slide_macro_then_background() {
     let executor = runtime.executor();
     let template = fixture_template_slide();
     let role_id =
-        crate::propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
-    let cue = crate::propresenter::presentation_spec::CueSpec::text(
+        proflow_propresenter::presentation_spec::CueRoleId::new("content").expect("valid role");
+    let cue = proflow_propresenter::presentation_spec::CueSpec::text(
         role_id.clone(),
-        crate::propresenter::presentation_spec::TextBindings::single(
-            crate::propresenter::presentation_spec::TextField::body(),
-            vec![crate::propresenter::rtf::StyledSegment::unstyled(
+        proflow_propresenter::presentation_spec::TextBindings::single(
+            proflow_propresenter::presentation_spec::TextField::body(),
+            vec![proflow_propresenter::rtf::StyledSegment::unstyled(
                 "Generated content",
             )],
         ),
     );
-    let spec = crate::propresenter::presentation_spec::PresentationSpec::new(
+    let spec = proflow_propresenter::presentation_spec::PresentationSpec::new(
         "Styled",
-        crate::propresenter::presentation_spec::GroupSpec::anonymous(cue, Vec::new()),
+        proflow_propresenter::presentation_spec::GroupSpec::anonymous(cue, Vec::new()),
         Vec::new(),
     )
     .expect("valid presentation specification");
     let role =
-        crate::propresenter::render::ResolvedCueRole::body(role_id, &template).expect("body role");
+        proflow_propresenter::render::ResolvedCueRole::body(role_id, &template).expect("body role");
     let assets =
-        crate::propresenter::render::RenderAssets::new(role, Vec::new()).expect("render assets");
+        proflow_propresenter::render::RenderAssets::new(role, Vec::new()).expect("render assets");
     let mut rendered =
-        crate::propresenter::render::render_presentation(&spec, &assets).expect("render fixture");
+        proflow_propresenter::render::render_presentation(&spec, &assets).expect("render fixture");
     let macro_binding = CueMacro::new("Styled Content".to_string(), None).expect("valid cue macro");
     let style = RenderStyle::new(
         Some(test_background("styled")),
@@ -432,7 +432,7 @@ fn macro_only_graphics_transform_preserves_native_background_action_bytes() {
     let mut runtime = TestRuntime::new(root.path());
     install_named_macros(&mut runtime, &["Graphics"]);
     let mut source = presentation_with_size("Native Graphic", 1920.0, 1080.0);
-    crate::propresenter::background::add_reviewed_background_to_first_cue(
+    proflow_propresenter::background::add_reviewed_background_to_first_cue(
         &mut source,
         &root.path().join("native-graphic.png"),
         &minimal_png(3, 2),
@@ -570,7 +570,7 @@ fn combined_transform_retains_one_consistent_nametag_cue() {
     );
 
     assert_eq!(
-        crate::propresenter::arrangement::operator_cue_indices(&managed),
+        proflow_propresenter::arrangement::operator_cue_indices(&managed),
         vec![0]
     );
     assert_eq!(managed.cues.len(), 1);
@@ -668,7 +668,7 @@ fn run_native_transform(
                 write_path: &output_path,
                 final_path: &output_path,
                 existing_bytes: None,
-                presentation_size: crate::propresenter::PresentationSize::FULL_HD,
+                presentation_size: proflow_propresenter::PresentationSize::FULL_HD,
                 background,
             },
         )
@@ -752,7 +752,7 @@ fn native_background_action_bytes(presentation: &rv_data::Presentation) -> Vec<V
         .cues
         .iter()
         .flat_map(|cue| &cue.actions)
-        .filter(|action| crate::propresenter::background::is_background_media_action(action))
+        .filter(|action| proflow_propresenter::background::is_background_media_action(action))
         .map(Message::encode_to_vec)
         .collect()
 }
@@ -764,7 +764,7 @@ fn native_macro_action_bytes(presentation: &rv_data::Presentation) -> Vec<Vec<Ve
         .map(|cue| {
             cue.actions
                 .iter()
-                .filter(|action| crate::propresenter::macros::macro_action_name(action).is_some())
+                .filter(|action| proflow_propresenter::macros::macro_action_name(action).is_some())
                 .map(Message::encode_to_vec)
                 .collect()
         })
@@ -774,7 +774,7 @@ fn native_macro_action_bytes(presentation: &rv_data::Presentation) -> Vec<Vec<Ve
 fn macro_names(cue: &rv_data::Cue) -> Vec<&str> {
     cue.actions
         .iter()
-        .filter_map(crate::propresenter::macros::macro_action_name)
+        .filter_map(proflow_propresenter::macros::macro_action_name)
         .collect()
 }
 
@@ -840,7 +840,7 @@ async fn restyled_song_atomically_rewrites_its_canonical_library_file() {
             .review_build_request(
                 fixture.request.clone(),
                 std::slice::from_ref(&fixture.plan),
-                crate::propresenter::PresentationSize::FULL_HD,
+                proflow_propresenter::PresentationSize::FULL_HD,
             )
             .await
             .expect("review restyled song"),
@@ -861,7 +861,7 @@ async fn restyled_song_atomically_rewrites_its_canonical_library_file() {
             .review_build_request(
                 fixture.request,
                 &[fixture.plan],
-                crate::propresenter::PresentationSize::FULL_HD,
+                proflow_propresenter::PresentationSize::FULL_HD,
             )
             .await
             .expect("review second restyle"),
@@ -992,7 +992,7 @@ fn source_song(runtime: &TestRuntime, root: &Path) -> (rv_data::Presentation, Uu
         r#type: rv_data::action::ActionType::Macro as i32,
         ..rv_data::Action::default()
     });
-    crate::propresenter::background::add_reviewed_background_to_first_cue(
+    proflow_propresenter::background::add_reviewed_background_to_first_cue(
         &mut source,
         &root.join("old-background.png"),
         &minimal_png(1, 1),
@@ -1010,7 +1010,7 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
         .project_data_root()
         .join("backgrounds/default.png");
     let mut expected = fixture.source.clone();
-    crate::propresenter::background::replace_arrangement_entry_backgrounds(
+    proflow_propresenter::background::replace_arrangement_entry_backgrounds(
         &mut expected,
         &background_path,
         &std::fs::read(&background_path).expect("read expected background"),
@@ -1025,7 +1025,7 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
         fixture.runtime.render_assets.macros(),
     )
     .expect("apply expected macro transform");
-    crate::propresenter::render::apply_application_info(
+    proflow_propresenter::render::apply_application_info(
         &mut expected,
         Some(fixture.runtime.playlist_metadata.application_info()),
     );
@@ -1054,7 +1054,7 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
         Some(&fixture.default_uuid.to_string())
     );
     assert_eq!(
-        crate::propresenter::macros::macro_action_name(&managed.cues[0].actions[1]),
+        proflow_propresenter::macros::macro_action_name(&managed.cues[0].actions[1]),
         Some("Song")
     );
     assert_eq!(
@@ -1062,7 +1062,7 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
         "replacing a stale macro preserves its native wrapper identity"
     );
     let dependencies =
-        crate::propresenter::media::presentation_media_dependencies_from_bytes(managed_bytes)
+        proflow_propresenter::media::presentation_media_dependencies_from_bytes(managed_bytes)
             .expect("inspect managed media");
     let dependency_names = dependencies
         .iter()
@@ -1075,10 +1075,10 @@ fn assert_restyled_copy(fixture: &RestyleFixture, managed_bytes: &[u8]) {
 }
 
 fn assert_local_playlist_link(playlist_path: &str, managed_path: &Path, arrangement_uuid: Uuid) {
-    let package = crate::propresenter::package::read_playlist_package(playlist_path)
+    let package = proflow_propresenter::package::read_playlist_package(playlist_path)
         .expect("read local playlist");
     assert_eq!(package.embedded_file_count(), 0);
-    let items = crate::propresenter::package::presentation_items(package.document());
+    let items = proflow_propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].arrangement_name, "Default");
     assert_eq!(
@@ -1086,7 +1086,7 @@ fn assert_local_playlist_link(playlist_path: &str, managed_path: &Path, arrangem
         Some(arrangement_uuid.to_string().as_str())
     );
     assert_eq!(
-        crate::propresenter::playlist::linked_presentation_filename(&items[0]).as_deref(),
+        proflow_propresenter::playlist::linked_presentation_filename(&items[0]).as_deref(),
         managed_path.file_name().and_then(|name| name.to_str())
     );
 }

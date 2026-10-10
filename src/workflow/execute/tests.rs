@@ -9,15 +9,15 @@ use super::*;
 use crate::paths::{BuildLocationInputs, BuildLocations};
 use crate::project_config::ProjectConfig;
 use crate::project_config::{BackgroundAssetPath, BackgroundId, CueRoleConfig};
-use crate::propresenter::playlist::{
-    playlist_output_path, PlaylistExportIntent, PlaylistMediaAsset,
-};
-use crate::propresenter::theme::ThemeCacheLoadError;
-use crate::propresenter::SlideType;
 use crate::workflow::description_parser::{ParsedContent, ParsedSegment, SpeakerRole};
 use crate::workflow::plan::{
     CueMacro, OutputKey, PlanSemanticsError, RenderRole, ReviewContext, ScriptureContent,
 };
+use proflow_propresenter::playlist::{
+    playlist_output_path, PlaylistExportIntent, PlaylistMediaAsset,
+};
+use proflow_propresenter::theme::ThemeCacheLoadError;
+use proflow_propresenter::SlideType;
 
 mod support;
 use support::*;

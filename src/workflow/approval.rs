@@ -244,7 +244,7 @@ pub(super) fn plan_source_paths(
         }
         if let Some(background) = plan.background() {
             let configured = background.file().as_path();
-            let resolved = crate::propresenter::background::resolve_background_image(
+            let resolved = proflow_propresenter::background::resolve_background_image(
                 project_data_root,
                 configured,
             )

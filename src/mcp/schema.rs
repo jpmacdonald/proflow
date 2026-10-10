@@ -9,9 +9,9 @@ use serde::Serialize;
 
 use crate::planning_center::types::Category;
 use crate::project_config::{BackgroundId, ConfigValidationIssue, ProjectConfig};
-use crate::propresenter::playlist::PlaylistExportMode;
 use crate::workflow::classify;
 use crate::workflow::execute::OverrideSlideType;
+use proflow_propresenter::playlist::PlaylistExportMode;
 
 /// Arguments for the `preview_playlist` tool.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

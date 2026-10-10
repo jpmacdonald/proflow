@@ -2,19 +2,19 @@
 
 use std::path::Path;
 
-use crate::propresenter::generated::rv_data;
-use crate::propresenter::native_document::OpaquePresentation;
-use crate::propresenter::playlist::{canonical_presentation_name, PlaylistEntry};
-use crate::propresenter::render::{
-    apply_application_info, preserve_edited_document_metadata, preserve_generated_target_metadata,
-    RenderedPresentation,
-};
-use crate::propresenter::text_fit::{CueTextFitSummary, NativeTextFitOracle};
 use crate::workflow::description_parser::ParsedContent;
 use crate::workflow::plan::{ExpectedMacroRegion, RenderStyle, ResolvedItemPlan};
 use crate::workflow::presentation_render::{
     render_source_with_native_fit, resolved_macro_regions, PresentationSource,
 };
+use proflow_propresenter::native_document::OpaquePresentation;
+use proflow_propresenter::playlist::{canonical_presentation_name, PlaylistEntry};
+use proflow_propresenter::render::{
+    apply_application_info, preserve_edited_document_metadata, preserve_generated_target_metadata,
+    RenderedPresentation,
+};
+use proflow_propresenter::text_fit::{CueTextFitSummary, NativeTextFitOracle};
+use proflow_propresenter::unstable_native::rv_data;
 
 use super::super::{BuildServiceError, ServiceBuildExecutor};
 use super::target::{
@@ -202,7 +202,7 @@ impl ServiceBuildExecutor<'_> {
         match (style.background(), reviewed_background) {
             (Some(_), Some(background)) => {
                 update_rendered_document(rendered, |presentation| {
-                    crate::propresenter::background::add_reviewed_background_to_first_cue(
+                    proflow_propresenter::background::add_reviewed_background_to_first_cue(
                         presentation,
                         background.path,
                         background.data,

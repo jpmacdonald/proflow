@@ -382,52 +382,6 @@ pub fn expand_user_path(value: impl AsRef<OsStr>) -> PathBuf {
     dirs::home_dir().map_or_else(|| path.clone(), |home| home.join(relative))
 }
 
-/// Resolve an existing path or a potentially absent output to one physical
-/// comparison identity.
-///
-/// `Path::canonicalize` cannot resolve an absent leaf. Resolving the nearest
-/// existing ancestor and appending the normalized suffix gives callers one
-/// representation for relative paths, parent components, and symlinked
-/// directories without requiring the target itself to exist.
-pub(crate) fn physical_path_identity(path: &Path) -> std::io::Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut ancestor = absolute.as_path();
-    loop {
-        match ancestor.canonicalize() {
-            Ok(canonical_ancestor) => {
-                let suffix = absolute
-                    .strip_prefix(ancestor)
-                    .map_err(|error| std::io::Error::other(error.to_string()))?;
-                return Ok(append_normalized_suffix(canonical_ancestor, suffix));
-            }
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                ancestor = ancestor.parent().ok_or(source)?;
-            }
-            Err(source) => return Err(source),
-        }
-    }
-}
-
-fn append_normalized_suffix(mut base: PathBuf, suffix: &Path) -> PathBuf {
-    for component in suffix.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                base.pop();
-            }
-            std::path::Component::Normal(component) => base.push(component),
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                base.push(component.as_os_str());
-            }
-        }
-    }
-    base
-}
-
 fn discovered_data_root() -> PathBuf {
     if let Some(base) = env_path("PROFLOW_DATA") {
         return base;
@@ -524,24 +478,6 @@ mod tests {
         assert_eq!(
             default_playlist_output_dir(root),
             PathBuf::from("/show/ProPresenter/Playlists/ProFlow")
-        );
-    }
-
-    #[test]
-    fn physical_identity_normalizes_absent_paths_and_parent_components() {
-        let root = tempfile::tempdir().expect("temporary root");
-        let library = root.path().join("library");
-        std::fs::create_dir(&library).expect("library directory");
-
-        let identity = physical_path_identity(&library.join("nested/../Song.pro"))
-            .expect("resolve absent target");
-
-        assert_eq!(
-            identity,
-            library
-                .canonicalize()
-                .expect("canonical library")
-                .join("Song.pro")
         );
     }
 
@@ -655,23 +591,5 @@ mod tests {
                     if reason == expected_reason
             ));
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn physical_identity_resolves_symlinked_ancestors() {
-        let root = tempfile::tempdir().expect("temporary root");
-        let physical = root.path().join("physical");
-        let alias = root.path().join("alias");
-        std::fs::create_dir(&physical).expect("physical directory");
-        std::os::unix::fs::symlink(&physical, &alias).expect("directory alias");
-
-        assert_eq!(
-            physical_path_identity(&alias.join("Song.pro")).expect("resolve alias"),
-            physical
-                .canonicalize()
-                .expect("canonical physical directory")
-                .join("Song.pro")
-        );
     }
 }

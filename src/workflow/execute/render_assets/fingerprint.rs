@@ -6,8 +6,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::project_config::ProjectConfig;
-use crate::propresenter::macros::MacroCache;
-use crate::propresenter::theme::ThemeCache;
+use proflow_propresenter::macros::MacroCache;
+use proflow_propresenter::theme::ThemeCache;
 
 use super::audience::ConfiguredAudienceDestinations;
 

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::planning_center::PlanSnapshot;
-use crate::propresenter::playlist::PlaylistExportIntent;
+use proflow_propresenter::playlist::PlaylistExportIntent;
 
 use super::overrides::{validate_request_edits, EntryOverride};
 use super::{BuildServiceError, ServiceBuildExecutor};

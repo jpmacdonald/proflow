@@ -16,10 +16,10 @@ use crate::config::Config;
 use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
 use crate::planning_center::PlanningCenterClient;
 use crate::project_config::load_project_config;
-use crate::propresenter::groups::GroupCatalog;
-use crate::propresenter::library::LibraryCatalog;
-use crate::propresenter::playlist::PlaylistMetadata;
 use crate::workflow::execute::{RenderAssetSnapshot, ServiceBuildExecutor};
+use proflow_propresenter::groups::GroupCatalog;
+use proflow_propresenter::library::LibraryCatalog;
+use proflow_propresenter::playlist::PlaylistMetadata;
 
 mod config;
 mod review;

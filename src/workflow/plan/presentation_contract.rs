@@ -6,8 +6,8 @@ use super::{PlanDisposition, ReadyAction, ResolvedItemPlan};
 use crate::project_config::{
     CueTransform, MacroTransform, RenderRole, RenderStyle, RestyleMacroSelector,
 };
-use crate::propresenter::PresentationSize;
 use crate::workflow::description_parser::SpeakerRole;
+use proflow_propresenter::PresentationSize;
 
 /// Native presentation properties promised by one reviewed semantic plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

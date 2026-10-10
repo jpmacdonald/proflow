@@ -10,26 +10,26 @@ use super::{
     bind_role_to_audience_slide, PresentationRenderError, RenderRole, RenderStyle,
     LEADER_ROLE_SUFFIX,
 };
-use crate::propresenter::audience::PresentationDestination;
-use crate::propresenter::presentation_spec::{
+use crate::workflow::execute::RenderAssetSnapshot;
+use proflow_propresenter::audience::PresentationDestination;
+use proflow_propresenter::presentation_spec::{
     CueContent, CueRoleId, GroupSpec, PresentationSpec, TextField,
 };
-use crate::propresenter::render::{RenderAssets, RenderedPresentation, ResolvedCueRole};
-use crate::propresenter::rtf::StyledSegment;
+use proflow_propresenter::render::{RenderAssets, RenderedPresentation, ResolvedCueRole};
+use proflow_propresenter::rtf::StyledSegment;
 #[cfg(test)]
-use crate::propresenter::text_fit::NativeTextRequestError;
-use crate::propresenter::text_fit::{
+use proflow_propresenter::text_fit::NativeTextRequestError;
+use proflow_propresenter::text_fit::{
     AudienceTextRendering, CueTextFitSummary, NativeTextFitOracle, TextFitDestinationIdentity,
     TextFitEvidence, TextFitRequest,
 };
-use crate::workflow::execute::RenderAssetSnapshot;
 
 #[cfg(test)]
-use crate::propresenter::rtf::rtf_to_text;
+use proflow_propresenter::rtf::rtf_to_text;
 #[cfg(test)]
-use crate::propresenter::text_flow::TextLayout;
+use proflow_propresenter::text_flow::TextLayout;
 #[cfg(test)]
-use crate::propresenter::theme::{extract_role_metrics, DEFAULT_MAX_LINES_PER_SLIDE};
+use proflow_propresenter::theme::{extract_role_metrics, DEFAULT_MAX_LINES_PER_SLIDE};
 
 #[cfg(test)]
 const DEFAULT_WRAP_COLUMN: usize = 45;
@@ -47,7 +47,7 @@ pub(super) trait RenderTextFit {
         &mut self,
         role: &ResolvedCueRole<'_>,
         field: &TextField,
-        slide: &crate::propresenter::generated::rv_data::PresentationSlide,
+        slide: &proflow_propresenter::unstable_native::rv_data::PresentationSlide,
         max_lines: usize,
     ) -> Result<TextFitEvidence, PresentationRenderError>;
 }
@@ -80,7 +80,7 @@ impl RenderTextFit for NativeRenderTextFit<'_> {
         &mut self,
         role: &ResolvedCueRole<'_>,
         field: &TextField,
-        slide: &crate::propresenter::generated::rv_data::PresentationSlide,
+        slide: &proflow_propresenter::unstable_native::rv_data::PresentationSlide,
         _max_lines: usize,
     ) -> Result<TextFitEvidence, PresentationRenderError> {
         let request = TextFitRequest::from_rendered_field(role, field, slide)?;
@@ -114,7 +114,7 @@ impl RenderTextFit for DiagnosticRenderTextFit {
         &mut self,
         role: &ResolvedCueRole<'_>,
         field: &TextField,
-        slide: &crate::propresenter::generated::rv_data::PresentationSlide,
+        slide: &proflow_propresenter::unstable_native::rv_data::PresentationSlide,
         max_lines: usize,
     ) -> Result<TextFitEvidence, PresentationRenderError> {
         let index = role.field_index(field)?;
@@ -220,7 +220,7 @@ pub(super) fn retain_final_text_fit(
     text_fit: &mut dyn RenderTextFit,
 ) -> Result<(), PresentationRenderError> {
     let mut evidence_by_cue =
-        BTreeMap::<usize, Vec<crate::propresenter::text_fit::TextFitDestinationSummary>>::new();
+        BTreeMap::<usize, Vec<proflow_propresenter::text_fit::TextFitDestinationSummary>>::new();
     let mut audience_evidence_by_cue =
         BTreeMap::<usize, BTreeMap<String, (TextFitDestinationIdentity, TextFitEvidence)>>::new();
     for (cue_index, cue_spec) in spec.groups().flat_map(GroupSpec::cues).enumerate() {
@@ -431,9 +431,9 @@ fn measure_audience_destinations(
                 ),
                 PresentationDestination::ThemeOverride(destination) => {
                     let destination_slide =
-                        crate::propresenter::generated::rv_data::PresentationSlide {
+                        proflow_propresenter::unstable_native::rv_data::PresentationSlide {
                             base_slide: Some(destination.base_slide().clone()),
-                            ..crate::propresenter::generated::rv_data::PresentationSlide::default()
+                            ..proflow_propresenter::unstable_native::rv_data::PresentationSlide::default()
                         };
                     let destination_role = bind_role_to_audience_slide(
                         configured_role,
@@ -470,15 +470,15 @@ fn measure_audience_destinations(
 }
 
 fn rendered_presentation_slide(
-    cue: &crate::propresenter::generated::rv_data::Cue,
-) -> Option<&crate::propresenter::generated::rv_data::PresentationSlide> {
+    cue: &proflow_propresenter::unstable_native::rv_data::Cue,
+) -> Option<&proflow_propresenter::unstable_native::rv_data::PresentationSlide> {
     let mut slides = cue.actions.iter().filter_map(|action| {
-        let crate::propresenter::generated::rv_data::action::ActionTypeData::Slide(slide) =
+        let proflow_propresenter::unstable_native::rv_data::action::ActionTypeData::Slide(slide) =
             action.action_type_data.as_ref()?
         else {
             return None;
         };
-        let crate::propresenter::generated::rv_data::action::slide_type::Slide::Presentation(
+        let proflow_propresenter::unstable_native::rv_data::action::slide_type::Slide::Presentation(
             presentation,
         ) = slide.slide.as_ref()?
         else {

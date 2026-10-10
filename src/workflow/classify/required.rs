@@ -5,11 +5,11 @@ use crate::project_config::{
     CompiledRequiredPlaylistItem, ProjectConfig, RequiredPlaylistPlacement,
     ResolvedRequiredPresentation,
 };
-use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::library_search::{resolve_exact_library_file, ExactLibraryFileMatch};
 use crate::workflow::plan::{
     OutputKey, PlanDisposition, ReadyAction, ResolvedItemPlan, ReviewContext,
 };
+use proflow_propresenter::library::LibraryCatalog;
 
 pub(super) fn ensure_required_playlist_items(
     entries: &mut Vec<ResolvedItemPlan>,
