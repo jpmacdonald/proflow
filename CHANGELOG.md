@@ -110,8 +110,8 @@ Dates are the day the work landed on `main`.
   since-removed TUI, plus tokio feature flags). Superseded by
   `PlanningCenterError::MissingCredentials` and the MCP-only operator
   boundary. The branch is on the pre-rewrite history and conflicts with
-  `main`. It is preserved in the archive bundle above and should be deleted
-  from `origin`.
+  `main`. Deleted from `origin` on 2026-10-10 after confirming six of its nine
+  touched files no longer exist; it is preserved in the archive bundle above.
 
 ### Server
 
