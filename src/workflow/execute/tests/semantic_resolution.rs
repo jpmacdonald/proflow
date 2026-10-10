@@ -81,7 +81,7 @@ fn partial_song_overrides_cannot_approve_an_unresolved_identity() {
             };
             assert!(matches!(
                 apply_override(&plan, Some(&decision)),
-                Err(BuildServiceError::UnsupportedOverride { .. })
+                Err(RequestError::UnsupportedOverride { .. })
             ));
         }
     }
@@ -167,7 +167,7 @@ fn unresolved_arrangements_require_an_arrangement_decision() {
         };
         assert!(matches!(
             apply_override(&plan, Some(&decision)),
-            Err(BuildServiceError::UnsupportedOverride { .. })
+            Err(RequestError::UnsupportedOverride { .. })
         ));
         decision.action = Some(OverrideAction::SelectArrangement {
             arrangement: "Youth".to_string(),

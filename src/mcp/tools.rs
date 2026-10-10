@@ -31,7 +31,7 @@ use super::schema::{
     PreviewPlaylistArgs, ReviewedMediaAssetResponse, ReviewedPreviewResponse, ScriptureResponse,
     SearchLibraryArgs, SongResponse, WriteProjectConfigArgs,
 };
-use super::{mcp_err, ProFlowServer};
+use super::{build_err, mcp_err, ProFlowServer};
 
 impl ProFlowServer {
     fn library_catalog(&self) -> Result<MutexGuard<'_, LibraryCatalog>, rmcp::ErrorData> {
@@ -82,7 +82,8 @@ impl ProFlowServer {
         &self,
         Parameters(args): Parameters<WriteProjectConfigArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let config = parse_project_config_value(args.config).map_err(|e| mcp_err(e.to_string()))?;
+        let config = parse_project_config_value(args.config)
+            .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))?;
         let (outcome, validation) = write_config_reviewed(
             &config,
             self.workstation.render_assets().locations(),
@@ -266,7 +267,7 @@ impl ProFlowServer {
             .workstation
             .review_service_request(request)
             .await
-            .map_err(|error| mcp_err(error.to_string()))?;
+            .map_err(build_err)?;
         let plan_title = reviewed.plan_title().to_string();
         let service_name = reviewed.service_name().to_string();
         let date = reviewed.date().format("%Y-%m-%d").to_string();
@@ -408,13 +409,13 @@ impl ProFlowServer {
                 &args.preview_revision,
                 args.service_name.as_deref(),
             )
-            .map_err(|error| mcp_err(error.to_string()))?
+            .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))?
         };
         let result = self
             .workstation
             .build_prepared_request(reviewed.prepared)
             .await
-            .map_err(|e| mcp_err(e.to_string()))?;
+            .map_err(build_err)?;
         json_result(&result)
     }
 }

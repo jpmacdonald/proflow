@@ -12,8 +12,7 @@ use thiserror::Error;
 
 use super::approval::{CapturedSources, OutputReviewError, SourceReviewError};
 use super::classify;
-use super::plan::PlanSemanticsError;
-use super::plan::ResolvedItemPlan;
+use super::plan::{PlanSemanticsError, ResolvedItemPlan};
 use super::presentation_render::PresentationRenderError;
 use super::report::BuildServiceResult;
 use crate::bible::{BibleCorpusError, BibleCorpusSnapshot};
@@ -54,7 +53,7 @@ pub use render_assets::{
     RenderAssetFreshnessError, RenderAssetIssue, RenderAssetIssues, RenderAssetSnapshot,
     RenderAssetSnapshotError, ThemeSlideSizeProblem,
 };
-pub use request::BuildRequest;
+pub use request::{BuildRequest, RequestError};
 pub use review::{BuildReview, NeedsReviewBuildRequest, PreparedBuildRequest};
 
 #[cfg(test)]
@@ -75,6 +74,9 @@ use uuid::Uuid;
 /// Errors raised while resolving, reviewing, or executing a service build.
 #[derive(Debug, Error)]
 pub enum BuildServiceError {
+    /// The request itself was malformed or inconsistent with its plan.
+    #[error(transparent)]
+    Request(#[from] RequestError),
     /// An immutable Bible corpus changed or could not be read.
     #[error("Bible corpus snapshot failed: {0}")]
     BibleCorpus(#[from] BibleCorpusError),
@@ -123,98 +125,9 @@ pub enum BuildServiceError {
         /// Verse numbers absent from the selected Bible data.
         verses: Vec<u32>,
     },
-    /// A required request identity was absent at the checked transition.
-    #[error("build request {field} must be a non-empty resolved value before review")]
-    UnresolvedIdentity {
-        /// Missing or empty request field.
-        field: &'static str,
-    },
-    /// A request identity could not be preserved as an exact lookup key.
-    #[error("{field} must be non-empty, unpadded, and contain no control characters")]
-    InvalidIdentity {
-        /// Invalid request, override, path, arrangement, or title field.
-        field: &'static str,
-    },
-    /// Planning Center did not return the requested plan in the supported
-    /// service-build lookahead window.
-    #[error("plan '{plan_id}' was not found in the next {days_ahead} days")]
-    PlanNotFound {
-        /// Stable Planning Center plan identity.
-        plan_id: String,
-        /// Lookahead window searched for authoritative metadata.
-        days_ahead: i64,
-    },
-    /// A caller-supplied service type disagreed with Planning Center metadata.
-    #[error(
-        "service_name mismatch for plan '{plan_id}': caller supplied '{supplied}', Planning Center reports '{actual}'"
-    )]
-    ServiceNameMismatch {
-        /// Stable Planning Center plan identity.
-        plan_id: String,
-        /// Caller-supplied assertion.
-        supplied: String,
-        /// Authoritative Planning Center service type.
-        actual: String,
-    },
-    /// A captured source was accidentally paired with a different request.
-    #[error(
-        "Planning Center snapshot identity mismatch: request named '{requested}', captured '{captured}'"
-    )]
-    PlanningCenterSnapshotIdentity {
-        /// Plan identity supplied by the request.
-        requested: String,
-        /// Plan identity captured from Planning Center.
-        captured: String,
-    },
     /// Planning Center source inputs changed after preview.
     #[error(transparent)]
     PlanningCenterFreshness(#[from] PlanFreshnessError),
-    /// An entry override did not change any semantic property.
-    #[error("override for output_key '{output_key}' contains no decision")]
-    EmptyOverride {
-        /// Stable plan identity targeted by the empty override.
-        output_key: String,
-    },
-    /// The same request key was supplied more than once for one edit kind.
-    #[error("duplicate {kind} '{key}'")]
-    DuplicateRequestEdit {
-        /// Operator edit collection containing the duplicate.
-        kind: &'static str,
-        /// Repeated stable output key.
-        key: String,
-    },
-    /// One output was requested in mutually exclusive edit collections.
-    #[error("output_key '{output_key}' cannot be both skipped and overridden")]
-    ConflictingRequestEdits {
-        /// Stable output identity with contradictory decisions.
-        output_key: String,
-    },
-    /// The classifier emitted duplicate stable output identities.
-    #[error("duplicate plan output_keys: {}", keys.join(", "))]
-    DuplicatePlanOutputKeys {
-        /// Sorted duplicate identities.
-        keys: Vec<String>,
-    },
-    /// A request attempted to skip outputs absent from the reviewed plan.
-    #[error("unknown skip_output_keys: {}", keys.join(", "))]
-    UnknownSkipOutputKeys {
-        /// Sorted unknown identities.
-        keys: Vec<String>,
-    },
-    /// A request attempted to override outputs absent from the reviewed plan.
-    #[error("unknown override output_keys: {}", keys.join(", "))]
-    UnknownOverrideOutputKeys {
-        /// Sorted unknown identities.
-        keys: Vec<String>,
-    },
-    /// An override action is incompatible with the planned semantic content.
-    #[error("override for '{output_key}' cannot {intent}")]
-    UnsupportedOverride {
-        /// Stable plan identity being overridden.
-        output_key: String,
-        /// Specific incompatible transition.
-        intent: &'static str,
-    },
     /// A review state claimed to be blocked but contained no unresolved plan.
     #[error("non-executable review contains no unresolved plan")]
     ReviewStateInvariant,
@@ -227,46 +140,6 @@ pub enum BuildServiceError {
         title: String,
         /// Exact unresolved reason.
         reason: String,
-    },
-    /// An operator decision contradicted the content carried by its planned
-    /// presentation action.
-    #[error(transparent)]
-    PlanSemantics(#[from] PlanSemanticsError),
-    /// A portable-media source could not be resolved to one stable file.
-    #[error("failed to resolve reviewed media source '{}': {source}", path.display())]
-    MediaSource {
-        /// Requested media path.
-        path: PathBuf,
-        /// Filesystem resolution failure.
-        #[source]
-        source: std::io::Error,
-    },
-    /// A portable-media source resolved to a non-file path.
-    #[error("reviewed media source is not a regular file: {}", path.display())]
-    MediaSourceNotFile {
-        /// Canonical media path.
-        path: PathBuf,
-    },
-    /// A reviewed presentation source could not be resolved to one stable file.
-    #[error("failed to resolve reviewed presentation source '{}': {source}", path.display())]
-    PresentationSource {
-        /// Requested presentation path.
-        path: PathBuf,
-        /// Filesystem resolution failure.
-        #[source]
-        source: std::io::Error,
-    },
-    /// A reviewed presentation source resolved to a non-file path.
-    #[error("reviewed presentation source is not a regular file: {}", path.display())]
-    PresentationSourceNotFile {
-        /// Canonical presentation path.
-        path: PathBuf,
-    },
-    /// A reviewed presentation source did not use the native `.pro` suffix.
-    #[error("reviewed presentation source must be a .pro file: {}", path.display())]
-    PresentationSourceExtension {
-        /// Canonical presentation path.
-        path: PathBuf,
     },
     /// A reviewed source manifest did not contain bytes for an approved path.
     #[error("reviewed source capture has no bytes for '{}'", path.display())]
@@ -481,16 +354,22 @@ pub enum BuildServiceError {
     LibraryCatalogPoisoned,
 }
 
+impl From<PlanSemanticsError> for BuildServiceError {
+    fn from(error: PlanSemanticsError) -> Self {
+        Self::Request(RequestError::PlanSemantics(error))
+    }
+}
+
 impl From<PlanCaptureError> for BuildServiceError {
     fn from(error: PlanCaptureError) -> Self {
         match error {
             PlanCaptureError::Identity(PlanIdentityError::NotFound {
                 plan_id,
                 days_ahead,
-            }) => Self::PlanNotFound {
+            }) => Self::Request(RequestError::PlanNotFound {
                 plan_id,
                 days_ahead: days_ahead.get(),
-            },
+            }),
             PlanCaptureError::Api(error) => Self::PlanningCenter(error),
         }
     }

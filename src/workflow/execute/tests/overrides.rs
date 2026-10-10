@@ -315,7 +315,7 @@ fn slide_type_override_cannot_relabel_generated_scripture() {
 
     assert!(matches!(
         error,
-        BuildServiceError::PlanSemantics(PlanSemanticsError::IncompatibleSlideType { .. })
+        RequestError::PlanSemantics(PlanSemanticsError::IncompatibleSlideType { .. })
     ));
 }
 

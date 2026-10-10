@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use super::request::RequestError;
 use super::request::{canonical_presentation_source, validate_identity, validate_path_identity};
-use super::BuildServiceError;
 use crate::workflow::plan::{ReadyAction, ResolvedBackground, ResolvedItemPlan};
 use proflow_propresenter::SlideType;
 
@@ -26,7 +26,7 @@ pub struct EntryOverride {
 }
 
 impl EntryOverride {
-    fn validate(&self) -> Result<(), BuildServiceError> {
+    fn validate(&self) -> Result<(), RequestError> {
         validate_identity("override output_key", &self.output_key)?;
         if let Some(name) = &self.playlist_name {
             validate_identity("override playlist_name", name)?;
@@ -35,7 +35,7 @@ impl EntryOverride {
             action.validate()?;
         }
         if self.playlist_name.is_none() && self.slide_type.is_none() && self.action.is_none() {
-            return Err(BuildServiceError::EmptyOverride {
+            return Err(RequestError::EmptyOverride {
                 output_key: self.output_key.clone(),
             });
         }
@@ -82,7 +82,7 @@ pub enum OverrideAction {
 }
 
 impl OverrideAction {
-    fn validate(&self) -> Result<(), BuildServiceError> {
+    fn validate(&self) -> Result<(), RequestError> {
         match self {
             Self::UseExisting {
                 file_path,
@@ -152,12 +152,12 @@ impl std::str::FromStr for OverrideSlideType {
 pub(super) fn validate_request_edits(
     skip_output_keys: &[String],
     overrides: &[EntryOverride],
-) -> Result<(), BuildServiceError> {
+) -> Result<(), RequestError> {
     let mut skip_keys = HashSet::new();
     for key in skip_output_keys {
         validate_identity("skip output_key", key)?;
         if !skip_keys.insert(key.as_str()) {
-            return Err(BuildServiceError::DuplicateRequestEdit {
+            return Err(RequestError::DuplicateRequestEdit {
                 kind: "skip_output_key",
                 key: key.clone(),
             });
@@ -168,13 +168,13 @@ pub(super) fn validate_request_edits(
     for entry in overrides {
         validate_identity("override output_key", &entry.output_key)?;
         if !override_keys.insert(entry.output_key.as_str()) {
-            return Err(BuildServiceError::DuplicateRequestEdit {
+            return Err(RequestError::DuplicateRequestEdit {
                 kind: "override for output_key",
                 key: entry.output_key.clone(),
             });
         }
         if skip_keys.contains(entry.output_key.as_str()) {
-            return Err(BuildServiceError::ConflictingRequestEdits {
+            return Err(RequestError::ConflictingRequestEdits {
                 output_key: entry.output_key.clone(),
             });
         }
@@ -187,7 +187,7 @@ pub(super) fn resolve_requested_plans(
     plans: &[ResolvedItemPlan],
     skip_output_keys: &[String],
     overrides: &[EntryOverride],
-) -> Result<Vec<ResolvedItemPlan>, BuildServiceError> {
+) -> Result<Vec<ResolvedItemPlan>, RequestError> {
     validate_request_edits(skip_output_keys, overrides)?;
     let skip_set = skip_output_keys
         .iter()
@@ -218,7 +218,7 @@ fn validate_requested_plan_keys(
     plans: &[ResolvedItemPlan],
     skip_set: &HashSet<&str>,
     override_map: &HashMap<&str, &EntryOverride>,
-) -> Result<(), BuildServiceError> {
+) -> Result<(), RequestError> {
     let mut known_keys = HashSet::new();
     let mut duplicate_keys = Vec::new();
     for plan in plans {
@@ -230,7 +230,7 @@ fn validate_requested_plan_keys(
     if !duplicate_keys.is_empty() {
         duplicate_keys.sort_unstable();
         duplicate_keys.dedup();
-        return Err(BuildServiceError::DuplicatePlanOutputKeys {
+        return Err(RequestError::DuplicatePlanOutputKeys {
             keys: duplicate_keys.into_iter().map(str::to_string).collect(),
         });
     }
@@ -241,7 +241,7 @@ fn validate_requested_plan_keys(
         .collect::<Vec<_>>();
     unknown_skips.sort_unstable();
     if !unknown_skips.is_empty() {
-        return Err(BuildServiceError::UnknownSkipOutputKeys {
+        return Err(RequestError::UnknownSkipOutputKeys {
             keys: unknown_skips.into_iter().map(str::to_string).collect(),
         });
     }
@@ -252,14 +252,14 @@ fn validate_requested_plan_keys(
         .collect::<Vec<_>>();
     unknown_overrides.sort_unstable();
     if !unknown_overrides.is_empty() {
-        return Err(BuildServiceError::UnknownOverrideOutputKeys {
+        return Err(RequestError::UnknownOverrideOutputKeys {
             keys: unknown_overrides.into_iter().map(str::to_string).collect(),
         });
     }
     Ok(())
 }
 
-fn validate_plan_identity(plan: &ResolvedItemPlan) -> Result<(), BuildServiceError> {
+fn validate_plan_identity(plan: &ResolvedItemPlan) -> Result<(), RequestError> {
     validate_identity("plan output_key", plan.output_key.as_str())?;
     validate_identity("plan playlist_name", &plan.playlist_name)?;
     let Some(action) = plan.preview_action() else {
@@ -293,7 +293,7 @@ fn validate_plan_identity(plan: &ResolvedItemPlan) -> Result<(), BuildServiceErr
 pub(super) fn apply_override(
     entry: &ResolvedItemPlan,
     override_entry: Option<&EntryOverride>,
-) -> Result<ResolvedItemPlan, BuildServiceError> {
+) -> Result<ResolvedItemPlan, RequestError> {
     let mut effective = entry.clone();
     if let Some(override_entry) = override_entry {
         override_entry.validate()?;
@@ -333,7 +333,7 @@ pub(super) fn apply_override(
 fn resolve_override_action(
     plan: &ResolvedItemPlan,
     intent: &OverrideAction,
-) -> Result<ReadyAction, BuildServiceError> {
+) -> Result<ReadyAction, RequestError> {
     intent.validate()?;
     match intent {
         OverrideAction::UseExisting {
@@ -437,7 +437,7 @@ fn resolve_existing_source_override(
     plan: &ResolvedItemPlan,
     file_path: &std::path::Path,
     arrangement: Option<String>,
-) -> Result<ReadyAction, BuildServiceError> {
+) -> Result<ReadyAction, RequestError> {
     let file_path = canonical_presentation_source(file_path)?;
     Ok(match plan.preview_action() {
         Some(ReadyAction::RestyleExisting { transform, .. }) => ReadyAction::RestyleExisting {
@@ -456,7 +456,7 @@ fn replace_render_background(
     plan: &ResolvedItemPlan,
     action: &mut ReadyAction,
     background: ResolvedBackground,
-) -> Result<(), BuildServiceError> {
+) -> Result<(), RequestError> {
     match action {
         ReadyAction::RestyleExisting { transform, .. } => {
             *transform = transform.clone().with_replacement_background(background);
@@ -476,8 +476,8 @@ fn replace_render_background(
     }
 }
 
-fn unsupported_override(plan: &ResolvedItemPlan, intent: &'static str) -> BuildServiceError {
-    BuildServiceError::UnsupportedOverride {
+fn unsupported_override(plan: &ResolvedItemPlan, intent: &'static str) -> RequestError {
+    RequestError::UnsupportedOverride {
         output_key: plan.output_key.to_string(),
         intent,
     }

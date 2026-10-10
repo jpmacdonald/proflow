@@ -11,6 +11,7 @@ use rmcp::{tool_handler, ServerHandler};
 use tokio::sync::Mutex;
 
 use crate::config::Config;
+use crate::workflow::execute::BuildServiceError;
 use crate::workstation::{WorkspaceDiscovery, Workstation, WorkstationLoadError};
 
 mod config;
@@ -52,6 +53,17 @@ impl ProFlowServer {
 
 pub(super) fn mcp_err(msg: impl Into<String>) -> rmcp::ErrorData {
     rmcp::ErrorData::internal_error(msg.into(), None)
+}
+
+/// Map a build failure onto the MCP error vocabulary: a malformed request is
+/// the caller's problem; everything else is the server's.
+pub(super) fn build_err(error: BuildServiceError) -> rmcp::ErrorData {
+    match error {
+        BuildServiceError::Request(request) => {
+            rmcp::ErrorData::invalid_params(request.to_string(), None)
+        }
+        other => rmcp::ErrorData::internal_error(other.to_string(), None),
+    }
 }
 
 // ---------------------------------------------------------------------------

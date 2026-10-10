@@ -250,7 +250,7 @@ fn bound_request_rejects_padded_and_control_identities() {
     };
     assert!(matches!(
         BoundBuildRequest::try_from(padded),
-        Err(BuildServiceError::InvalidIdentity { field: "plan_id" })
+        Err(RequestError::InvalidIdentity { field: "plan_id" })
     ));
 
     let control = BuildRequest {
@@ -261,7 +261,7 @@ fn bound_request_rejects_padded_and_control_identities() {
     };
     assert!(matches!(
         BoundBuildRequest::try_from(control),
-        Err(BuildServiceError::InvalidIdentity {
+        Err(RequestError::InvalidIdentity {
             field: "service_name"
         })
     ));
@@ -273,7 +273,7 @@ fn request_edits_reject_malformed_exact_lookup_keys() {
         .expect_err("padded skip keys must not be silently normalized");
     assert!(matches!(
         skip_error,
-        BuildServiceError::InvalidIdentity {
+        RequestError::InvalidIdentity {
             field: "skip output_key"
         }
     ));
@@ -290,7 +290,7 @@ fn request_edits_reject_malformed_exact_lookup_keys() {
     .expect_err("padded title identities must not be silently normalized");
     assert!(matches!(
         override_error,
-        BuildServiceError::InvalidIdentity {
+        RequestError::InvalidIdentity {
             field: "override playlist_name"
         }
     ));
@@ -309,7 +309,7 @@ fn override_actions_reject_blank_paths_and_padded_arrangements() {
     };
     assert!(matches!(
         validate_unique_request_keys(&[], &[blank_path]),
-        Err(BuildServiceError::InvalidIdentity {
+        Err(RequestError::InvalidIdentity {
             field: "override file_path"
         })
     ));
@@ -324,7 +324,7 @@ fn override_actions_reject_blank_paths_and_padded_arrangements() {
     };
     assert!(matches!(
         validate_unique_request_keys(&[], &[padded_arrangement]),
-        Err(BuildServiceError::InvalidIdentity {
+        Err(RequestError::InvalidIdentity {
             field: "override arrangement"
         })
     ));
@@ -341,7 +341,7 @@ fn classified_actions_cannot_bypass_path_identity_checks() {
     );
     assert!(matches!(
         resolve_requested_plans(&[plan], &[], &[]),
-        Err(BuildServiceError::InvalidIdentity {
+        Err(RequestError::InvalidIdentity {
             field: "plan arrangement"
         })
     ));
@@ -357,7 +357,7 @@ fn empty_override_is_rejected_before_review() {
     };
     assert!(matches!(
         validate_unique_request_keys(&[], &[empty]),
-        Err(BuildServiceError::EmptyOverride { output_key })
+        Err(RequestError::EmptyOverride { output_key })
             if output_key == "pco:item:main"
     ));
 }

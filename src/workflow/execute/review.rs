@@ -11,7 +11,7 @@ use proflow_propresenter::PresentationSize;
 
 use super::overrides::resolve_requested_plans;
 use super::receipt::receipt_path_for_playlist;
-use super::request::{BoundBuildRequest, BuildRequest};
+use super::request::{BoundBuildRequest, BuildRequest, RequestError};
 use super::run::PreparedService;
 use super::{BuildServiceError, ServiceBuildExecutor};
 use crate::workflow::approval::SourceManifest;
@@ -80,10 +80,12 @@ impl ReviewedRequest {
         planning_center: ReviewedPlanningCenterSource,
     ) -> Result<Self, BuildServiceError> {
         if request.plan_id != planning_center.snapshot().plan_id() {
-            return Err(BuildServiceError::PlanningCenterSnapshotIdentity {
-                requested: request.plan_id,
-                captured: planning_center.snapshot().plan_id().to_string(),
-            });
+            return Err(BuildServiceError::from(
+                RequestError::PlanningCenterSnapshotIdentity {
+                    requested: request.plan_id,
+                    captured: planning_center.snapshot().plan_id().to_string(),
+                },
+            ));
         }
         Ok(Self {
             request,
