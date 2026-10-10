@@ -115,5 +115,13 @@ Dates are the day the work landed on `main`.
 
 ### Server
 
-- 2026-10-10: clone at `~/Projects/proflow` on the home server. See the end
-  of this section for what has been pulled and verified there.
+- 2026-10-10: clone at `~/Projects/proflow` on the home server (Linux
+  x86_64, reached as `server-ts`), fast-forwarded to `30f637e`.
+- 2026-10-10: `cargo check --workspace --all-targets --all-features` passes
+  there under `nix develop ~/Projects/nix-config#rust` (rustc 1.97.1, 48 s
+  cold). It emits four dead-code warnings for functions that only macOS code
+  paths call (`interpret_active_show_preference`,
+  `prove_restyled_text_fit_for_test`, and two test helpers), so `just clippy`
+  with `-D warnings` would fail on Linux until those are gated or shared.
+  `just test` has not been run on the server, and `just` itself was not
+  checked for on the server.
