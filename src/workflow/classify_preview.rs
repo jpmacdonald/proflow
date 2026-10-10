@@ -170,7 +170,7 @@ impl From<ResolvedItemPlan> for PreviewEntry {
                         bible_version,
                     } => (
                         Some(reference.to_string()),
-                        Some(bible_version.to_string()),
+                        Some(bible_version.name().to_string()),
                         None,
                     ),
                     ScriptureRequest::PrefixExcerpt {
@@ -179,7 +179,16 @@ impl From<ResolvedItemPlan> for PreviewEntry {
                         ..
                     } => (
                         Some(display_reference.to_string()),
-                        Some(bible_version.to_string()),
+                        Some(bible_version.name().to_string()),
+                        None,
+                    ),
+                    ScriptureRequest::SelectedExcerpt {
+                        reference,
+                        bible_version,
+                        ..
+                    } => (
+                        Some(format!("{reference} (selected vv)")),
+                        Some(bible_version.name().to_string()),
                         None,
                     ),
                     ScriptureRequest::Combined(references) => {

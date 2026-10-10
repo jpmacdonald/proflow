@@ -203,7 +203,7 @@ fn parse_item(
     let resource = format!("plan '{plan_id}' item at response index {index}");
     let id = required_identity(value, "id", &resource)?.to_string();
     let attributes = &value["attributes"];
-    let title = required_identity(attributes, "title", &resource)?.to_string();
+    let title = required_display_text(attributes, "title", &resource)?;
     let sequence = required_sequence(attributes, &resource)?;
     let description = optional_text(attributes, "description", &resource)?;
     let note = optional_text(attributes, "notes", &resource)?;
@@ -302,7 +302,7 @@ fn parse_song(
         let attributes = &arrangement["attributes"];
         (
             optional_text(attributes, "lyrics", &arrangement_resource)?,
-            Some(required_identity(attributes, "name", &arrangement_resource)?.to_string()),
+            optional_arrangement_name(attributes, &arrangement_resource)?,
         )
     } else {
         (None, None)
@@ -375,6 +375,27 @@ fn required_identity<'a>(
     })
 }
 
+fn required_display_text(
+    object: &Value,
+    field: &'static str,
+    resource: &str,
+) -> SourceResult<String> {
+    let value = object.get(field).and_then(Value::as_str).ok_or_else(|| {
+        PlanningCenterSourceError::MissingField {
+            resource: resource.to_string(),
+            field,
+        }
+    })?;
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err(PlanningCenterSourceError::InvalidIdentity {
+            resource: resource.to_string(),
+            field,
+        });
+    }
+    Ok(value.to_string())
+}
+
 fn optional_identity<'a>(
     object: &'a Value,
     field: &'static str,
@@ -395,6 +416,28 @@ fn optional_identity<'a>(
         })?;
     validate_identity(value, field, resource)?;
     Ok(Some(value))
+}
+
+fn optional_arrangement_name(object: &Value, resource: &str) -> SourceResult<Option<String>> {
+    let Some(value) = object.get("name") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_str()
+        .ok_or_else(|| PlanningCenterSourceError::InvalidFieldType {
+            resource: resource.to_string(),
+            field: "name",
+            expected: "a string",
+        })?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    validate_identity(value, "name", resource)?;
+    Ok(Some(value.to_string()))
 }
 
 fn validate_identity(value: &str, field: &'static str, resource: &str) -> SourceResult<()> {

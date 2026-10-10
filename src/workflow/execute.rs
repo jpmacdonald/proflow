@@ -64,7 +64,7 @@ use self::overrides::{
     apply_override, resolve_requested_plans, validate_request_edits as validate_unique_request_keys,
 };
 #[cfg(test)]
-use self::presentation_output::{parse_bible_version, ReviewedBackgroundAsset};
+use self::presentation_output::ReviewedBackgroundAsset;
 #[cfg(test)]
 use self::request::BoundBuildRequest;
 #[cfg(test)]
@@ -117,9 +117,6 @@ pub enum BuildServiceError {
         /// Requested arrangement name.
         arrangement: String,
     },
-    /// A requested translation identifier is not supported by the local Bible data.
-    #[error("unsupported Bible version '{0}'")]
-    UnsupportedBibleVersion(String),
     /// A lookup returned only part of the requested scripture range.
     #[error("scripture lookup for '{reference}' is missing verses {verses:?}")]
     MissingVerses {
@@ -388,6 +385,9 @@ pub enum BuildServiceError {
     /// Planning Center partial-verse text did not prove one safe local cutoff.
     #[error(transparent)]
     ScriptureExcerpt(#[from] crate::bible::ScriptureExcerptError),
+    /// Planning Center selected-verse text could not be reconciled safely.
+    #[error(transparent)]
+    SelectedScriptureExcerpt(#[from] crate::bible::SelectedScriptureExcerptError),
     /// Generated presentation metadata could not be prepared for the library catalog.
     #[error(transparent)]
     LibraryCatalog(#[from] LibraryCatalogError),

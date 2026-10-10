@@ -901,17 +901,16 @@ fn strict_restyle_proof_measures_active_macro_screens_and_rejects_ambiguous_text
                 .find_map(|element| element.element.as_mut()?.text.as_mut())
         })
         .expect("one visible text field");
+    // Keep both metric styles inside the narrow Stream destination. This
+    // replacement is measured directly rather than paginated again.
     text.rtf_data =
-        br"{\rtf1\ansi\deff0{\fonttbl{\f0\fswiss Helvetica;}}\f0\fs48 Plain {\b inline emphasis}}"
-            .to_vec();
-
-    let error = crate::workflow::execute::restyle_text_fit::prove_restyled_text_fit_for_test(
+        br"{\rtf1\ansi\deff0{\fonttbl{\f0\fswiss Helvetica;}}\f0\fs48 A {\b B}}".to_vec();
+    crate::workflow::execute::restyle_text_fit::prove_restyled_text_fit_for_test(
         &mixed_metrics,
         &assets,
         &mut oracle,
     )
-    .expect_err("mixed metric runs need proprietary audience-style mapping");
-    assert!(error.contains("metric-affecting text runs"));
+    .expect("theme destination canonicalizes existing inline source styles");
 }
 
 #[test]

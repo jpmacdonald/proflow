@@ -1,7 +1,7 @@
 use super::support::*;
 use crate::bible::BibleVersion;
 use crate::planning_center::types::{Category, Item, Scripture};
-use crate::project_config::{parse_project_config_str, ProjectConfig};
+use crate::project_config::{parse_project_config_str, PersonConfig, ProjectConfig};
 use crate::propresenter::library::LibraryCatalog;
 use crate::workflow::classify::build_plan;
 use crate::workflow::plan::{ItemKind, ScriptureRequest};
@@ -35,6 +35,8 @@ fn scripture_plan_rejects_a_partially_valid_reference_list() {
 fn partial_verse_description_becomes_one_typed_reconciliation_proposal() {
     let mut raw = scripture_config().into_raw();
     raw.defaults.bible_version = Some(BibleVersion::NRSVue);
+    raw.people
+        .insert("Robert".to_string(), PersonConfig::default());
     let config = ProjectConfig::try_from(raw).expect("valid scripture config");
     let item = Item {
         id: "partial-verse".to_string(),
@@ -66,7 +68,7 @@ fn partial_verse_description_becomes_one_typed_reconciliation_proposal() {
         ScriptureRequest::PrefixExcerpt {
             reference: "Exodus 16:1-4",
             display_reference: "Exodus 16:1-4a",
-            bible_version: "NRSVue",
+            bible_version: BibleVersion::NRSVue,
             ..
         }
     ));
@@ -76,6 +78,8 @@ fn partial_verse_description_becomes_one_typed_reconciliation_proposal() {
 fn partial_verse_without_description_still_requires_human_review() {
     let mut raw = scripture_config().into_raw();
     raw.defaults.bible_version = Some(BibleVersion::NRSVue);
+    raw.people
+        .insert("Robert".to_string(), PersonConfig::default());
     let config = ProjectConfig::try_from(raw).expect("valid scripture config");
     let item = Item {
         id: "partial-verse-no-text".to_string(),
@@ -96,6 +100,46 @@ fn partial_verse_without_description_still_requires_human_review() {
         plans[0].reason,
         "Partial-verse reference 'Exodus 16:1-4a' cannot be generated from whole-verse Bible data"
     );
+}
+
+#[test]
+fn selected_verses_use_the_planning_center_description_as_a_typed_proposal() {
+    let mut raw = scripture_config().into_raw();
+    raw.defaults.bible_version = Some(BibleVersion::NRSVue);
+    raw.people
+        .insert("Robert".to_string(), PersonConfig::default());
+    let config = ProjectConfig::try_from(raw).expect("valid scripture config");
+    let item = Item {
+        id: "selected-verses".to_string(),
+        position: 1,
+        title: "Scripture: 1 Samuel 17 (selected vv)".to_string(),
+        description: Some(
+            "1 Now the Philistines gathered their armies for battle… \
+             2 Saul and the Israelites gathered and encamped in the valley of Elah."
+                .to_string(),
+        ),
+        category: Category::Title,
+        note: None,
+        song: None,
+        scripture: None,
+    };
+
+    let plans = build_plan(&[item], &config, None, None);
+
+    assert_eq!(plans.len(), 1);
+    assert!(plans[0].needs_review());
+    assert_eq!(
+        plans[0].reason,
+        "Validate Planning Center selected-verse text against the local Bible corpus"
+    );
+    assert!(matches!(
+        scripture_request(&plans[0]),
+        ScriptureRequest::SelectedExcerpt {
+            reference: "1 Samuel 17",
+            bible_version: BibleVersion::NRSVue,
+            excerpt_text,
+        } if excerpt_text.starts_with("1 Now the Philistines")
+    ));
 }
 
 #[test]
@@ -127,7 +171,7 @@ fn scripture_without_a_translation_uses_only_the_configured_default() {
     assert!(matches!(
         scripture_request(&resolved[0]),
         ScriptureRequest::Single {
-            bible_version: "NIV",
+            bible_version: BibleVersion::NIV,
             ..
         }
     ));
@@ -155,8 +199,8 @@ fn scripture_plan_preserves_mixed_explicit_versions() {
         panic!("expected combined scripture content");
     };
     assert_eq!(references.len(), 2);
-    assert_eq!(references[0].version(), "NIV");
-    assert_eq!(references[1].version(), "NRSVue");
+    assert_eq!(references[0].version(), BibleVersion::NIV);
+    assert_eq!(references[1].version(), BibleVersion::NRSVue);
 }
 
 #[test]
@@ -165,7 +209,7 @@ fn scripture_plan_prefers_supported_structured_reference_and_translation() {
     let item = Item {
         id: "structured-scripture".to_string(),
         position: 1,
-        title: "Scripture: Malachi 1:1 NRSVue".to_string(),
+        title: "Scripture: Malachi 1:1 NIV".to_string(),
         description: None,
         category: Category::Text,
         note: None,
@@ -184,14 +228,17 @@ fn scripture_plan_prefers_supported_structured_reference_and_translation() {
         scripture_request(&plans[0]),
         ScriptureRequest::Single {
             reference: "John 3:16-17",
-            bible_version: "NIV"
+            bible_version: BibleVersion::NIV
         }
     ));
 }
 
 #[test]
 fn scripture_plan_preserves_discontinuous_same_chapter_ranges() {
-    let config = scripture_config();
+    let mut raw = scripture_config().into_raw();
+    raw.people
+        .insert("Adrian".to_string(), PersonConfig::default());
+    let config = ProjectConfig::try_from(raw).expect("valid scripture config with known speakers");
     let item = Item {
         id: "discontinuous-scripture".to_string(),
         position: 1,
@@ -214,7 +261,7 @@ fn scripture_plan_preserves_discontinuous_same_chapter_ranges() {
         scripture_request(&plans[0]),
         ScriptureRequest::Single {
             reference: "Joshua 3:1-5, 9-17",
-            bible_version: "NRSVue"
+            bible_version: BibleVersion::NRSVue
         }
     ));
 }
@@ -268,7 +315,7 @@ fn scripture_plan_falls_back_to_title_without_structured_translation() {
         scripture_request(&plans[0]),
         ScriptureRequest::Single {
             reference: "Luke 2:1-3",
-            bible_version: "NRSV"
+            bible_version: BibleVersion::NRSV
         }
     ));
 }
@@ -324,4 +371,194 @@ fn static_scripture_type_reuses_an_existing_presentation() {
                 .as_path()
         )
     );
+}
+
+fn translation_item(title: &str) -> Item {
+    Item {
+        id: "translation-contract".to_string(),
+        position: 1,
+        title: title.to_string(),
+        description: Some("1 Authoritative excerpt text".to_string()),
+        category: Category::Text,
+        note: None,
+        song: None,
+        scripture: None,
+    }
+}
+
+#[test]
+fn unsupported_title_translation_never_becomes_a_defaulted_or_excerpt_proposal() {
+    let mut raw = scripture_config().into_raw();
+    raw.defaults.bible_version = Some(BibleVersion::NRSVue);
+    raw.people
+        .insert("Robert".to_string(), PersonConfig::default());
+    let config = ProjectConfig::try_from(raw).expect("translation contract config");
+    for title in [
+        "Scripture - John 3:16 ESV",
+        "Scripture - John 3:16 (ESV)",
+        "Scripture - John 3:16 (Unknown Edition)",
+        "Scripture - John 3:16 ESV (Robert)",
+        "Scripture - John 3:16 (ESV) (Robert)",
+        "Scripture - Exodus 16:1-4a ESV",
+        "Scripture - Exodus 16:1-4a (ESV) (Robert)",
+        "Scripture - 1 Samuel 17 (selected vv) ESV",
+        "Scripture - 1 Samuel 17 (ESV) (selected verses)",
+    ] {
+        let item = translation_item(title);
+        for structured in [
+            None,
+            Some(Scripture {
+                reference: "Exodus 16:1-4a".to_string(),
+                text: Some("1 Authoritative excerpt text".to_string()),
+                translation: Some("NRSVue".to_string()),
+            }),
+        ] {
+            let mut item = item.clone();
+            item.scripture = structured;
+            let plans = build_plan(&[item], &config, None, None);
+            assert!(plans[0].needs_review(), "{title}");
+            assert!(plans[0].preview_action().is_none(), "{title}");
+            assert!(
+                plans[0].reason.contains("Unsupported Bible version"),
+                "{title}: {}",
+                plans[0].reason
+            );
+        }
+    }
+}
+
+#[test]
+fn conflicting_declarations_cannot_cross_the_whole_or_excerpt_boundary() {
+    let mut raw = scripture_config().into_raw();
+    raw.defaults.bible_version = Some(BibleVersion::KJV);
+    let config = ProjectConfig::try_from(raw).expect("translation contract config");
+    for reference in ["John 3:16", "Exodus 16:1-4a", "1 Samuel 17 (selected vv)"] {
+        for title in [
+            format!("Scripture - {reference} NIV (NRSVue)"),
+            format!("Scripture - {reference} NIV"),
+        ] {
+            let mut item = translation_item(&title);
+            item.scripture = Some(Scripture {
+                reference: reference.to_string(),
+                text: item.description.clone(),
+                translation: Some("NRSVue".to_string()),
+            });
+            let plans = build_plan(&[item], &config, None, None);
+            assert!(plans[0].needs_review(), "{title}");
+            assert!(plans[0].preview_action().is_none(), "{title}");
+            assert!(
+                plans[0]
+                    .reason
+                    .contains("Conflicting explicit Bible versions"),
+                "{title}: {}",
+                plans[0].reason
+            );
+        }
+    }
+    let item = translation_item("Scripture - John 3:16 NIV NRSVue");
+    let plans = build_plan(&[item], &config, None, None);
+    assert!(plans[0].needs_review());
+    assert!(plans[0].preview_action().is_none());
+}
+
+#[test]
+fn explicit_translation_survives_known_speaker_and_selected_annotations() {
+    let mut raw = scripture_config().into_raw();
+    raw.defaults.bible_version = Some(BibleVersion::NRSVue);
+    raw.people
+        .insert("Robert".to_string(), PersonConfig::default());
+    let config = ProjectConfig::try_from(raw).expect("translation contract config");
+    for title in [
+        "Scripture - John 3:16 NIV (Robert)",
+        "Scripture - John 3:16 (NIV) (Robert)",
+        "Scripture (Robert) - John 3:16 NIV",
+        "Scripture (Robert) - John 3:16 (NIV)",
+        "Scripture (Robert) - 1 Samuel 17 NIV (selected vv)",
+        "Scripture - 1 Samuel 17 (selected vv) NIV",
+        "Scripture - 1 Samuel 17 NIV (selected verses)",
+    ] {
+        let plans = build_plan(&[translation_item(title)], &config, None, None);
+        assert!(
+            matches!(
+                scripture_request(&plans[0]),
+                ScriptureRequest::Single {
+                    bible_version: BibleVersion::NIV,
+                    ..
+                } | ScriptureRequest::SelectedExcerpt {
+                    bible_version: BibleVersion::NIV,
+                    ..
+                }
+            ),
+            "{title}"
+        );
+    }
+}
+
+#[test]
+fn unknown_speaker_annotation_requires_resolution() {
+    let mut raw = scripture_config().into_raw();
+    raw.defaults.bible_version = Some(BibleVersion::NRSVue);
+    let config = ProjectConfig::try_from(raw).expect("translation contract config");
+    for title in [
+        "Scripture - John 3:16 (Someone)",
+        "Scripture (ESV) - John 3:16",
+        "Scripture - John 3:16ESV",
+        "Scripture - John 3:16NIV",
+        "Scripture - John 3:16 [ESV]",
+    ] {
+        let plans = build_plan(&[translation_item(title)], &config, None, None);
+        assert!(plans[0].needs_review(), "{title}");
+        assert!(plans[0].preview_action().is_none(), "{title}");
+    }
+}
+
+#[test]
+fn source_inferred_reference_does_not_erase_title_passages_or_translation() {
+    let config = scripture_config();
+    let mut item = translation_item("Scripture - Psalm 23:1; John 3:16 NIV");
+    item.scripture = Some(Scripture {
+        reference: "Psalm 23:1".to_string(),
+        text: None,
+        translation: None,
+    });
+    let plans = build_plan(&[item], &config, None, None);
+    let ScriptureRequest::Combined(references) = scripture_request(&plans[0]) else {
+        panic!("expected both title passages");
+    };
+    assert_eq!(references.len(), 2);
+    assert!(references
+        .iter()
+        .all(|reference| reference.version() == BibleVersion::NIV));
+}
+
+#[test]
+fn shorthand_selection_preserves_explicit_translation_and_rejects_conflict() {
+    let mut raw = scripture_config().into_raw();
+    raw.defaults.bible_version = Some(BibleVersion::NRSVue);
+    let config = ProjectConfig::try_from(raw).expect("translation contract config");
+    for title in [
+        "Scripture - John 3:16 NIV; 17",
+        "Scripture - John 3:16 (NIV); 17",
+        "Scripture - John 3:16; 17 NIV",
+    ] {
+        let plans = build_plan(&[translation_item(title)], &config, None, None);
+        assert!(
+            matches!(
+                scripture_request(&plans[0]),
+                ScriptureRequest::Single {
+                    reference: "John 3:16, 17",
+                    bible_version: BibleVersion::NIV,
+                }
+            ),
+            "{title}"
+        );
+    }
+    let plans = build_plan(
+        &[translation_item("Scripture - John 3:16 NIV; 17 NRSVue")],
+        &config,
+        None,
+        None,
+    );
+    assert!(plans[0].needs_review());
+    assert!(plans[0].preview_action().is_none());
 }

@@ -2,7 +2,7 @@
 
 use super::file_stem;
 use crate::planning_center::types::Item;
-use crate::propresenter::library::{LibraryArrangement, LibraryCatalog};
+use crate::propresenter::library::{LibraryArrangement, LibraryCatalog, LibraryEntry};
 use crate::workflow::classify_matching::strip_title_prefix;
 use crate::workflow::library_search::{
     resolve_exact_library_file, resolve_song_library_match, strip_hymn_number,
@@ -28,17 +28,15 @@ pub(super) enum SongPolicy {
 enum RequestedArrangement {
     Configured(String),
     PlanningCenter(String),
+    Absent,
 }
 
 impl RequestedArrangement {
-    fn name(&self) -> &str {
+    fn name(&self) -> Option<&str> {
         match self {
-            Self::Configured(name) | Self::PlanningCenter(name) => name,
+            Self::Configured(name) | Self::PlanningCenter(name) => Some(name),
+            Self::Absent => None,
         }
-    }
-
-    const fn permits_native_default_fallback(&self) -> bool {
-        matches!(self, Self::PlanningCenter(_))
     }
 }
 
@@ -61,15 +59,21 @@ pub(super) fn build_song_plan(
         SongPolicy::PreserveExisting { arrangement }
         | SongPolicy::RestyleExisting { arrangement, .. } => arrangement.as_ref(),
     };
+    // Compiled service/type configuration is an explicit override, not a
+    // fallback. An unavailable override therefore cannot revive the PCO choice.
     let arrangement = configured_arrangement.map_or_else(
         || {
-            item.song.as_ref().and_then(|song| {
-                let arrangement = song.arrangement.as_deref()?.trim();
-                (!arrangement.is_empty())
-                    .then(|| RequestedArrangement::PlanningCenter(arrangement.to_string()))
-            })
+            item.song
+                .as_ref()
+                .and_then(|song| {
+                    let arrangement = song.arrangement.as_deref()?.trim();
+                    (!arrangement.is_empty()).then_some(arrangement)
+                })
+                .map_or(RequestedArrangement::Absent, |name| {
+                    RequestedArrangement::PlanningCenter(name.to_string())
+                })
         },
-        |arrangement| Some(RequestedArrangement::Configured(arrangement.clone())),
+        |arrangement| RequestedArrangement::Configured(arrangement.clone()),
     );
     let restyle = match policy {
         SongPolicy::RestyleExisting { transform, .. } => Some(transform),
@@ -87,33 +91,23 @@ pub(super) fn build_song_plan(
             resolve_song_library_match(file_index, song_title, &item.title, &stripped, &bare_title)
         }
     };
-    let (disposition, reason) = match policy {
-        SongPolicy::Review => (
-            PlanDisposition::NeedsReview(ReviewContext::new(proposed_existing_action(
-                &song_match,
-                None,
-                restyle,
-            ))),
-            "Configured to require review".to_string(),
-        ),
-        SongPolicy::PreserveExisting { .. } | SongPolicy::RestyleExisting { .. } => {
-            use_existing_song_action(
-                explicit_target_match.as_ref(),
-                &song_match,
-                arrangement.as_ref(),
-                restyle,
-                file_index,
-                target_library_file,
-            )
-        }
-    };
+    let (disposition, reason) = use_existing_song_action(
+        explicit_target_match.as_ref(),
+        &song_match,
+        &arrangement,
+        restyle,
+        file_index,
+        target_library_file,
+    );
 
     let playlist_name = match &song_match {
         SongLibraryMatch::Resolved(path) | SongLibraryMatch::Candidate(path) => file_stem(path),
-        SongLibraryMatch::Missing => song_title.to_string(),
+        SongLibraryMatch::Missing
+        | SongLibraryMatch::Ambiguous
+        | SongLibraryMatch::ConflictingTitles => song_title.to_string(),
     };
 
-    ResolvedItemPlan::new(
+    let mut plan = ResolvedItemPlan::new(
         output_key,
         item.position,
         item.title.clone(),
@@ -122,13 +116,17 @@ pub(super) fn build_song_plan(
         ItemKind::Song,
         Some(type_key.to_string()),
         disposition,
-    )
+    );
+    if matches!(policy, SongPolicy::Review) {
+        plan.require_review(format!("Configured to require review; {}", plan.reason));
+    }
+    plan
 }
 
 fn use_existing_song_action(
     explicit_target_match: Option<&(&str, ExactLibraryFileMatch)>,
     song_match: &SongLibraryMatch,
-    arrangement: Option<&RequestedArrangement>,
+    arrangement: &RequestedArrangement,
     restyle: Option<&ExistingTransform>,
     file_index: Option<&LibraryCatalog>,
     target_library_file: Option<&str>,
@@ -144,13 +142,19 @@ fn use_existing_song_action(
         SongLibraryMatch::Resolved(path) => {
             resolved_song_action(path, arrangement, restyle, file_index)
         }
-        SongLibraryMatch::Candidate(_) => (
-            PlanDisposition::NeedsReview(ReviewContext::new(proposed_existing_action(
-                song_match,
-                arrangement,
-                restyle,
+        SongLibraryMatch::Candidate(path) => (
+            PlanDisposition::NeedsReview(ReviewContext::song_candidate(song_action(
+                path, arrangement.name().map(str::to_string), restyle,
             ))),
-            "Possible library match".to_string(),
+            format!("Possible library match requires an explicit file selection: {path}"),
+        ),
+        SongLibraryMatch::Ambiguous => (
+            PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            "Song title matches multiple library files; select the intended file explicitly".to_string(),
+        ),
+        SongLibraryMatch::ConflictingTitles => (
+            PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            "Planning Center song and item titles identify different library files; select the intended file explicitly".to_string(),
         ),
         SongLibraryMatch::Missing => (
             PlanDisposition::NeedsReview(ReviewContext::new(None)),
@@ -164,75 +168,49 @@ fn use_existing_song_action(
 
 fn resolved_song_action(
     path: &str,
-    arrangement: Option<&RequestedArrangement>,
+    arrangement: &RequestedArrangement,
     restyle: Option<&ExistingTransform>,
     file_index: Option<&LibraryCatalog>,
 ) -> (PlanDisposition, String) {
-    let Some(requested) = arrangement else {
-        return match resolve_unrequested_arrangement(file_index, path) {
-            Ok(Some(default)) => (
-                PlanDisposition::Ready(song_action(path, Some(default.clone()), restyle)),
-                format!(
-                    "{}; using native arrangement '{default}'",
-                    action_reason(restyle, "Library match")
-                ),
-            ),
-            Ok(None) => (
-                PlanDisposition::Ready(song_action(path, None, restyle)),
-                action_reason(restyle, "Library match"),
-            ),
-            Err(reason) => (
-                PlanDisposition::NeedsReview(ReviewContext::new(Some(song_action(
-                    path, None, restyle,
-                )))),
+    let entry = file_index.and_then(|index| {
+        index
+            .entries()
+            .iter()
+            .find(|entry| entry.full_path().to_string_lossy() == path)
+    });
+    let resolution = entry
+        .ok_or(ArrangementIssue::Unindexed)
+        .and_then(|entry| resolve_song_arrangement(entry.arrangements(), arrangement));
+    match resolution {
+        Ok(resolution) => {
+            let reason = match (&resolution, arrangement) {
+                (SongArrangementResolution::Exact(name), RequestedArrangement::Configured(_)) => {
+                    format!("{}; explicit configured arrangement '{name}' overrides Planning Center arrangement selection", action_reason(restyle, "Library match"))
+                }
+                (SongArrangementResolution::PlanningCenterDefaultAlias(name), _) => {
+                    format!("{}; Planning Center 'Default Arrangement' alias using native arrangement '{name}'", action_reason(restyle, "Library match"))
+                }
+                (SongArrangementResolution::NativeDefault(name), _) => {
+                    format!(
+                        "{}; using native arrangement '{name}'",
+                        action_reason(restyle, "Library match")
+                    )
+                }
+                _ => action_reason(restyle, "Library match"),
+            };
+            (
+                PlanDisposition::Ready(song_action(path, resolution.into_name(), restyle)),
                 reason,
-            ),
-        };
-    };
-
-    match resolve_song_arrangement(file_index, path, requested) {
-        Ok(SongArrangementResolution::Selected {
-            canonical_name,
-            used_default_fallback,
-        }) => (
-            PlanDisposition::Ready(song_action(path, Some(canonical_name.clone()), restyle)),
-            if used_default_fallback {
-                format!(
-                    "{}; requested Planning Center arrangement '{}' is unavailable, using native arrangement '{canonical_name}'",
-                    action_reason(restyle, "Library match"),
-                    requested.name()
-                )
-            } else {
-                action_reason(restyle, "Library match")
-            },
-        ),
-        Ok(SongArrangementResolution::NoSelection) => (
-            PlanDisposition::Ready(song_action(path, None, restyle)),
-            action_reason(restyle, "Library match"),
-        ),
-        Err(review_reason) => (
-            PlanDisposition::NeedsReview(ReviewContext::new(Some(song_action(
+            )
+        }
+        Err(issue) => (
+            PlanDisposition::NeedsReview(ReviewContext::song_arrangement(song_action(
                 path,
-                Some(requested.name().to_string()),
+                arrangement.name().map(str::to_string),
                 restyle,
-            )))),
-            review_reason,
+            ))),
+            issue.reason(entry, arrangement),
         ),
-    }
-}
-
-fn proposed_existing_action(
-    song_match: &SongLibraryMatch,
-    arrangement: Option<&RequestedArrangement>,
-    restyle: Option<&ExistingTransform>,
-) -> Option<ReadyAction> {
-    match song_match {
-        SongLibraryMatch::Resolved(path) | SongLibraryMatch::Candidate(path) => Some(song_action(
-            path,
-            arrangement.map(|requested| requested.name().to_string()),
-            restyle,
-        )),
-        SongLibraryMatch::Missing => None,
     }
 }
 
@@ -269,90 +247,112 @@ fn action_reason(restyle: Option<&ExistingTransform>, base: &str) -> String {
 const PCO_DEFAULT_ARRANGEMENT: &str = "Default Arrangement";
 const NATIVE_DEFAULT_ARRANGEMENT: &str = "Default";
 
+/// Selection authority is finite: exact explicit request, the one documented
+/// PCO alias, or a native default for an omitted request. Search never substitutes
+/// the sole available arrangement for an unavailable name.
 #[derive(Debug, PartialEq, Eq)]
 enum SongArrangementResolution {
-    Selected {
-        canonical_name: String,
-        used_default_fallback: bool,
-    },
-    NoSelection,
+    Exact(String),
+    PlanningCenterDefaultAlias(String),
+    NativeDefault(String),
+    Unarranged,
+}
+
+impl SongArrangementResolution {
+    fn into_name(self) -> Option<String> {
+        match self {
+            Self::Exact(name)
+            | Self::PlanningCenterDefaultAlias(name)
+            | Self::NativeDefault(name) => Some(name),
+            Self::Unarranged => None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ArrangementIssue {
+    Unindexed,
+    Unavailable,
+    Incomplete,
+    Ambiguous,
+}
+
+impl ArrangementIssue {
+    fn reason(&self, entry: Option<&LibraryEntry>, requested: &RequestedArrangement) -> String {
+        let selection = requested.name().map_or_else(
+            || format!("No arrangement was supplied; native arrangement '{NATIVE_DEFAULT_ARRANGEMENT}'"),
+            |name| format!("Arrangement '{name}'"),
+        );
+        let Some(entry) = entry else {
+            return format!(
+                "Could not verify {selection} because the resolved library file is not indexed"
+            );
+        };
+        let issue = match self {
+            Self::Unindexed => "could not be verified",
+            Self::Unavailable => "is unavailable",
+            Self::Incomplete => "has a missing or invalid UUID",
+            Self::Ambiguous => "is ambiguous",
+        };
+        format!(
+            "{selection} {issue} in '{}'; available arrangements: {}",
+            entry.file_name(),
+            arrangement_names(entry.arrangements())
+        )
+    }
 }
 
 fn resolve_song_arrangement(
-    file_index: Option<&LibraryCatalog>,
-    presentation_path: &str,
+    arrangements: &[LibraryArrangement],
     requested: &RequestedArrangement,
-) -> Result<SongArrangementResolution, String> {
-    let requested_name = requested.name();
-    let Some(entry) = file_index.and_then(|index| {
-        index
-            .entries()
-            .iter()
-            .find(|entry| entry.full_path().to_string_lossy() == presentation_path)
-    }) else {
-        return Err(format!(
-            "Could not verify arrangement '{requested_name}' because the resolved library file is not indexed"
-        ));
-    };
-
-    let exact_matches = entry
-        .arrangements()
+) -> Result<SongArrangementResolution, ArrangementIssue> {
+    let requested_name = requested.name().unwrap_or(NATIVE_DEFAULT_ARRANGEMENT);
+    let exact_matches = arrangements
         .iter()
         .filter(|arrangement| arrangement.name().eq_ignore_ascii_case(requested_name))
         .collect::<Vec<_>>();
-    if exact_matches.is_empty()
-        && requested_name.eq_ignore_ascii_case(PCO_DEFAULT_ARRANGEMENT)
-        && requested.permits_native_default_fallback()
-        && entry.arrangements().is_empty()
-    {
-        return Ok(SongArrangementResolution::NoSelection);
-    }
-    let used_default_fallback =
-        exact_matches.is_empty() && requested.permits_native_default_fallback();
-    let matches = if used_default_fallback {
-        entry
-            .arrangements()
-            .iter()
-            .filter(|arrangement| {
-                arrangement
-                    .name()
-                    .eq_ignore_ascii_case(NATIVE_DEFAULT_ARRANGEMENT)
+    match exact_matches.as_slice() {
+        [LibraryArrangement::Complete { name }] => {
+            return Ok(match requested {
+                RequestedArrangement::Absent => {
+                    SongArrangementResolution::NativeDefault(name.clone())
+                }
+                _ => SongArrangementResolution::Exact(name.clone()),
             })
-            .collect::<Vec<_>>()
-    } else {
-        exact_matches
-    };
-    let available = arrangement_names(entry.arrangements());
-
-    match matches.as_slice() {
-        [LibraryArrangement::Complete { name }] => Ok(SongArrangementResolution::Selected {
-            canonical_name: name.clone(),
-            used_default_fallback,
-        }),
-        [LibraryArrangement::Incomplete { .. }] => Err(format!(
-            "{} in '{}' has a missing or invalid UUID; available arrangements: {available}",
-            arrangement_candidate_description(requested_name, used_default_fallback),
-            entry.file_name()
-        )),
-        [] => Err(format!(
-            "Arrangement '{requested_name}' is unavailable in '{}'; available arrangements: {available}",
-            entry.file_name()
-        )),
-        _ => Err(format!(
-            "{} is ambiguous in '{}'; available arrangements: {available}",
-            arrangement_candidate_description(requested_name, used_default_fallback),
-            entry.file_name()
-        )),
+        }
+        [LibraryArrangement::Incomplete { .. }] => return Err(ArrangementIssue::Incomplete),
+        [] => {}
+        _ => return Err(ArrangementIssue::Ambiguous),
     }
-}
 
-fn arrangement_candidate_description(requested: &str, used_default_fallback: bool) -> String {
-    if used_default_fallback {
-        format!(
-            "Arrangement '{requested}' is unavailable and fallback arrangement '{NATIVE_DEFAULT_ARRANGEMENT}'"
-        )
-    } else {
-        format!("Arrangement '{requested}'")
+    match requested {
+        RequestedArrangement::Absent if arrangements.is_empty() => {
+            Ok(SongArrangementResolution::Unarranged)
+        }
+        RequestedArrangement::PlanningCenter(name)
+            if name.eq_ignore_ascii_case(PCO_DEFAULT_ARRANGEMENT) =>
+        {
+            if arrangements.is_empty() {
+                return Ok(SongArrangementResolution::Unarranged);
+            }
+            let defaults = arrangements
+                .iter()
+                .filter(|arrangement| {
+                    arrangement
+                        .name()
+                        .eq_ignore_ascii_case(NATIVE_DEFAULT_ARRANGEMENT)
+                })
+                .collect::<Vec<_>>();
+            match defaults.as_slice() {
+                [LibraryArrangement::Complete { name }] => Ok(
+                    SongArrangementResolution::PlanningCenterDefaultAlias(name.clone()),
+                ),
+                [LibraryArrangement::Incomplete { .. }] => Err(ArrangementIssue::Incomplete),
+                [] => Err(ArrangementIssue::Unavailable),
+                _ => Err(ArrangementIssue::Ambiguous),
+            }
+        }
+        _ => Err(ArrangementIssue::Unavailable),
     }
 }
 
@@ -374,45 +374,28 @@ fn arrangement_names(arrangements: &[LibraryArrangement]) -> String {
     }
 }
 
-fn resolve_unrequested_arrangement(
-    file_index: Option<&LibraryCatalog>,
-    presentation_path: &str,
-) -> Result<Option<String>, String> {
-    let Some(entry) = file_index.and_then(|index| {
-        index
-            .entries()
-            .iter()
-            .find(|entry| entry.full_path().to_string_lossy() == presentation_path)
-    }) else {
-        return Ok(None);
-    };
-    if entry.arrangements().is_empty() {
-        return Ok(None);
-    }
-    let defaults = entry
-        .arrangements()
-        .iter()
-        .filter(|arrangement| {
-            arrangement
-                .name()
-                .eq_ignore_ascii_case(NATIVE_DEFAULT_ARRANGEMENT)
-        })
-        .collect::<Vec<_>>();
-    match defaults.as_slice() {
-        [LibraryArrangement::Complete { name }] => Ok(Some(name.clone())),
-        [LibraryArrangement::Incomplete { .. }] => Err(format!(
-            "Native arrangement '{NATIVE_DEFAULT_ARRANGEMENT}' in '{}' has a missing or invalid UUID",
-            entry.file_name()
-        )),
-        [] => Err(format!(
-            "No arrangement was supplied and '{}' has no native '{NATIVE_DEFAULT_ARRANGEMENT}' arrangement; available arrangements: {}",
-            entry.file_name(),
-            arrangement_names(entry.arrangements())
-        )),
-        _ => Err(format!(
-            "Native arrangement '{NATIVE_DEFAULT_ARRANGEMENT}' is ambiguous in '{}'; available arrangements: {}",
-            entry.file_name(),
-            arrangement_names(entry.arrangements())
-        )),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn property_unavailable_explicit_arrangement_never_selects_default_or_sole_name(
+            name in "Requested [A-Za-z]{1,32}",
+            configured in any::<bool>(),
+            include_default in any::<bool>(),
+        ) {
+            let mut arrangements = vec![LibraryArrangement::Complete { name: "Youth".to_string() }];
+            if include_default {
+                arrangements.push(LibraryArrangement::Complete { name: "Default".to_string() });
+            }
+            let requested = if configured {
+                RequestedArrangement::Configured(name)
+            } else {
+                RequestedArrangement::PlanningCenter(name)
+            };
+            prop_assert_eq!(resolve_song_arrangement(&arrangements, &requested), Err(ArrangementIssue::Unavailable));
+        }
     }
 }

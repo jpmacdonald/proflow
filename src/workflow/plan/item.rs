@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::{ExistingTransform, RenderStyle, ResolvedBackground};
+use crate::bible::BibleVersion;
 use crate::propresenter::SlideType;
 use crate::workflow::description_parser::ParsedContent;
 
@@ -130,14 +131,13 @@ pub struct ScriptureRefInfo {
     /// Parsed reference string (e.g., "Isaiah 35:1-6").
     reference: String,
     /// Bible version (e.g., "`NRSVue`").
-    version: String,
+    version: BibleVersion,
 }
 
 impl ScriptureRefInfo {
     /// Create one explicitly versioned scripture reference.
-    pub fn new(reference: String, version: String) -> Result<Self, ScripturePlanError> {
+    pub fn new(reference: String, version: BibleVersion) -> Result<Self, ScripturePlanError> {
         validate_reference(&reference)?;
-        validate_version(&version)?;
         Ok(Self { reference, version })
     }
 
@@ -147,8 +147,8 @@ impl ScriptureRefInfo {
     }
 
     /// Return the explicit Bible version.
-    pub fn version(&self) -> &str {
-        &self.version
+    pub const fn version(&self) -> BibleVersion {
+        self.version
     }
 }
 
@@ -164,15 +164,11 @@ pub enum ScripturePlanError {
     /// The reference contains a control character.
     #[error("scripture reference cannot contain control characters")]
     ControlCharacterInReference,
-    /// No Bible version was provided.
-    #[error("Bible version cannot be blank")]
-    BlankVersion,
-    /// The version carries semantically irrelevant surrounding whitespace.
-    #[error("Bible version cannot contain surrounding whitespace")]
-    PaddedVersion,
-    /// The version contains a control character.
-    #[error("Bible version cannot contain control characters")]
-    ControlCharacterInVersion,
+    /// Reference text is not one canonical passage without annotations.
+    #[error(
+        "scripture reference must be one canonical passage without translation or annotations"
+    )]
+    InvalidReference,
     /// A partial scripture reference had no authoritative passage text.
     #[error("partial scripture description cannot be blank")]
     BlankExcerpt,
@@ -193,12 +189,17 @@ pub struct ScriptureContent(ScriptureSource);
 enum ScriptureSource {
     Single {
         reference: String,
-        bible_version: String,
+        bible_version: BibleVersion,
     },
     PrefixExcerpt {
         reference: String,
         display_reference: String,
-        bible_version: String,
+        bible_version: BibleVersion,
+        excerpt_text: String,
+    },
+    SelectedExcerpt {
+        reference: String,
+        bible_version: BibleVersion,
         excerpt_text: String,
     },
     Combined {
@@ -212,7 +213,7 @@ pub enum ScriptureRequest<'a> {
     /// One passage using one explicit Bible version.
     Single {
         reference: &'a str,
-        bible_version: &'a str,
+        bible_version: BibleVersion,
     },
     /// One passage whose final verse is bounded by validated Planning Center text.
     PrefixExcerpt {
@@ -221,8 +222,17 @@ pub enum ScriptureRequest<'a> {
         /// Operator-visible reference retaining its partial-verse suffix.
         display_reference: &'a str,
         /// Explicit local Bible version.
-        bible_version: &'a str,
+        bible_version: BibleVersion,
         /// Authoritative Planning Center wording and cutoff.
+        excerpt_text: &'a str,
+    },
+    /// One chapter whose selected verse wording comes from Planning Center.
+    SelectedExcerpt {
+        /// Whole-chapter local Bible reference used for validation and metadata.
+        reference: &'a str,
+        /// Explicit local Bible version.
+        bible_version: BibleVersion,
+        /// Authoritative numbered Planning Center wording.
         excerpt_text: &'a str,
     },
     /// Two or more explicitly versioned passages.
@@ -231,9 +241,11 @@ pub enum ScriptureRequest<'a> {
 
 impl ScriptureContent {
     /// Create one passage with its required version.
-    pub fn single(reference: String, bible_version: String) -> Result<Self, ScripturePlanError> {
+    pub fn single(
+        reference: String,
+        bible_version: BibleVersion,
+    ) -> Result<Self, ScripturePlanError> {
         validate_reference(&reference)?;
-        validate_version(&bible_version)?;
         Ok(Self(ScriptureSource::Single {
             reference,
             bible_version,
@@ -244,12 +256,10 @@ impl ScriptureContent {
     pub fn prefix_excerpt(
         reference: String,
         display_reference: String,
-        bible_version: String,
+        bible_version: BibleVersion,
         excerpt_text: String,
     ) -> Result<Self, ScripturePlanError> {
         validate_reference(&reference)?;
-        validate_reference(&display_reference)?;
-        validate_version(&bible_version)?;
         if display_reference != format!("{reference}a") {
             return Err(ScripturePlanError::MismatchedExcerptReference);
         }
@@ -259,6 +269,23 @@ impl ScriptureContent {
         Ok(Self(ScriptureSource::PrefixExcerpt {
             reference,
             display_reference,
+            bible_version,
+            excerpt_text,
+        }))
+    }
+
+    /// Create one numbered selected-verse excerpt over a whole chapter.
+    pub fn selected_excerpt(
+        reference: String,
+        bible_version: BibleVersion,
+        excerpt_text: String,
+    ) -> Result<Self, ScripturePlanError> {
+        validate_reference(&reference)?;
+        if excerpt_text.trim().is_empty() {
+            return Err(ScripturePlanError::BlankExcerpt);
+        }
+        Ok(Self(ScriptureSource::SelectedExcerpt {
+            reference,
             bible_version,
             excerpt_text,
         }))
@@ -277,7 +304,7 @@ impl ScriptureContent {
                 bible_version,
             } => ScriptureRequest::Single {
                 reference,
-                bible_version,
+                bible_version: *bible_version,
             },
             ScriptureSource::PrefixExcerpt {
                 reference,
@@ -287,7 +314,16 @@ impl ScriptureContent {
             } => ScriptureRequest::PrefixExcerpt {
                 reference,
                 display_reference,
+                bible_version: *bible_version,
+                excerpt_text,
+            },
+            ScriptureSource::SelectedExcerpt {
+                reference,
                 bible_version,
+                excerpt_text,
+            } => ScriptureRequest::SelectedExcerpt {
+                reference,
+                bible_version: *bible_version,
                 excerpt_text,
             },
             ScriptureSource::Combined { references } => {
@@ -307,18 +343,10 @@ fn validate_reference(reference: &str) -> Result<(), ScripturePlanError> {
     if reference.chars().any(char::is_control) {
         return Err(ScripturePlanError::ControlCharacterInReference);
     }
-    Ok(())
-}
-
-fn validate_version(version: &str) -> Result<(), ScripturePlanError> {
-    if version.trim().is_empty() {
-        return Err(ScripturePlanError::BlankVersion);
-    }
-    if version.trim() != version {
-        return Err(ScripturePlanError::PaddedVersion);
-    }
-    if version.chars().any(char::is_control) {
-        return Err(ScripturePlanError::ControlCharacterInVersion);
+    if crate::bible::parse_scripture_ref(reference)
+        .is_none_or(|parsed| parsed.to_string() != reference)
+    {
+        return Err(ScripturePlanError::InvalidReference);
     }
     Ok(())
 }
@@ -498,23 +526,59 @@ impl ReadyAction {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReviewContext {
     #[serde(skip_serializing_if = "Option::is_none")]
-    proposed_action: Option<ReadyAction>,
+    proposal: Option<ReviewProposal>,
+}
+
+/// Song source and arrangement decisions require their own explicit resolution.
+/// Styling decisions cannot satisfy either obligation.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "resolution", content = "action", rename_all = "snake_case")]
+enum ReviewProposal {
+    Resolved(ReadyAction),
+    SongCandidate(ReadyAction),
+    SongArrangement(ReadyAction),
 }
 
 impl ReviewContext {
     /// Create review state with an optional complete proposed action.
-    pub const fn new(proposed_action: Option<ReadyAction>) -> Self {
-        Self { proposed_action }
+    pub fn new(proposed_action: Option<ReadyAction>) -> Self {
+        Self {
+            proposal: proposed_action.map(ReviewProposal::Resolved),
+        }
+    }
+
+    /// Retain a song suggestion whose identity needs an explicit file selection.
+    pub(crate) const fn song_candidate(action: ReadyAction) -> Self {
+        Self {
+            proposal: Some(ReviewProposal::SongCandidate(action)),
+        }
+    }
+
+    /// Retain a resolved song source whose arrangement needs an explicit choice.
+    pub(crate) const fn song_arrangement(action: ReadyAction) -> Self {
+        Self {
+            proposal: Some(ReviewProposal::SongArrangement(action)),
+        }
     }
 
     /// Return the complete proposed action, when classification found one.
     pub const fn proposed_action(&self) -> Option<&ReadyAction> {
-        self.proposed_action.as_ref()
+        match &self.proposal {
+            Some(
+                ReviewProposal::Resolved(action)
+                | ReviewProposal::SongCandidate(action)
+                | ReviewProposal::SongArrangement(action),
+            ) => Some(action),
+            None => None,
+        }
     }
 
-    /// Consume the review state and return its proposed action.
-    pub fn into_proposed_action(self) -> Option<ReadyAction> {
-        self.proposed_action
+    const fn requires_song_selection(&self) -> bool {
+        matches!(self.proposal, Some(ReviewProposal::SongCandidate(_)))
+    }
+
+    const fn requires_song_arrangement(&self) -> bool {
+        matches!(self.proposal, Some(ReviewProposal::SongArrangement(_)))
     }
 }
 
@@ -777,6 +841,22 @@ impl ResolvedItemPlan {
         matches!(self.output.disposition, PlanDisposition::NeedsReview(_))
     }
 
+    /// Whether a suggested song still needs an explicit source-file decision.
+    pub(crate) const fn requires_song_selection(&self) -> bool {
+        match &self.output.disposition {
+            PlanDisposition::NeedsReview(context) => context.requires_song_selection(),
+            PlanDisposition::Ready(_) | PlanDisposition::Skip => false,
+        }
+    }
+
+    /// Whether an identified song still needs an explicit arrangement decision.
+    pub(crate) const fn requires_song_arrangement(&self) -> bool {
+        match &self.output.disposition {
+            PlanDisposition::NeedsReview(context) => context.requires_song_arrangement(),
+            PlanDisposition::Ready(_) | PlanDisposition::Skip => false,
+        }
+    }
+
     /// Domain classification used for reporting and policy diagnostics.
     pub const fn item_kind(&self) -> ItemKind {
         self.output.item_kind
@@ -827,7 +907,10 @@ impl ResolvedItemPlan {
 
     /// Promote a complete reviewed proposal into executable state.
     pub(crate) fn approve_proposed_action(&mut self) -> Result<bool, PlanSemanticsError> {
-        if !self.needs_review() {
+        if !self.needs_review()
+            || self.requires_song_selection()
+            || self.requires_song_arrangement()
+        {
             return Ok(false);
         }
         let Some(action) = self.preview_action().cloned() else {
@@ -888,12 +971,12 @@ impl ResolvedItemPlan {
             &mut self.output.disposition,
             PlanDisposition::NeedsReview(ReviewContext::new(None)),
         );
-        let proposed_action = match previous {
-            PlanDisposition::Ready(action) => Some(action),
-            PlanDisposition::NeedsReview(context) => context.into_proposed_action(),
-            PlanDisposition::Skip => None,
+        let context = match previous {
+            PlanDisposition::Ready(action) => ReviewContext::new(Some(action)),
+            PlanDisposition::NeedsReview(context) => context,
+            PlanDisposition::Skip => ReviewContext::new(None),
         };
-        self.output.disposition = PlanDisposition::NeedsReview(ReviewContext::new(proposed_action));
+        self.output.disposition = PlanDisposition::NeedsReview(context);
         self.reason = reason;
     }
 

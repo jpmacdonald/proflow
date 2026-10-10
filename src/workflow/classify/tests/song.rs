@@ -252,7 +252,7 @@ fn planning_center_default_arrangement_aliases_a_unique_native_default() {
 }
 
 #[test]
-fn unavailable_planning_center_arrangement_falls_back_to_one_complete_native_default() {
+fn unavailable_planning_center_arrangement_requires_review_despite_native_default() {
     let config = song_config(None, None);
     let (_directory, index) = song_index(&[
         ("Default", Some("550e8400-e29b-41d4-a716-446655440001")),
@@ -266,11 +266,11 @@ fn unavailable_planning_center_arrangement_falls_back_to_one_complete_native_def
         None,
     );
 
-    assert!(is_use_existing(&plans[0]));
-    assert_eq!(plans[0].arrangement(), Some("Default"));
+    assert!(plans[0].needs_review());
+    assert_eq!(plans[0].arrangement(), Some("Eight Arrangement"));
     assert!(plans[0]
         .reason
-        .contains("requested Planning Center arrangement 'Eight Arrangement' is unavailable"));
+        .contains("'Eight Arrangement' is unavailable"));
 }
 
 #[test]
@@ -355,7 +355,25 @@ fn default_arrangement_alias_requires_one_complete_native_default() {
 }
 
 #[test]
-fn planning_center_default_fallback_is_case_insensitive() {
+fn default_arrangement_alias_does_not_select_an_unrelated_sole_arrangement() {
+    let config = song_config(None, None);
+    let (_directory, index) =
+        song_index(&[("Youth", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+
+    let plans = build_plan(
+        &[song_item(Some("Default Arrangement"))],
+        &config,
+        Some(&index),
+        None,
+    );
+
+    assert!(plans[0].needs_review());
+    assert_eq!(plans[0].arrangement(), Some("Default Arrangement"));
+    assert!(plans[0].reason.contains("is unavailable"));
+}
+
+#[test]
+fn planning_center_default_alias_is_case_insensitive() {
     let config = song_config(None, None);
     let (_directory, index) =
         song_index(&[("Default", Some("550e8400-e29b-41d4-a716-446655440001"))]);
@@ -374,8 +392,10 @@ fn planning_center_default_fallback_is_case_insensitive() {
 #[test]
 fn unavailable_configured_arrangement_does_not_fall_back_to_native_default() {
     let config = song_config(Some("Configured Order"), None);
-    let (_directory, index) =
-        song_index(&[("Default", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+    let (_directory, index) = song_index(&[
+        ("Default", Some("550e8400-e29b-41d4-a716-446655440001")),
+        ("PCO Order", Some("550e8400-e29b-41d4-a716-446655440002")),
+    ]);
 
     let plans = build_plan(&[song_item(Some("PCO Order"))], &config, Some(&index), None);
 
@@ -400,7 +420,7 @@ fn unavailable_configured_arrangement_does_not_fall_back_to_native_default() {
 }
 
 #[test]
-fn exact_planning_center_arrangement_precedes_native_default_fallback() {
+fn exact_planning_center_arrangement_preserves_the_requested_name() {
     let config = song_config(None, None);
     let (_directory, index) = song_index(&[
         ("Default", Some("550e8400-e29b-41d4-a716-446655440001")),
@@ -435,8 +455,14 @@ fn configured_and_service_override_arrangements_precede_planning_center() {
 
     assert!(is_use_existing(&ordinary[0]));
     assert_eq!(ordinary[0].arrangement(), Some("Configured Order"));
+    assert!(ordinary[0]
+        .reason
+        .contains("explicit configured arrangement"));
     assert!(is_use_existing(&christmas[0]));
     assert_eq!(christmas[0].arrangement(), Some("Christmas Order"));
+    assert!(christmas[0]
+        .reason
+        .contains("explicit configured arrangement"));
 }
 
 #[test]
@@ -701,4 +727,94 @@ fn explicit_generic_and_song_targets_reject_duplicate_filenames() {
         "Configured existing song target is ambiguous: Amazing Grace.pro"
     );
     assert_eq!(plans[1].file_path(), None);
+}
+
+#[test]
+fn unmatched_qualifications_and_conflicting_titles_require_explicit_song_identity() {
+    let config = parse_project_config_str(r#"{
+        "version": 4,
+        "presentation_types": {"song": {"kind": "song", "content_source": "song", "output_strategy": "preserve_existing"}},
+        "item_rules": [{"id": "song", "match": {"category": "song"}, "use_type": "song"}]
+    }"#).expect("song config");
+    let directory = tempdir().expect("fixture library directory");
+    for name in [
+        "Amazing Grace.pro",
+        "Amazing Grace (Live).pro",
+        "[Hymn] Amazing Grace.pro",
+    ] {
+        write_song_with_arrangements(&directory.path().join(name), &[]);
+    }
+    let index = LibraryCatalog::build(directory.path()).expect("fixture library should index");
+    for (song_title, item_title, expected_ready) in [
+        ("Amazing Grace (Live)", "Amazing Grace (Live)", true),
+        ("  AMAZING  GRACE (Live) ", "Amazing Grace (Live)", true),
+        (
+            "Amazing Grace (Anastasis)",
+            "Amazing Grace (Anastasis)",
+            false,
+        ),
+        ("Amazing Grace (Anastasis)", "Amazing Grace", false),
+        ("[Spanish] Amazing Grace", "[Spanish] Amazing Grace", false),
+        ("Amazing Grace", "[Hymn] Amazing Grace", false),
+    ] {
+        let mut item = song_item(None);
+        item.title = item_title.to_string();
+        item.song.as_mut().expect("fixture song").title = song_title.to_string();
+        let plans = build_plan(&[item], &config, Some(&index), None);
+        assert_eq!(
+            is_use_existing(&plans[0]),
+            expected_ready,
+            "song={song_title}, item={item_title}"
+        );
+        if !expected_ready {
+            assert!(plans[0].needs_review());
+            assert!(
+                plans[0].ready_action().is_none(),
+                "unverified identity cannot provide a ready action"
+            );
+        }
+    }
+}
+
+#[test]
+fn exact_configured_file_authorizes_a_qualified_or_conflicting_song_title() {
+    let config = song_config(None, None);
+    let (_directory, index) = song_index(&[]);
+    let mut item = song_item(None);
+    item.title = "Offertory: Amazing Grace (Live)".to_string();
+    item.song.as_mut().expect("fixture song").title = "Amazing Grace (Live)".to_string();
+    let plans = build_plan(&[item], &config, Some(&index), None);
+    assert!(is_use_existing(&plans[0]));
+    assert_eq!(plans[0].playlist_name, "Amazing Grace");
+}
+
+#[test]
+fn omitted_arrangement_does_not_select_an_arbitrary_sole_native_arrangement() {
+    let config = song_config(None, None);
+    let (_directory, index) =
+        song_index(&[("Youth", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+    let plans = build_plan(&[song_item(None)], &config, Some(&index), None);
+    assert!(plans[0].needs_review());
+    assert!(plans[0].reason.contains("No arrangement was supplied"));
+}
+
+#[test]
+fn configured_review_preserves_arrangement_intent_and_its_unresolved_obligation() {
+    let config = parse_project_config_str(r#"{
+        "version": 4,
+        "presentation_types": {"song": {"kind": "song", "content_source": "song", "output_strategy": "needs_review"}},
+        "item_rules": [{"id": "song", "match": {"category": "song"}, "use_type": "song"}]
+    }"#).expect("song review config");
+    let (_directory, index) =
+        song_index(&[("Youth", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+    for (requested, unresolved) in [
+        (Some("Youth"), false),
+        (Some("Missing"), true),
+        (None, true),
+    ] {
+        let plans = build_plan(&[song_item(requested)], &config, Some(&index), None);
+        assert!(plans[0].needs_review());
+        assert_eq!(plans[0].arrangement(), requested);
+        assert_eq!(plans[0].requires_song_arrangement(), unresolved);
+    }
 }

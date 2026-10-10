@@ -299,8 +299,11 @@ fn slide_type_override_changes_native_semantics_without_forging_policy_identity(
 
 #[test]
 fn slide_type_override_cannot_relabel_generated_scripture() {
-    let scripture = ScriptureContent::single("Exodus 16:1-4".to_string(), "NRSVue".to_string())
-        .expect("valid scripture");
+    let scripture = ScriptureContent::single(
+        "Exodus 16:1-4".to_string(),
+        crate::bible::BibleVersion::NRSVue,
+    )
+    .expect("valid scripture");
     let original = test_plan(
         "pco:item:main",
         PlanDisposition::Ready(ReadyAction::GenerateScripture {
@@ -326,8 +329,11 @@ fn slide_type_override_cannot_relabel_generated_scripture() {
 
 #[test]
 fn generated_scripture_normalizes_classification_to_scripture() {
-    let scripture = ScriptureContent::single("Exodus 16:1-4".to_string(), "NRSVue".to_string())
-        .expect("valid scripture");
+    let scripture = ScriptureContent::single(
+        "Exodus 16:1-4".to_string(),
+        crate::bible::BibleVersion::NRSVue,
+    )
+    .expect("valid scripture");
     let plan = test_plan(
         "pco:item:main",
         PlanDisposition::Ready(ReadyAction::GenerateScripture {

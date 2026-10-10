@@ -276,6 +276,7 @@ impl TextFitEvidence {
     }
 
     /// Number of contiguous metric-affecting attributed runs.
+    #[cfg(test)]
     pub(crate) const fn metric_style_run_count(&self) -> usize {
         self.metric_style_run_count
     }

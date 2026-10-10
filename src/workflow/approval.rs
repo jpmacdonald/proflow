@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::plan::{ResolvedItemPlan, ScriptureRequest};
-use crate::bible::BibleVersion;
 
 mod output;
 
@@ -84,9 +83,6 @@ pub enum SourceReviewError {
         /// Background resolution failure.
         message: String,
     },
-    /// A scripture plan named an unsupported Bible version.
-    #[error("reviewed scripture source uses unsupported Bible version '{0}'")]
-    UnsupportedBibleVersion(String),
     /// Source bytes no longer match the reviewed preview.
     #[error(
         "reviewed source '{}' changed after preview (expected SHA-256 {expected}, found {actual})",
@@ -258,7 +254,7 @@ pub(super) fn plan_source_paths(
             })?;
             paths.insert(resolved);
         }
-        add_bible_source_paths(plan, project_data_root, &mut paths)?;
+        add_bible_source_paths(plan, project_data_root, &mut paths);
     }
     Ok(paths.into_iter().collect())
 }
@@ -267,30 +263,25 @@ fn add_bible_source_paths(
     plan: &ResolvedItemPlan,
     project_data_root: &Path,
     paths: &mut BTreeSet<PathBuf>,
-) -> Result<(), SourceReviewError> {
+) {
     let Some(scripture) = plan.scripture_content() else {
-        return Ok(());
+        return;
     };
 
     match scripture.request() {
         ScriptureRequest::Single { bible_version, .. }
-        | ScriptureRequest::PrefixExcerpt { bible_version, .. } => {
-            let version = parse_bible_version(bible_version)?;
+        | ScriptureRequest::PrefixExcerpt { bible_version, .. }
+        | ScriptureRequest::SelectedExcerpt { bible_version, .. } => {
+            let version = bible_version;
             paths.insert(project_data_root.join("bibles").join(version.file_name()));
         }
         ScriptureRequest::Combined(references) => {
             for reference in references {
-                let version = parse_bible_version(reference.version())?;
+                let version = reference.version();
                 paths.insert(project_data_root.join("bibles").join(version.file_name()));
             }
         }
     }
-    Ok(())
-}
-
-fn parse_bible_version(name: &str) -> Result<BibleVersion, SourceReviewError> {
-    BibleVersion::from_name(name)
-        .ok_or_else(|| SourceReviewError::UnsupportedBibleVersion(name.to_string()))
 }
 
 fn hash_file(path: &Path) -> Result<[u8; 32], SourceReviewError> {

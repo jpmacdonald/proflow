@@ -94,6 +94,19 @@ impl ServiceBuildExecutor<'_> {
                 sources,
                 text_fit,
             ),
+            ScriptureRequest::SelectedExcerpt {
+                reference,
+                bible_version,
+                excerpt_text,
+            } => self.render_selected_scripture(
+                presentation_name,
+                reference,
+                bible_version,
+                excerpt_text,
+                style,
+                sources,
+                text_fit,
+            ),
             ScriptureRequest::Single {
                 reference,
                 bible_version,
@@ -114,7 +127,7 @@ impl ServiceBuildExecutor<'_> {
         presentation_name: &str,
         reference_text: &str,
         display_reference: &str,
-        bible_version: &str,
+        bible_version: BibleVersion,
         excerpt_text: &str,
         style: &RenderStyle,
         sources: &CapturedSources,
@@ -134,7 +147,52 @@ impl ServiceBuildExecutor<'_> {
             sources,
         )?;
         passage.verses = crate::bible::reconcile_prefix_excerpt(&passage.verses, excerpt_text)?;
-        let title = format!("Scripture\n{display_reference} {bible_version}");
+        let title = format!("Scripture\n{display_reference} {}", bible_version.name());
+        let label_prefix = passage.label_prefix();
+        let mut rendered = render_source_with_native_fit(
+            presentation_name,
+            PresentationSource::Scripture {
+                title: &title,
+                label_prefix: &label_prefix,
+                verses: &passage.verses,
+            },
+            style,
+            self.render_assets,
+            text_fit,
+        )?;
+        attach_native_bible_reference(&mut rendered, &passage)?;
+        Ok(rendered)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_selected_scripture(
+        &self,
+        presentation_name: &str,
+        reference_text: &str,
+        bible_version: BibleVersion,
+        excerpt_text: &str,
+        style: &RenderStyle,
+        sources: &CapturedSources,
+        text_fit: &mut NativeTextFitOracle,
+    ) -> Result<RenderedPresentation, BuildServiceError> {
+        let reference = parse_scripture_ref(reference_text).ok_or_else(|| {
+            BuildServiceError::InvalidScriptureReference {
+                reference: reference_text.to_string(),
+            }
+        })?;
+        let mut passage = reviewed_passage(
+            self.bible_corpora,
+            self.render_assets.locations().project_data_root(),
+            reference,
+            reference_text,
+            bible_version,
+            sources,
+        )?;
+        passage.verses = crate::bible::reconcile_selected_excerpt(&passage.verses, excerpt_text)?;
+        let title = format!(
+            "Scripture\n{reference_text} (selected vv) {}",
+            bible_version.name()
+        );
         let label_prefix = passage.label_prefix();
         let mut rendered = render_source_with_native_fit(
             presentation_name,
@@ -199,7 +257,7 @@ impl ServiceBuildExecutor<'_> {
         &self,
         presentation_name: &str,
         reference_text: &str,
-        bible_version: &str,
+        bible_version: BibleVersion,
         style: &RenderStyle,
         sources: &CapturedSources,
         text_fit: &mut NativeTextFitOracle,
@@ -252,10 +310,10 @@ fn reviewed_passage(
     project_data_root: &Path,
     reference: ScriptureRef,
     reference_text: &str,
-    bible_version: &str,
+    bible_version: BibleVersion,
     sources: &CapturedSources,
 ) -> Result<ReviewedPassage, BuildServiceError> {
-    let version = parse_bible_version(bible_version)?;
+    let version = bible_version;
     let source_path = bible_source_path(project_data_root, version);
     let source_bytes = captured_source_bytes(sources, &source_path)?;
     let (header, verses) = bible.lookup_reviewed_verses(&reference, version, source_bytes)?;
@@ -350,13 +408,6 @@ const fn native_translation(version: BibleVersion) -> (&'static str, &'static st
         BibleVersion::NASB => ("New American Standard Bible", "NASB"),
         BibleVersion::KJV => ("King James Version", "KJV"),
     }
-}
-
-pub(in crate::workflow::execute) fn parse_bible_version(
-    name: &str,
-) -> Result<BibleVersion, BuildServiceError> {
-    BibleVersion::from_name(name)
-        .ok_or_else(|| BuildServiceError::UnsupportedBibleVersion(name.to_string()))
 }
 
 #[cfg(test)]

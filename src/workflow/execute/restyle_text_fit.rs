@@ -170,13 +170,9 @@ fn measure_audience_screen(
             proof.source_evidence.clone(),
         ),
         PresentationDestination::ThemeOverride(destination) => {
-            if proof.source_evidence.metric_style_run_count() > 1 {
-                return Err(RestyleTextFitError::UnsupportedAudienceMetricStyles {
-                    cue_index: proof.cue_index,
-                    screen_name: screen.screen_name().to_string(),
-                    metric_style_run_count: proof.source_evidence.metric_style_run_count(),
-                });
-            }
+            // Theme destinations intentionally use the canonical unstyled text
+            // field. Existing inline source styles are preserved on the source
+            // destination, while the audience theme owns the rendered style.
             let destination_slide = rv_data::PresentationSlide {
                 base_slide: Some(destination.base_slide().clone()),
                 ..rv_data::PresentationSlide::default()
@@ -387,14 +383,6 @@ pub(super) enum RestyleTextFitError {
     DuplicateAudienceScreen {
         cue_index: usize,
         screen_uuid: String,
-    },
-    #[error(
-        "restyled cue {cue_index} has {metric_style_run_count} metric-affecting text runs; audience screen '{screen_name}' cannot be proved without ProPresenter's private inline-style mapping"
-    )]
-    UnsupportedAudienceMetricStyles {
-        cue_index: usize,
-        screen_name: String,
-        metric_style_run_count: usize,
     },
     #[error(
         "restyled cue {cue_index} overflows {destination}: lines={line_count}, used={used_width:.2}x{used_height:.2}pt"

@@ -8,14 +8,6 @@ use httptest::{
 };
 use serde_json::json;
 
-#[test]
-fn unsupported_bible_version_is_typed() {
-    assert!(matches!(
-        parse_bible_version("ESV"),
-        Err(BuildServiceError::UnsupportedBibleVersion(version)) if version == "ESV"
-    ));
-}
-
 #[tokio::test]
 async fn changed_reviewed_source_is_rejected_before_commit() {
     let root = tempfile::tempdir().expect("temporary root");

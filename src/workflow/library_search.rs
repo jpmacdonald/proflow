@@ -120,6 +120,8 @@ const SONG_BRACKET_PREFIXES: &[&str] = &[
 pub(super) enum SongLibraryMatch {
     Resolved(String),
     Candidate(String),
+    Ambiguous,
+    ConflictingTitles,
     Missing,
 }
 
@@ -130,9 +132,22 @@ pub(super) fn resolve_song_library_match(
     stripped_title: &str,
     bare_title: &str,
 ) -> SongLibraryMatch {
+    // An attached song title owns identity. The item title can expose a conflict,
+    // but a shortened item title cannot replace an unmatched qualified song title.
+    // Search normalization, role inference, and path quality only rank suggestions.
+    let exact_song_paths = exact_song_title_paths(index, song_title);
+    let exact_item_paths = exact_song_title_paths(index, item_title);
+    match exact_song_paths.as_slice() {
+        [path] if exact_item_paths.iter().any(|item_path| item_path != path) => {
+            return SongLibraryMatch::ConflictingTitles;
+        }
+        [path] => return SongLibraryMatch::Resolved(path.clone()),
+        [] => {}
+        _ => return SongLibraryMatch::Ambiguous,
+    }
+
     let candidates = song_search_queries(song_title, stripped_title, bare_title);
     let requested_role = infer_requested_song_role(song_title, item_title);
-
     let mut strict_matches = Vec::new();
     for (query, query_penalty) in &candidates {
         strict_matches.extend(search_index_strict_matches(
@@ -142,12 +157,8 @@ pub(super) fn resolve_song_library_match(
             *query_penalty,
         ));
     }
-    if let Some(preferred) = preferred_song_match(&strict_matches) {
-        return if preferred.ambiguous || !preferred.candidate.is_confident() {
-            SongLibraryMatch::Candidate(preferred.candidate.path)
-        } else {
-            SongLibraryMatch::Resolved(preferred.candidate.path)
-        };
+    if let Some(candidate) = preferred_song_match(&strict_matches) {
+        return SongLibraryMatch::Candidate(candidate.path);
     }
 
     let mut loose_matches = Vec::new();
@@ -161,6 +172,28 @@ pub(super) fn resolve_song_library_match(
     }
 
     SongLibraryMatch::Missing
+}
+
+/// Identity normalization preserves every title word and qualification. Only
+/// letter case and repeated whitespace are insignificant at this boundary.
+fn exact_song_title_paths(index: Option<&LibraryCatalog>, title: &str) -> Vec<String> {
+    let identity = |value: &str| {
+        value
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let key = identity(title);
+    let Some(index) = index.filter(|_| !key.is_empty()) else {
+        return Vec::new();
+    };
+    index
+        .entries()
+        .iter()
+        .filter(|entry| identity(entry.file_name()) == key)
+        .map(|entry| entry.full_path().to_string_lossy().into_owned())
+        .collect()
 }
 
 fn push_unique_path(paths: &mut Vec<String>, path: String) {
@@ -262,7 +295,7 @@ pub(super) fn search_index_strict(index: Option<&LibraryCatalog>, query: &str) -
         SongRole::Unknown,
         0,
     ))
-    .map(|preferred| preferred.candidate.path)
+    .map(|candidate| candidate.path)
 }
 
 fn search_index_strict_matches(
@@ -292,22 +325,17 @@ fn search_index_strict_matches(
     matches
 }
 
-fn preferred_song_match(matches: &[ScoredSongMatch]) -> Option<PreferredSongMatch> {
-    let candidate = matches.iter().max_by(|left, right| {
-        left.title_score
-            .cmp(&right.title_score)
-            .then(left.role_score.cmp(&right.role_score))
-            .then(left.path_score.cmp(&right.path_score))
-            .then_with(|| right.path.cmp(&left.path))
-    })?;
-    let best_score = candidate.semantic_score();
-    let ambiguous = matches
+fn preferred_song_match(matches: &[ScoredSongMatch]) -> Option<ScoredSongMatch> {
+    matches
         .iter()
-        .any(|other| other.path != candidate.path && other.semantic_score() == best_score);
-    Some(PreferredSongMatch {
-        candidate: candidate.clone(),
-        ambiguous,
-    })
+        .max_by(|left, right| {
+            left.title_score
+                .cmp(&right.title_score)
+                .then(left.role_score.cmp(&right.role_score))
+                .then(left.path_score.cmp(&right.path_score))
+                .then_with(|| right.path.cmp(&left.path))
+        })
+        .cloned()
 }
 
 fn push_scored_song_match(
@@ -407,20 +435,7 @@ struct ScoredSongMatch {
     path_score: i32,
 }
 
-struct PreferredSongMatch {
-    candidate: ScoredSongMatch,
-    ambiguous: bool,
-}
-
 impl ScoredSongMatch {
-    const fn is_confident(&self) -> bool {
-        self.title_score >= 100 && self.role_score >= 0
-    }
-
-    const fn semantic_score(&self) -> (i32, i32, i32) {
-        (self.title_score, self.role_score, self.path_score)
-    }
-
     fn better_than(&self, other: &Self) -> bool {
         (
             self.title_score,
@@ -789,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_hymn_title_beats_an_untagged_title() {
+    fn conflicting_exact_item_and_song_titles_require_review() {
         let (_dir, index) = build_index(&["Amazing Grace.pro", "[Hymn] Amazing Grace.pro"]);
 
         let resolved = resolve_song_library_match(
@@ -800,10 +815,7 @@ mod tests {
             "Amazing Grace",
         );
 
-        assert!(matches!(
-            resolved,
-            SongLibraryMatch::Resolved(path) if path.ends_with("[Hymn] Amazing Grace.pro")
-        ));
+        assert_eq!(resolved, SongLibraryMatch::ConflictingTitles);
     }
 
     #[test]
@@ -849,5 +861,54 @@ mod tests {
         );
 
         assert!(matches!(resolved, SongLibraryMatch::Candidate(_)));
+    }
+    #[test]
+    fn duplicate_exact_titles_are_ambiguous_regardless_of_parent_directory() {
+        let dir = tempdir().expect("temp dir");
+        let nested = dir.path().join("conflicted copy");
+        fs::create_dir(&nested).expect("nested fixture directory");
+        write_presentation(&dir.path().join("Amazing Grace.pro"));
+        write_presentation(&nested.join("amazing grace.pro"));
+        let index = LibraryCatalog::build(dir.path()).expect("fixture library");
+        assert_eq!(
+            resolve_song_library_match(
+                Some(&index),
+                "Amazing Grace",
+                "Amazing Grace",
+                "Amazing Grace",
+                "Amazing Grace"
+            ),
+            SongLibraryMatch::Ambiguous,
+        );
+    }
+
+    #[test]
+    fn unrelated_candidates_cannot_change_full_title_identity() {
+        let (dir, initial) = build_index(&["Amazing Grace (Live).pro"]);
+        let before = resolve_song_library_match(
+            Some(&initial),
+            "Amazing Grace (Live)",
+            "Amazing Grace (Live)",
+            "Amazing Grace",
+            "Amazing Grace",
+        );
+        for name in [
+            "Amazing Grace.pro",
+            "[Hymn] Amazing Grace.pro",
+            "Amazing Grace (Anastasis).pro",
+        ] {
+            write_presentation(&dir.path().join(name));
+        }
+        let expanded = LibraryCatalog::build(dir.path()).expect("expanded fixture library");
+        assert_eq!(
+            resolve_song_library_match(
+                Some(&expanded),
+                "Amazing Grace (Live)",
+                "Amazing Grace (Live)",
+                "Amazing Grace",
+                "Amazing Grace"
+            ),
+            before,
+        );
     }
 }

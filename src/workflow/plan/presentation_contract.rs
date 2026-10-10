@@ -349,7 +349,7 @@ mod tests {
     fn scripture_contract_requires_native_metadata() {
         let scripture = crate::workflow::plan::ScriptureContent::single(
             "John 3:16".to_string(),
-            "NRSVue".to_string(),
+            crate::bible::BibleVersion::NRSVue,
         )
         .expect("valid scripture");
         let contract = ExpectedPresentationContract::from_plan(

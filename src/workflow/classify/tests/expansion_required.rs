@@ -191,13 +191,44 @@ fn speaker_resolution_requires_a_configured_person() {
     );
 }
 
+// This fixture owns the expansion policy exercised by the speaker tests.
+// Production configuration can change its welcome policy independently.
+fn speaker_fallback_config() -> crate::project_config::ProjectConfig {
+    parse_project_config_str(
+        r#"{
+          "version": 4,
+          "defaults": { "speaker_fallback_rule": "lords_prayer" },
+          "people": {
+            "Hope": { "nametag": "Hope Nametag" },
+            "Robert": { "nametag": "Robert Nametag" }
+          },
+          "presentation_types": {
+            "title_static": {
+              "kind": "nametag",
+              "content_source": "static",
+              "output_strategy": "preserve_existing"
+            }
+          },
+          "item_rules": [
+            {
+              "id": "lords_prayer",
+              "match": { "title_prefix": ["prayer and the lord's prayer"] },
+              "action": { "kind": "skip", "reason": "Speaker source only" }
+            },
+            {
+              "id": "welcome",
+              "match": { "title_prefix": ["welcome"] },
+              "expand": [{ "use_type": "title_static", "speaker": "resolved" }]
+            }
+          ]
+        }"#,
+    )
+    .expect("speaker fallback fixture should parse")
+}
+
 #[test]
 fn missing_speaker_uses_the_unique_lords_prayer_speaker_as_a_plan_fallback() {
-    let config = parse_project_config_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/data/proflow.config.json"
-    )))
-    .expect("repo config should parse");
+    let config = speaker_fallback_config();
     let items = vec![
         test_text_item("welcome", 1, "Welcome", None),
         test_text_item(
@@ -219,11 +250,7 @@ fn missing_speaker_uses_the_unique_lords_prayer_speaker_as_a_plan_fallback() {
 
 #[test]
 fn explicit_or_invalid_item_speakers_are_never_replaced_by_the_plan_fallback() {
-    let config = parse_project_config_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/data/proflow.config.json"
-    )))
-    .expect("repo config should parse");
+    let config = speaker_fallback_config();
     let lords_prayer = test_text_item(
         "lords-prayer",
         3,
@@ -253,11 +280,7 @@ fn explicit_or_invalid_item_speakers_are_never_replaced_by_the_plan_fallback() {
 
 #[test]
 fn duplicate_fallback_source_items_do_not_guess_a_plan_speaker() {
-    let config = parse_project_config_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/data/proflow.config.json"
-    )))
-    .expect("repo config should parse");
+    let config = speaker_fallback_config();
     let items = vec![
         test_text_item("welcome", 1, "Welcome", None),
         test_text_item(

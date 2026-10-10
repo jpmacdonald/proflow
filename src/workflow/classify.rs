@@ -633,7 +633,7 @@ pub(super) fn build_type_plan(
             type_key,
             item,
             render.for_service(service_name),
-            mappings.defaults().bible_version,
+            mappings,
         ),
     }
 }

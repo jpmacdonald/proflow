@@ -21,6 +21,40 @@ pub enum ScriptureExcerptError {
     CompleteFinalVerse,
 }
 
+/// Why a numbered selected-verse description cannot be trusted as scripture.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SelectedScriptureExcerptError {
+    /// Planning Center did not supply passage text.
+    #[error("Planning Center selected-verse text is empty")]
+    Empty,
+    /// The description does not begin with a numbered verse.
+    #[error("Planning Center selected-verse text must begin with a verse number")]
+    MissingInitialVerse,
+    /// A numbered segment has no display text.
+    #[error("Planning Center selected verse {verse} has no text")]
+    EmptyVerse {
+        /// Explicit verse number.
+        verse: u32,
+    },
+    /// Explicit verse numbers are not strictly increasing.
+    #[error("Planning Center selected verse numbers must be strictly increasing")]
+    NonIncreasingVerses,
+    /// An explicit verse number is absent from the selected chapter.
+    #[error("Planning Center selected verse {verse} is absent from the local Bible chapter")]
+    MissingVerse {
+        /// Explicit verse number.
+        verse: u32,
+    },
+    /// Supplied words cannot be reconciled with the corresponding chapter span.
+    #[error(
+        "Planning Center selected verse {verse} wording does not follow the local Bible chapter"
+    )]
+    WordingMismatch {
+        /// Explicit verse number.
+        verse: u32,
+    },
+}
+
 #[derive(Debug)]
 struct CanonicalToken {
     normalized: String,
@@ -82,6 +116,121 @@ pub fn reconcile_prefix_excerpt(
     let final_text = &verses[final_index].text;
     reconciled[final_index].text = prefix_through_punctuation(final_text, end);
     Ok(reconciled)
+}
+
+/// Validate and preserve an authoritative numbered selected-verse description.
+///
+/// Explicit verse markers must be strictly increasing and present in the local
+/// chapter. Each supplied segment must follow the local wording between its
+/// marker and the next explicit marker. This permits intentional omissions and
+/// ellipses while rejecting reordered or invented words. Returned text remains
+/// exactly as supplied by Planning Center.
+pub fn reconcile_selected_excerpt(
+    chapter: &[Verse],
+    supplied: &str,
+) -> Result<Vec<Verse>, SelectedScriptureExcerptError> {
+    let supplied = supplied.trim();
+    if supplied.is_empty() {
+        return Err(SelectedScriptureExcerptError::Empty);
+    }
+    let markers = selected_verse_markers(supplied);
+    if markers.first().is_none_or(|marker| marker.start != 0) {
+        return Err(SelectedScriptureExcerptError::MissingInitialVerse);
+    }
+
+    let mut selected = Vec::with_capacity(markers.len());
+    for (index, marker) in markers.iter().enumerate() {
+        if index > 0 && markers[index - 1].number >= marker.number {
+            return Err(SelectedScriptureExcerptError::NonIncreasingVerses);
+        }
+        let text_end = markers
+            .get(index + 1)
+            .map_or(supplied.len(), |next| next.start);
+        let text = supplied[marker.text_start..text_end].trim();
+        if text.is_empty() {
+            return Err(SelectedScriptureExcerptError::EmptyVerse {
+                verse: marker.number,
+            });
+        }
+        let next_number = markers.get(index + 1).map(|next| next.number);
+        let local_text = chapter
+            .iter()
+            .filter(|verse| {
+                verse.number >= marker.number && next_number.is_none_or(|next| verse.number < next)
+            })
+            .map(|verse| verse.text.as_str())
+            .collect::<Vec<_>>();
+        if !chapter.iter().any(|verse| verse.number == marker.number) {
+            return Err(SelectedScriptureExcerptError::MissingVerse {
+                verse: marker.number,
+            });
+        }
+        let supplied_tokens = normalized_tokens(text);
+        let local_tokens = normalized_tokens(&local_text.join(" "));
+        if supplied_tokens.is_empty() || !is_ordered_subsequence(&supplied_tokens, &local_tokens) {
+            return Err(SelectedScriptureExcerptError::WordingMismatch {
+                verse: marker.number,
+            });
+        }
+        selected.push(Verse {
+            number: marker.number,
+            text: text.to_string(),
+        });
+    }
+    Ok(selected)
+}
+
+#[derive(Debug)]
+struct SelectedVerseMarker {
+    start: usize,
+    text_start: usize,
+    number: u32,
+}
+
+fn selected_verse_markers(text: &str) -> Vec<SelectedVerseMarker> {
+    let bytes = text.as_bytes();
+    let mut markers = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() && (index == 0 || bytes[index - 1].is_ascii_whitespace()) {
+            let start = index;
+            let mut end = index;
+            let mut number = 0_u32;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                number = number
+                    .saturating_mul(10)
+                    .saturating_add(u32::from(bytes[end] - b'0'));
+                end += 1;
+            }
+            if number > 0 && end < bytes.len() && bytes[end].is_ascii_whitespace() {
+                while end < bytes.len() && bytes[end].is_ascii_whitespace() {
+                    end += 1;
+                }
+                markers.push(SelectedVerseMarker {
+                    start,
+                    text_start: end,
+                    number,
+                });
+                index = end;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    markers
+}
+
+fn is_ordered_subsequence(needle: &[String], haystack: &[String]) -> bool {
+    let mut next = 0;
+    for token in haystack {
+        if needle.get(next) == Some(token) {
+            next += 1;
+            if next == needle.len() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn canonical_tokens(verses: &[Verse]) -> Vec<CanonicalToken> {
@@ -195,6 +344,41 @@ mod tests {
         assert_eq!(
             reconcile_prefix_excerpt(&verses, "7 Alpha beta 8 Gamma delta"),
             Err(ScriptureExcerptError::CompleteFinalVerse)
+        );
+    }
+
+    #[test]
+    fn selected_excerpt_preserves_supplied_ellipses_and_explicit_markers() {
+        let chapter = vec![
+            verse(1, "Alpha one omitted middle omega."),
+            verse(2, "Second verse is omitted."),
+            verse(3, "Gamma three complete."),
+        ];
+
+        let selected =
+            reconcile_selected_excerpt(&chapter, "1 Alpha one… omega. 3 Gamma three complete.")
+                .expect("ordered selected excerpt");
+
+        assert_eq!(
+            selected,
+            vec![
+                verse(1, "Alpha one… omega."),
+                verse(3, "Gamma three complete.")
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_excerpt_rejects_reordered_or_unknown_words() {
+        let chapter = vec![verse(1, "Alpha beta gamma."), verse(2, "Delta epsilon.")];
+
+        assert_eq!(
+            reconcile_selected_excerpt(&chapter, "1 Gamma alpha"),
+            Err(SelectedScriptureExcerptError::WordingMismatch { verse: 1 })
+        );
+        assert_eq!(
+            reconcile_selected_excerpt(&chapter, "1 Alpha 9 Missing"),
+            Err(SelectedScriptureExcerptError::MissingVerse { verse: 9 })
         );
     }
 }

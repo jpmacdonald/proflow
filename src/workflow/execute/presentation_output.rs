@@ -11,6 +11,4 @@ mod target;
 
 #[cfg(test)]
 pub(super) use existing::apply_restyle_macro_policy;
-#[cfg(test)]
-pub(super) use scripture::parse_bible_version;
 pub(super) use target::{ReviewedBackgroundAsset, ReviewedRenderTarget};

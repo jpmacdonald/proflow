@@ -301,6 +301,25 @@ pub(super) fn apply_override(
             effective.playlist_name.clone_from(playlist_name);
         }
         if let Some(action) = &override_entry.action {
+            if entry.requires_song_selection()
+                && !matches!(action, OverrideAction::UseExisting { .. })
+            {
+                return Err(unsupported_override(
+                    entry,
+                    "change a song candidate without selecting its exact source file",
+                ));
+            }
+            if entry.requires_song_arrangement()
+                && !matches!(
+                    action,
+                    OverrideAction::UseExisting { .. } | OverrideAction::SelectArrangement { .. }
+                )
+            {
+                return Err(unsupported_override(
+                    entry,
+                    "change a song with an unresolved arrangement without selecting an arrangement",
+                ));
+            }
             effective.set_ready_action(resolve_override_action(entry, action)?)?;
             effective.reason = "Build override action".to_string();
         }

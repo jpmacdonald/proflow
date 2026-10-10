@@ -29,4 +29,5 @@ mod overrides;
 mod playlist_identity;
 mod portable_export;
 mod receipt;
+mod semantic_resolution;
 mod source_capture;

@@ -99,6 +99,22 @@ fn item_parser_rejects_missing_title() {
 }
 
 #[test]
+fn item_parser_normalizes_incidental_title_padding() {
+    let items = parse_items(
+        &[json!({
+            "id": "item-1",
+            "attributes": { "title": "  Piano Prelude  ", "sequence": 1 },
+            "relationships": {}
+        })],
+        &[],
+        "plan-1",
+    )
+    .expect("padded display text is normalized at the source boundary");
+
+    assert_eq!(items[0].title, "Piano Prelude");
+}
+
+#[test]
 fn item_parser_requires_an_integer_sequence() {
     let missing = parse_items(
         &[json!({
@@ -233,6 +249,79 @@ fn declared_arrangement_relationship_requires_included_arrangement() {
             ..
         } if target_id == "arrangement-1"
     ));
+}
+
+#[test]
+fn unnamed_included_arrangement_preserves_lyrics_without_requesting_a_name() {
+    let included = [
+        json!({
+            "type": "Song",
+            "id": "song-1",
+            "attributes": { "title": "Amazing Grace" }
+        }),
+        json!({
+            "type": "Arrangement",
+            "id": "arrangement-1",
+            "attributes": {
+                "name": "",
+                "lyrics": "[Verse 1]\nAmazing grace"
+            }
+        }),
+    ];
+    let items = parse_items(
+        &[json!({
+            "id": "item-1",
+            "attributes": { "title": "Amazing Grace", "sequence": 10 },
+            "relationships": {
+                "song": { "data": { "id": "song-1" } },
+                "arrangement": { "data": { "id": "arrangement-1" } }
+            }
+        })],
+        &included,
+        "plan-1",
+    )
+    .expect("an empty Planning Center arrangement name carries no selection identity");
+
+    let song = items[0].song.as_ref().expect("song relationship");
+    assert_eq!(song.arrangement, None);
+    assert_eq!(song.lyrics.as_deref(), Some("[Verse 1]\nAmazing grace"));
+}
+
+#[test]
+fn included_arrangement_name_is_normalized_at_the_source_boundary() {
+    let included = [
+        json!({
+            "type": "Song",
+            "id": "song-1",
+            "attributes": { "title": "Amazing Grace" }
+        }),
+        json!({
+            "type": "Arrangement",
+            "id": "arrangement-1",
+            "attributes": { "name": "Default Arrangement " }
+        }),
+    ];
+    let items = parse_items(
+        &[json!({
+            "id": "item-1",
+            "attributes": { "title": "Amazing Grace", "sequence": 10 },
+            "relationships": {
+                "song": { "data": { "id": "song-1" } },
+                "arrangement": { "data": { "id": "arrangement-1" } }
+            }
+        })],
+        &included,
+        "plan-1",
+    )
+    .expect("Planning Center arrangement padding should be normalized once");
+
+    assert_eq!(
+        items[0]
+            .song
+            .as_ref()
+            .and_then(|song| song.arrangement.as_deref()),
+        Some("Default Arrangement")
+    );
 }
 
 #[test]

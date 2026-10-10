@@ -46,19 +46,20 @@ fn text_slots(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
 
 #[test]
 fn scripture_content_has_one_checked_source_form() {
-    let single = ScriptureContent::single("John 3:16".to_string(), "NRSVue".to_string())
-        .expect("non-blank scripture identity should be valid");
+    let single =
+        ScriptureContent::single("John 3:16".to_string(), crate::bible::BibleVersion::NRSVue)
+            .expect("non-blank scripture identity should be valid");
     assert!(matches!(
         single.request(),
         ScriptureRequest::Single {
             reference: "John 3:16",
-            bible_version: "NRSVue"
+            bible_version: crate::bible::BibleVersion::NRSVue
         }
     ));
     let excerpt = ScriptureContent::prefix_excerpt(
         "Exodus 16:1-4".to_string(),
         "Exodus 16:1-4a".to_string(),
-        "NRSVue".to_string(),
+        crate::bible::BibleVersion::NRSVue,
         "1 Whole passage 4 verified prefix".to_string(),
     )
     .expect("partial scripture source should be complete");
@@ -67,7 +68,7 @@ fn scripture_content_has_one_checked_source_form() {
         ScriptureRequest::PrefixExcerpt {
             reference: "Exodus 16:1-4",
             display_reference: "Exodus 16:1-4a",
-            bible_version: "NRSVue",
+            bible_version: crate::bible::BibleVersion::NRSVue,
             excerpt_text: "1 Whole passage 4 verified prefix",
         }
     ));
@@ -75,15 +76,18 @@ fn scripture_content_has_one_checked_source_form() {
     assert!(ScriptureContent::combined(Vec::new()).is_none());
     assert!(ScriptureContent::combined(vec![ScriptureRefInfo::new(
         "John 3:16".to_string(),
-        "NRSVue".to_string()
+        crate::bible::BibleVersion::NRSVue
     )
     .expect("non-blank scripture identity should be valid"),])
     .is_none());
 
     let combined = ScriptureContent::combined(vec![
-        ScriptureRefInfo::new("Psalm 23:1-2".to_string(), "NRSVue".to_string())
-            .expect("non-blank scripture identity should be valid"),
-        ScriptureRefInfo::new("John 3:16".to_string(), "NIV".to_string())
+        ScriptureRefInfo::new(
+            "Psalm 23:1-2".to_string(),
+            crate::bible::BibleVersion::NRSVue,
+        )
+        .expect("non-blank scripture identity should be valid"),
+        ScriptureRefInfo::new("John 3:16".to_string(), crate::bible::BibleVersion::NIV)
             .expect("non-blank scripture identity should be valid"),
     ])
     .expect("two references form a valid combined source");
@@ -95,8 +99,11 @@ fn scripture_content_has_one_checked_source_form() {
 
 #[test]
 fn scripture_content_serialization_preserves_preview_shape() {
-    let scripture = ScriptureContent::single("Ephesians 4:4-6".to_string(), "NRSVue".to_string())
-        .expect("non-blank scripture identity should be valid");
+    let scripture = ScriptureContent::single(
+        "Ephesians 4:4-6".to_string(),
+        crate::bible::BibleVersion::NRSVue,
+    )
+    .expect("non-blank scripture identity should be valid");
     let value = serde_json::to_value(scripture).expect("serialize scripture source");
 
     assert_eq!(
@@ -113,7 +120,7 @@ fn partial_scripture_serialization_keeps_lookup_and_display_references_distinct(
     let scripture = ScriptureContent::prefix_excerpt(
         "Exodus 16:1-4".to_string(),
         "Exodus 16:1-4a".to_string(),
-        "NRSVue".to_string(),
+        crate::bible::BibleVersion::NRSVue,
         "1 Passage 4 prefix".to_string(),
     )
     .expect("partial scripture source");
@@ -141,28 +148,36 @@ fn scripture_identity_rejects_blank_padded_and_control_text() {
         ),
     ] {
         assert_eq!(
-            ScriptureRefInfo::new(reference.to_string(), "NRSVue".to_string()).err(),
+            ScriptureRefInfo::new(reference.to_string(), crate::bible::BibleVersion::NRSVue).err(),
             Some(expected)
         );
         assert_eq!(
-            ScriptureContent::single(reference.to_string(), "NRSVue".to_string()).err(),
+            ScriptureContent::single(reference.to_string(), crate::bible::BibleVersion::NRSVue)
+                .err(),
             Some(expected)
         );
     }
+}
 
-    for (version, expected) in [
-        ("", ScripturePlanError::BlankVersion),
-        ("   ", ScripturePlanError::BlankVersion),
-        ("NRSVue ", ScripturePlanError::PaddedVersion),
-        ("NRS\u{7}Vue", ScripturePlanError::ControlCharacterInVersion),
+#[test]
+fn scripture_reference_cannot_hide_a_translation_or_additional_passage() {
+    for reference in [
+        "John 3:16 ESV",
+        "John 3:16NIV",
+        "John 3:16 (NRSVue)",
+        "John 3:16; Luke 2:1",
+        "John 3:16 (Robert)",
+        "not a passage",
     ] {
         assert_eq!(
-            ScriptureRefInfo::new("John 3:16".to_string(), version.to_string()).err(),
-            Some(expected)
+            ScriptureContent::single(reference.to_string(), crate::bible::BibleVersion::NIV).err(),
+            Some(ScripturePlanError::InvalidReference),
+            "{reference}",
         );
         assert_eq!(
-            ScriptureContent::single("John 3:16".to_string(), version.to_string()).err(),
-            Some(expected)
+            ScriptureRefInfo::new(reference.to_string(), crate::bible::BibleVersion::NIV).err(),
+            Some(ScripturePlanError::InvalidReference),
+            "{reference}",
         );
     }
 }
@@ -173,7 +188,7 @@ fn partial_scripture_rejects_a_display_reference_that_disagrees_with_lookup() {
         ScriptureContent::prefix_excerpt(
             "Exodus 16:1-4".to_string(),
             "Exodus 16:1-4b".to_string(),
-            "NRSVue".to_string(),
+            crate::bible::BibleVersion::NRSVue,
             "1 Passage 4 segment".to_string(),
         )
         .err(),

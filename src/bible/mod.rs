@@ -10,7 +10,10 @@ use sha2::{Digest, Sha256};
 
 mod excerpt;
 
-pub use excerpt::{reconcile_prefix_excerpt, ScriptureExcerptError};
+pub use excerpt::{
+    reconcile_prefix_excerpt, reconcile_selected_excerpt, ScriptureExcerptError,
+    SelectedScriptureExcerptError,
+};
 
 /// Supported Bible versions
 #[derive(
@@ -233,7 +236,7 @@ impl ScriptureRef {
             "Nehemiah",
             "Esther",
             "Job",
-            "Psalms",
+            "Psalm",
             "Proverbs",
             "Ecclesiastes",
             "Song of Solomon",
@@ -401,9 +404,9 @@ static BOOK_ALIASES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::n
     m.insert("esth", "Esther");
     m.insert("esther", "Esther");
     m.insert("job", "Job");
-    m.insert("ps", "Psalms");
-    m.insert("psalm", "Psalms");
-    m.insert("psalms", "Psalms");
+    m.insert("ps", "Psalm");
+    m.insert("psalm", "Psalm");
+    m.insert("psalms", "Psalm");
     m.insert("prov", "Proverbs");
     m.insert("proverbs", "Proverbs");
     m.insert("eccl", "Ecclesiastes");
