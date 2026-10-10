@@ -354,6 +354,15 @@ fn env_path(name: &str) -> Option<PathBuf> {
     Some(expand_user_path(&value))
 }
 
+/// The maintainer's live, untracked project data root used by `#[ignore]`d
+/// tests: `PROFLOW_DATA` when set, otherwise `<repo>/data`.
+///
+/// `just live-data` runs those tests and skips loudly when the root is absent.
+#[cfg(test)]
+pub(crate) fn live_test_data_root() -> PathBuf {
+    env_path("PROFLOW_DATA").unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("data"))
+}
+
 fn same_existing_path(left: &Path, right: &Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,

@@ -6,8 +6,7 @@ use crate::workflow::plan::{
 use std::{collections::BTreeSet, path::Path};
 
 fn production_config() -> ProjectConfig {
-    parse_project_config_str(include_str!("../../../data/proflow.config.json"))
-        .expect("repo config should parse")
+    super::live_project_config()
 }
 
 fn restyle(
@@ -378,6 +377,7 @@ fn assert_identity_sensitive_targets(config: &ProjectConfig) {
 }
 
 #[test]
+#[ignore = "requires the live project data root; run `just live-data`"]
 fn repo_config_compiles_to_the_reviewed_presentation_contract() {
     let config = production_config();
     assert_eq!(config.as_raw().version, 4);

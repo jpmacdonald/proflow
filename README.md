@@ -138,6 +138,12 @@ ProFlow validates referenced assets before a build can be approved.
 The data directory is loaded as one unit. ProFlow does not combine configuration,
 backgrounds, or Bible data from unrelated installations.
 
+The repository's own `data/` directory is a live data root and is not tracked.
+Bible corpora carry licenses that do not permit redistribution, and a real
+project config names real people. Running from the repository uses `./data`
+when `PROFLOW_DATA` is unset. Tests that depend on that root are `#[ignore]`d
+in the deterministic gates and run with `just live-data`.
+
 ## Operation
 
 The MCP server exposes eight tools:

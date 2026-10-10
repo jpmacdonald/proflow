@@ -109,3 +109,9 @@ jspm_packages/
 **/*~
 **/*.bak
 **/*.bakup
+
+# Live project data root (default for PROFLOW_DATA during development).
+# Bible corpora carry licenses that forbid redistribution and the config names
+# real people, so this directory is never tracked. examples/ holds the
+# shareable starter config.
+/data/

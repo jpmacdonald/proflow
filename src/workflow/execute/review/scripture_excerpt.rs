@@ -150,8 +150,6 @@ fn validate_description_scripture_excerpt(
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
     use crate::planning_center::types::{Category, Item};
     use crate::project_config::parse_project_config_str;
@@ -166,9 +164,10 @@ mod tests {
          38 Saul clothed David with his armor…then David said to Saul, “I cannot walk with these, for I am not used to them.” So David removed them. 40 Then he took his staff in his hand and chose five smooth stones from the wadi and put them in his shepherd’s bag, in the pouch; his sling was in his hand, and he drew near to the Philistine… 48 When the Philistine drew nearer to meet David… 49 David put his hand in his bag, took out a stone, slung it, and struck the Philistine on his forehead; the stone sank into his forehead, and he fell face down on the ground. 50 So David prevailed over the Philistine with a sling and a stone… 51 When the Philistines saw that their champion was dead, they fled.";
 
     #[test]
+    #[ignore = "requires the live project data root; run `just live-data`"]
     fn exodus_partial_description_is_proved_against_local_nrsvue_text() {
         let bible =
-            BibleCorpusSnapshot::capture(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/bibles"))
+            BibleCorpusSnapshot::capture(crate::paths::live_test_data_root().join("bibles"))
                 .expect("capture Bible corpora");
 
         assert_eq!(
@@ -190,6 +189,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the live project data root; run `just live-data`"]
     fn validated_partial_description_crosses_from_review_to_ready() {
         let config = parse_project_config_str(
             r#"{
@@ -227,7 +227,7 @@ mod tests {
         assert!(plans[0].needs_review());
 
         let bible =
-            BibleCorpusSnapshot::capture(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/bibles"))
+            BibleCorpusSnapshot::capture(crate::paths::live_test_data_root().join("bibles"))
                 .expect("capture Bible corpora");
         reconcile_description_scripture_excerpts(&mut plans, &bible)
             .expect("compatible scripture proposal");
@@ -244,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the live project data root; run `just live-data`"]
     fn selected_samuel_description_is_proved_and_crosses_to_ready() {
         let config = parse_project_config_str(
             r#"{
@@ -281,7 +282,7 @@ mod tests {
         assert!(plans[0].needs_review());
 
         let bible =
-            BibleCorpusSnapshot::capture(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/bibles"))
+            BibleCorpusSnapshot::capture(crate::paths::live_test_data_root().join("bibles"))
                 .expect("capture Bible corpora");
         reconcile_description_scripture_excerpts(&mut plans, &bible)
             .expect("compatible selected scripture proposal");

@@ -6,12 +6,9 @@ use crate::workflow::plan::ReadyAction;
 use tempfile::tempdir;
 
 #[test]
+#[ignore = "requires the live project data root; run `just live-data`"]
 fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
-    let config = parse_project_config_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/data/proflow.config.json"
-    )))
-    .expect("repo config should parse");
+    let config = crate::project_config::tests::live_project_config();
 
     for (title, service, expected_type) in [
         (
@@ -99,12 +96,9 @@ fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
 }
 
 #[test]
+#[ignore = "requires the live project data root; run `just live-data`"]
 fn repo_expansion_rule_matrix_keeps_speaker_nametag_and_liturgy_order() {
-    let config = parse_project_config_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/data/proflow.config.json"
-    )))
-    .expect("repo config should parse");
+    let config = crate::project_config::tests::live_project_config();
 
     for (title, description, expected_types) in [
         (
@@ -139,12 +133,9 @@ fn repo_expansion_rule_matrix_keeps_speaker_nametag_and_liturgy_order() {
 }
 
 #[test]
+#[ignore = "requires the live project data root; run `just live-data`"]
 fn repo_native_liturgy_routes_select_the_reviewed_files() {
-    let config = parse_project_config_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/data/proflow.config.json"
-    )))
-    .expect("repo config should parse");
+    let config = crate::project_config::tests::live_project_config();
     let library = tempdir().expect("production-routing library");
     for file in [
         "Baptism Him.pro",
