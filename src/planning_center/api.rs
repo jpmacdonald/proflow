@@ -5,11 +5,162 @@ use serde_json::Value;
 use std::time::Duration as StdDuration;
 use tokio::time::sleep;
 
-use super::identity::{resolve_plan_identity, PlanCaptureError, PlanLookup};
+use super::identity::{resolve_plan_identity, PlanCaptureError, PlanIdentityError, PlanLookup};
+use super::normalize::PlanningCenterSourceError;
+use super::PlanRevisionError;
+
+type Result<T> = std::result::Result<T, PlanningCenterError>;
+
+/// Failure to read from or make sense of the Planning Center API.
+#[derive(Debug, thiserror::Error)]
+pub enum PlanningCenterError {
+    /// `PCO_APP_ID` or `PCO_SECRET` is unset or blank.
+    #[error("Planning Center credentials are missing or blank; set PCO_APP_ID and PCO_SECRET")]
+    MissingCredentials,
+    /// The HTTP client could not be built with the required timeout policy.
+    #[error("failed to initialize Planning Center HTTP client: {source}")]
+    HttpClient {
+        /// Client construction failure.
+        #[source]
+        source: reqwest::Error,
+    },
+    /// The API answered with a non-success status.
+    #[error("request to {label} returned HTTP {status}")]
+    Status {
+        /// Request path relative to the API base URL.
+        label: String,
+        /// HTTP status code.
+        status: u16,
+    },
+    /// The request could not be sent or completed.
+    #[error("request to {label} failed: {source}")]
+    Request {
+        /// Request path relative to the API base URL.
+        label: String,
+        /// Transport failure.
+        #[source]
+        source: reqwest::Error,
+    },
+    /// Every retry of a transient failure was exhausted.
+    #[error("request to {label} failed after {retries} retries")]
+    RetriesExhausted {
+        /// Request path relative to the API base URL.
+        label: String,
+        /// Retries attempted.
+        retries: u32,
+    },
+    /// The response body was not valid JSON.
+    #[error("invalid JSON from {label}: {source}")]
+    InvalidJson {
+        /// Request path relative to the API base URL.
+        label: String,
+        /// Decode failure.
+        #[source]
+        source: reqwest::Error,
+    },
+    /// A JSON:API envelope lacked a required member.
+    #[error("missing '{field}' in response from {label}")]
+    MissingResponseField {
+        /// Request path or URL.
+        label: String,
+        /// Missing envelope member.
+        field: &'static str,
+    },
+    /// One or more service types could not be read while discovering plans.
+    #[error("failed to fetch plans for {} service type(s): {}", failures.len(), describe_failures(failures))]
+    ServiceTypePlans {
+        /// Each failed service type name with its error.
+        failures: Vec<(String, Box<Self>)>,
+    },
+    /// No service type carries the asserted name.
+    #[error("Planning Center has no service type named '{name}'")]
+    ServiceTypeNotFound {
+        /// Asserted service type name.
+        name: String,
+    },
+    /// More than one service type carries the asserted name.
+    #[error("Planning Center has {count} service types named '{name}'")]
+    ServiceTypeAmbiguous {
+        /// Asserted service type name.
+        name: String,
+        /// Number of matching service types.
+        count: usize,
+    },
+    /// A service type resource read returned nothing.
+    #[error("service type '{service_id}' returned no resource during freshness check")]
+    ServiceTypeResourceMissing {
+        /// Service type identity requested.
+        service_id: String,
+    },
+    /// A plan refresh returned a different plan than requested.
+    #[error("Planning Center returned plan '{returned}' while refreshing '{requested}'")]
+    RefreshedPlanMismatch {
+        /// Plan identity requested.
+        requested: String,
+        /// Plan identity returned.
+        returned: String,
+    },
+    /// Refreshed plan metadata could not be bound to one identity.
+    #[error("refreshed plan identity could not be resolved: {0}")]
+    RefreshIdentity(#[source] PlanIdentityError),
+    /// A captured snapshot has no computable revision.
+    #[error(transparent)]
+    Revision(#[from] PlanRevisionError),
+    /// Two consecutive direct reads of one plan disagreed, so no coherent
+    /// snapshot was available for review or commit.
+    #[error(
+        "Planning Center plan '{plan_id}' changed while it was being captured ({first_revision} then {second_revision}); retry after edits settle"
+    )]
+    SnapshotUnstable {
+        /// Stable plan identity being captured.
+        plan_id: String,
+        /// Revision of the first direct normalized read.
+        first_revision: String,
+        /// Revision of the immediately following direct normalized read.
+        second_revision: String,
+    },
+    /// The configured base URL is not a URL.
+    #[error("invalid Planning Center base URL: {source}")]
+    InvalidBaseUrl {
+        /// Parse failure.
+        #[source]
+        source: url::ParseError,
+    },
+    /// The configured base URL cannot carry resource path segments.
+    #[error("Planning Center base URL cannot contain hierarchical resource paths")]
+    BaseUrlNotHierarchical,
+    /// A page URL recorded while paginating is not a URL.
+    #[error("invalid Planning Center page URL: {source}")]
+    InvalidPageUrl {
+        /// Parse failure.
+        #[source]
+        source: url::ParseError,
+    },
+    /// A `links.next` value could not be resolved against the current page.
+    #[error("invalid Planning Center pagination URL: {source}")]
+    InvalidPaginationUrl {
+        /// Parse failure.
+        #[source]
+        source: url::ParseError,
+    },
+    /// A `links.next` value pointed at a different origin.
+    #[error("rejected Planning Center pagination URL with a different origin")]
+    PaginationOriginMismatch,
+    /// A response could not be normalized into the plan model.
+    #[error(transparent)]
+    Source(#[from] PlanningCenterSourceError),
+}
+
+fn describe_failures(failures: &[(String, Box<PlanningCenterError>)]) -> String {
+    failures
+        .iter()
+        .map(|(service_name, error)| format!("{service_name}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
 use super::normalize::{parse_items, parse_plan, parse_service_types};
 use super::snapshot::PlanSnapshot;
 use crate::config::Config;
-use crate::error::{Error, Result};
 use crate::planning_center::types::{Item, Plan, Service};
 
 const BASE_URL: &str = "https://api.planningcenteronline.com/services/v2";
@@ -65,21 +216,14 @@ impl PlanningCenterClient {
         let app_id = config.pco_app_id.trim();
         let secret = config.pco_secret.trim();
         if app_id.is_empty() || secret.is_empty() {
-            return Err(Error::config(
-                "Planning Center credentials are missing or blank",
-                "Set PCO_APP_ID and PCO_SECRET environment variables",
-            ));
+            return Err(PlanningCenterError::MissingCredentials);
         }
 
         let client = Client::builder()
             .timeout(StdDuration::from_secs(30))
             .no_proxy()
             .build()
-            .map_err(|error| {
-                Error::Network(format!(
-                    "failed to initialize Planning Center HTTP client: {error}"
-                ))
-            })?;
+            .map_err(|source| PlanningCenterError::HttpClient { source })?;
         Ok(Self {
             app_id: app_id.to_string(),
             secret: secret.to_string(),
@@ -91,7 +235,7 @@ impl PlanningCenterClient {
     /// Internal method that performs the actual request with retry logic
     async fn get_url_with_retry(&self, url: &str, query: &[(&str, &str)]) -> Result<Value> {
         let label = url.strip_prefix(&self.base_url).unwrap_or(url);
-        let mut last_error: Option<Error> = None;
+        let mut last_error: Option<PlanningCenterError> = None;
         let mut backoff_ms = INITIAL_BACKOFF_MS;
 
         for attempt in 0..=MAX_RETRIES {
@@ -123,51 +267,61 @@ impl PlanningCenterClient {
 
                     // Don't retry client errors (4xx) except 429 (rate limit)
                     if status.is_client_error() && status.as_u16() != 429 {
-                        return Err(Error::pco_status(
-                            format!("Request to {label} returned {status}"),
-                            status.as_u16(),
-                        ));
+                        return Err(PlanningCenterError::Status {
+                            label: label.to_string(),
+                            status: status.as_u16(),
+                        });
                     }
 
                     // Retry on server errors (5xx) or rate limiting (429)
                     if status.is_server_error() || status.as_u16() == 429 {
-                        last_error = Some(Error::pco_status(
-                            format!("Request to {label} returned {status}"),
-                            status.as_u16(),
-                        ));
+                        last_error = Some(PlanningCenterError::Status {
+                            label: label.to_string(),
+                            status: status.as_u16(),
+                        });
                         continue;
                     }
 
                     if !status.is_success() {
-                        return Err(Error::pco_status(
-                            format!("Request to {label} returned {status}"),
-                            status.as_u16(),
-                        ));
+                        return Err(PlanningCenterError::Status {
+                            label: label.to_string(),
+                            status: status.as_u16(),
+                        });
                     }
 
-                    return resp.json().await.map_err(|e| {
-                        Error::parse(format!("Invalid JSON from {label}: {e}"), None)
-                    });
+                    return resp
+                        .json()
+                        .await
+                        .map_err(|source| PlanningCenterError::InvalidJson {
+                            label: label.to_string(),
+                            source,
+                        });
                 }
-                Err(e) => {
+                Err(source) => {
                     // Network errors are retryable
-                    if e.is_timeout() || e.is_connect() {
-                        last_error =
-                            Some(Error::Network(format!("Request to {label} failed: {e}")));
+                    if source.is_timeout() || source.is_connect() {
+                        last_error = Some(PlanningCenterError::Request {
+                            label: label.to_string(),
+                            source,
+                        });
                         continue;
                     }
                     // Other errors are not retryable
-                    return Err(Error::Network(format!("Request to {label} failed: {e}")));
+                    return Err(PlanningCenterError::Request {
+                        label: label.to_string(),
+                        source,
+                    });
                 }
             }
         }
 
         // All retries exhausted
-        Err(last_error.unwrap_or_else(|| {
-            Error::Network(format!(
-                "Request to {label} failed after {MAX_RETRIES} retries"
-            ))
-        }))
+        Err(
+            last_error.unwrap_or_else(|| PlanningCenterError::RetriesExhausted {
+                label: label.to_string(),
+                retries: MAX_RETRIES,
+            }),
+        )
     }
 
     async fn get_paginated_with_query(
@@ -188,10 +342,10 @@ impl PlanningCenterClient {
             is_first_page = false;
 
             let data = json["data"].as_array().ok_or_else(|| {
-                Error::parse(
-                    format!("Missing 'data' array in response from {path}"),
-                    None,
-                )
+                PlanningCenterError::MissingResponseField {
+                    label: path.to_string(),
+                    field: "data",
+                }
             })?;
             response.data.extend(data.iter().cloned());
 
@@ -214,12 +368,12 @@ impl PlanningCenterClient {
     async fn get_resource(&self, segments: &[&str]) -> Result<Value> {
         let url = resource_url(&self.base_url, segments)?;
         let json = self.get_url_with_retry(&url, &[]).await?;
-        json.get("data").cloned().ok_or_else(|| {
-            Error::parse(
-                format!("Missing 'data' resource in response from {url}"),
-                None,
-            )
-        })
+        json.get("data")
+            .cloned()
+            .ok_or_else(|| PlanningCenterError::MissingResponseField {
+                label: url,
+                field: "data",
+            })
     }
 
     /// Get upcoming services and plans using bounded concurrent API calls.
@@ -337,18 +491,14 @@ impl PlanningCenterClient {
         for (service_name, result) in results {
             match result {
                 Ok(service_plans) => plans.extend(service_plans),
-                Err(error) => failures.push(format!("{service_name}: {error}")),
+                Err(error) => failures.push((service_name, Box::new(error))),
             }
         }
 
         if failures.is_empty() {
             Ok(plans)
         } else {
-            Err(Error::pco(format!(
-                "Failed to fetch plans for {} service type(s): {}",
-                failures.len(),
-                failures.join("; ")
-            )))
+            Err(PlanningCenterError::ServiceTypePlans { failures })
         }
     }
 
@@ -382,15 +532,15 @@ impl PlanningCenterClient {
         let service = match matching.as_slice() {
             [service] => *service,
             [] => {
-                return Err(Error::pco(format!(
-                    "Planning Center has no service type named '{service_name}'"
-                )))
+                return Err(PlanningCenterError::ServiceTypeNotFound {
+                    name: service_name.to_string(),
+                })
             }
             _ => {
-                return Err(Error::pco(format!(
-                    "Planning Center has {} service types named '{service_name}'",
-                    matching.len()
-                )))
+                return Err(PlanningCenterError::ServiceTypeAmbiguous {
+                    name: service_name.to_string(),
+                    count: matching.len(),
+                })
             }
         };
         self.fetch_stable_plan_snapshot(&service.id, plan_id).await
@@ -443,15 +593,9 @@ impl PlanningCenterClient {
         if first == second {
             return Ok(second);
         }
-        let first_revision = first
-            .revision()
-            .map_err(|error| Error::pco(error.to_string()))?
-            .to_string();
-        let second_revision = second
-            .revision()
-            .map_err(|error| Error::pco(error.to_string()))?
-            .to_string();
-        Err(Error::PlanningCenterSnapshotUnstable {
+        let first_revision = first.revision()?.to_string();
+        let second_revision = second.revision()?.to_string();
+        Err(PlanningCenterError::SnapshotUnstable {
             plan_id: plan_id.to_string(),
             first_revision,
             second_revision,
@@ -465,21 +609,22 @@ impl PlanningCenterClient {
     ) -> Result<PlanSnapshot> {
         let service_value = self.get_resource(&["service_types", service_id]).await?;
         let mut services = parse_service_types(std::slice::from_ref(&service_value))?;
-        let service = services.pop().ok_or_else(|| {
-            Error::pco(format!(
-                "service type '{service_id}' returned no resource during freshness check"
-            ))
-        })?;
+        let service =
+            services
+                .pop()
+                .ok_or_else(|| PlanningCenterError::ServiceTypeResourceMissing {
+                    service_id: service_id.to_string(),
+                })?;
 
         let plan_value = self
             .get_resource(&["service_types", service_id, "plans", plan_id])
             .await?;
         let plan = parse_plan(&plan_value, 0, &service.id, &service.name)?;
         if plan.id != plan_id {
-            return Err(Error::pco(format!(
-                "Planning Center returned plan '{}' while refreshing '{}'",
-                plan.id, plan_id
-            )));
+            return Err(PlanningCenterError::RefreshedPlanMismatch {
+                requested: plan_id.to_string(),
+                returned: plan.id,
+            });
         }
         let identity = super::identity::resolve_plan_identity(
             std::slice::from_ref(&service),
@@ -487,7 +632,7 @@ impl PlanningCenterClient {
             plan_id,
             crate::planning_center::PlanLookaheadDays::DEFAULT,
         )
-        .map_err(|error| Error::pco(error.to_string()))?;
+        .map_err(PlanningCenterError::RefreshIdentity)?;
         let items = self.get_service_items(plan_id).await?;
         Ok(PlanSnapshot::from_resolved(identity, items))
     }
@@ -504,12 +649,12 @@ fn join_base_and_path(base_url: &str, path: &str) -> String {
 }
 
 fn resource_url(base_url: &str, segments: &[&str]) -> Result<String> {
-    let mut url = Url::parse(base_url)
-        .map_err(|error| Error::pco(format!("Invalid Planning Center base URL: {error}")))?;
+    let mut url =
+        Url::parse(base_url).map_err(|source| PlanningCenterError::InvalidBaseUrl { source })?;
     {
-        let mut path = url.path_segments_mut().map_err(|()| {
-            Error::pco("Planning Center base URL cannot contain hierarchical resource paths")
-        })?;
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|()| PlanningCenterError::BaseUrlNotHierarchical)?;
         path.pop_if_empty();
         for segment in segments {
             path.push(segment);
@@ -519,21 +664,19 @@ fn resource_url(base_url: &str, segments: &[&str]) -> Result<String> {
 }
 
 fn resolve_pagination_url(base_url: &str, current_url: &str, next: &str) -> Result<String> {
-    let base = Url::parse(base_url)
-        .map_err(|error| Error::pco(format!("Invalid Planning Center base URL: {error}")))?;
-    let current = Url::parse(current_url)
-        .map_err(|error| Error::pco(format!("Invalid Planning Center page URL: {error}")))?;
+    let base =
+        Url::parse(base_url).map_err(|source| PlanningCenterError::InvalidBaseUrl { source })?;
+    let current =
+        Url::parse(current_url).map_err(|source| PlanningCenterError::InvalidPageUrl { source })?;
     let candidate = current
         .join(next)
-        .map_err(|error| Error::pco(format!("Invalid Planning Center pagination URL: {error}")))?;
+        .map_err(|source| PlanningCenterError::InvalidPaginationUrl { source })?;
 
     let same_origin = base.scheme() == candidate.scheme()
         && base.host_str() == candidate.host_str()
         && base.port_or_known_default() == candidate.port_or_known_default();
     if !same_origin {
-        return Err(Error::pco(
-            "Rejected Planning Center pagination URL with a different origin",
-        ));
+        return Err(PlanningCenterError::PaginationOriginMismatch);
     }
 
     Ok(candidate.into())

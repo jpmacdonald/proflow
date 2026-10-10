@@ -351,18 +351,17 @@ fn native_bible_reference(
     let first_verse = passage
         .verses
         .first()
-        .ok_or_else(|| crate::error::Error::Scripture("scripture passage is empty".to_string()))?
+        .ok_or(BuildServiceError::EmptyScripturePassage)?
         .number;
     let last_verse = passage
         .verses
         .last()
-        .ok_or_else(|| crate::error::Error::Scripture("scripture passage is empty".to_string()))?
+        .ok_or(BuildServiceError::EmptyScripturePassage)?
         .number;
     let book_index = passage.reference.canonical_book_index().ok_or_else(|| {
-        crate::error::Error::Scripture(format!(
-            "canonical book index is unavailable for {}",
-            passage.reference.book
-        ))
+        BuildServiceError::CanonicalBookIndexUnavailable {
+            book: passage.reference.book.clone(),
+        }
     })?;
     let chapter = native_range_value(passage.reference.chapter, "chapter")?;
     let first_verse = native_range_value(first_verse, "first verse")?;
@@ -389,13 +388,8 @@ fn native_bible_reference(
     })
 }
 
-fn native_range_value(value: u32, field: &str) -> Result<i32, BuildServiceError> {
-    i32::try_from(value).map_err(|_| {
-        crate::error::Error::Scripture(format!(
-            "{field} {value} cannot be represented in native Bible metadata"
-        ))
-        .into()
-    })
+fn native_range_value(value: u32, field: &'static str) -> Result<i32, BuildServiceError> {
+    i32::try_from(value).map_err(|_| BuildServiceError::NativeBibleRangeOverflow { field, value })
 }
 
 const fn native_translation(version: BibleVersion) -> (&'static str, &'static str) {

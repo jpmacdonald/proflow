@@ -662,6 +662,6 @@ async fn refresh_plan_snapshot_rejects_two_different_consecutive_reads() {
 
     assert!(matches!(
         error,
-        Error::PlanningCenterSnapshotUnstable { plan_id, .. } if plan_id == "plan-1"
+        PlanningCenterError::SnapshotUnstable { plan_id, .. } if plan_id == "plan-1"
     ));
 }

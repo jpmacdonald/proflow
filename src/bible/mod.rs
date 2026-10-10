@@ -343,6 +343,46 @@ pub enum BibleCorpusError {
     },
 }
 
+/// Failure to read verses from the captured Bible corpora.
+#[derive(Debug, thiserror::Error)]
+pub enum ScriptureLookupError {
+    /// The requested translation was not present in the data root at capture.
+    #[error("Bible corpus for {} is not installed: {}", version.name(), path.display())]
+    CorpusNotInstalled {
+        /// Requested translation.
+        version: BibleVersion,
+        /// Path the translation file would occupy.
+        path: PathBuf,
+    },
+    /// Caller-supplied source bytes do not match the captured corpus.
+    #[error(transparent)]
+    CorpusChanged(#[from] BibleCorpusError),
+    /// The corpus has no book with this canonical name.
+    #[error("book not found: {book}")]
+    BookNotFound {
+        /// Canonical book name requested.
+        book: String,
+    },
+    /// The book has no such chapter.
+    #[error("chapter {chapter} not found in {book}")]
+    ChapterNotFound {
+        /// Canonical book name.
+        book: String,
+        /// Requested chapter.
+        chapter: u32,
+    },
+    /// A chapter object carries a verse key that is not a number.
+    #[error("invalid verse key '{key}' in {book} {chapter}")]
+    InvalidVerseKey {
+        /// Canonical book name.
+        book: String,
+        /// Chapter containing the key.
+        chapter: u32,
+        /// Offending key.
+        key: String,
+    },
+}
+
 /// Validate every installed Bible corpus and reject duplicate translation
 /// identities.
 ///
@@ -710,7 +750,7 @@ impl BibleCorpusSnapshot {
         &self,
         reference: &ScriptureRef,
         version: BibleVersion,
-    ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
+    ) -> Result<(ScriptureHeader, Vec<Verse>), ScriptureLookupError> {
         self.lookup_captured(reference, version)
     }
 
@@ -723,11 +763,10 @@ impl BibleCorpusSnapshot {
         reference: &ScriptureRef,
         version: BibleVersion,
         source_bytes: &[u8],
-    ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
+    ) -> Result<(ScriptureHeader, Vec<Verse>), ScriptureLookupError> {
         let corpus = self.corpus(version)?;
         let path = self.root.join(version.file_name());
-        Self::verify_bytes(version, &path, source_bytes, corpus)
-            .map_err(|error| crate::error::Error::Scripture(error.to_string()))?;
+        Self::verify_bytes(version, &path, source_bytes, corpus)?;
         self.lookup_captured(reference, version)
     }
 
@@ -735,20 +774,21 @@ impl BibleCorpusSnapshot {
         &self,
         reference: &ScriptureRef,
         version: BibleVersion,
-    ) -> Result<(ScriptureHeader, Vec<Verse>), crate::error::Error> {
+    ) -> Result<(ScriptureHeader, Vec<Verse>), ScriptureLookupError> {
         let bible = &self.corpus(version)?.data;
 
-        let book_data = bible.get(&reference.book).ok_or_else(|| {
-            crate::error::Error::Scripture(format!("Book not found: {}", reference.book))
-        })?;
+        let book_data =
+            bible
+                .get(&reference.book)
+                .ok_or_else(|| ScriptureLookupError::BookNotFound {
+                    book: reference.book.clone(),
+                })?;
 
         let chapter_data = book_data
             .get(&reference.chapter.to_string())
-            .ok_or_else(|| {
-                crate::error::Error::Scripture(format!(
-                    "Chapter {} not found in {}",
-                    reference.chapter, reference.book
-                ))
+            .ok_or_else(|| ScriptureLookupError::ChapterNotFound {
+                book: reference.book.clone(),
+                chapter: reference.chapter,
             })?;
 
         let requested_verses = match &reference.verses {
@@ -756,12 +796,13 @@ impl BibleCorpusSnapshot {
                 let mut verses = chapter_data
                     .keys()
                     .map(|verse| {
-                        verse.parse::<u32>().map_err(|error| {
-                            crate::error::Error::Scripture(format!(
-                                "Invalid verse key '{verse}' in {} {}: {error}",
-                                reference.book, reference.chapter
-                            ))
-                        })
+                        verse
+                            .parse::<u32>()
+                            .map_err(|_| ScriptureLookupError::InvalidVerseKey {
+                                book: reference.book.clone(),
+                                chapter: reference.chapter,
+                                key: verse.clone(),
+                            })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 verses.sort_unstable();
@@ -800,13 +841,13 @@ impl BibleCorpusSnapshot {
         Ok((header, verses))
     }
 
-    fn corpus(&self, version: BibleVersion) -> Result<&CachedBibleData, crate::error::Error> {
-        self.corpora.get(&version).ok_or_else(|| {
-            crate::error::Error::Scripture(format!(
-                "Bible corpus is not installed: {}",
-                self.root.join(version.file_name()).display()
-            ))
-        })
+    fn corpus(&self, version: BibleVersion) -> Result<&CachedBibleData, ScriptureLookupError> {
+        self.corpora
+            .get(&version)
+            .ok_or_else(|| ScriptureLookupError::CorpusNotInstalled {
+                version,
+                path: self.root.join(version.file_name()),
+            })
     }
 
     fn verify_bytes(

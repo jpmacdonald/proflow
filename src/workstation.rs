@@ -41,7 +41,7 @@ pub enum WorkspaceDiscovery {
 pub enum WorkstationLoadError {
     /// The Planning Center client could not be initialized into a usable state.
     #[error("failed to initialize Planning Center client: {0}")]
-    PlanningCenterClient(#[source] crate::error::Error),
+    PlanningCenterClient(#[from] crate::planning_center::PlanningCenterError),
     /// Workstation paths could not be resolved into one coherent snapshot.
     #[error(transparent)]
     Locations(#[from] BuildLocationsError),
@@ -102,8 +102,7 @@ impl Workstation {
         config: &Config,
         discovery: WorkspaceDiscovery,
     ) -> Result<Self, WorkstationLoadError> {
-        let planning_center = PlanningCenterClient::new(config)
-            .map_err(WorkstationLoadError::PlanningCenterClient)?;
+        let planning_center = PlanningCenterClient::new(config)?;
 
         let project_data_root = BuildLocations::discover_project_data_root()?;
         let config_path = project_data_root.join(PROJECT_CONFIG_FILE);

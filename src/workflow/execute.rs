@@ -377,9 +377,29 @@ pub enum BuildServiceError {
     /// A presentation output name could not be normalized safely.
     #[error(transparent)]
     PresentationName(#[from] CanonicalPresentationNameError),
-    /// A shared application data source could not be loaded or queried.
+    /// Planning Center could not be read or returned an incoherent plan.
     #[error(transparent)]
-    Application(#[from] crate::error::Error),
+    PlanningCenter(#[from] crate::planning_center::PlanningCenterError),
+    /// Local Bible data could not supply the requested passage.
+    #[error(transparent)]
+    ScriptureLookup(#[from] crate::bible::ScriptureLookupError),
+    /// A scripture passage resolved to no verses at all.
+    #[error("scripture passage is empty")]
+    EmptyScripturePassage,
+    /// The passage's book has no canonical index for native Bible metadata.
+    #[error("canonical book index is unavailable for {book}")]
+    CanonicalBookIndexUnavailable {
+        /// Book name as requested.
+        book: String,
+    },
+    /// A verse or chapter number exceeds the native metadata range.
+    #[error("{field} {value} cannot be represented in native Bible metadata")]
+    NativeBibleRangeOverflow {
+        /// Which number overflowed.
+        field: &'static str,
+        /// The value that did not fit.
+        value: u32,
+    },
     /// Planning Center partial-verse text did not prove one safe local cutoff.
     #[error(transparent)]
     ScriptureExcerpt(#[from] crate::bible::ScriptureExcerptError),
@@ -471,7 +491,7 @@ impl From<PlanCaptureError> for BuildServiceError {
                 plan_id,
                 days_ahead: days_ahead.get(),
             },
-            PlanCaptureError::Api(error) => Self::Application(error),
+            PlanCaptureError::Api(error) => Self::PlanningCenter(error),
         }
     }
 }

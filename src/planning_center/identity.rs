@@ -58,7 +58,7 @@ pub enum PlanCaptureError {
     Identity(#[from] PlanIdentityError),
     /// A Planning Center read failed or two consecutive reads disagreed.
     #[error(transparent)]
-    Api(#[from] crate::error::Error),
+    Api(#[from] super::api::PlanningCenterError),
 }
 
 /// Resolve authoritative plan metadata and the one canonical default playlist name.

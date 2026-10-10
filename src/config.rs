@@ -2,7 +2,6 @@
 //!
 //! Handles loading configuration from environment variables and .env files.
 
-use crate::error::{Error, Result};
 use dotenv::dotenv;
 use std::env;
 
@@ -15,19 +14,26 @@ pub struct Config {
     pub pco_secret: String,
 }
 
+/// Failure to read process configuration.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    /// A `.env` file exists but could not be read or parsed.
+    #[error("failed to load .env ({source}); fix its syntax and permissions or remove the file")]
+    DotEnv {
+        /// Underlying dotenv failure.
+        #[source]
+        source: dotenv::Error,
+    },
+}
+
 impl Config {
     /// Load configuration from environment variables
-    pub fn load() -> Result<Self> {
+    pub fn load() -> Result<Self, ConfigError> {
         // A missing .env is normal; malformed or unreadable files are not.
         match dotenv() {
             Ok(_) => {}
             Err(dotenv::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(Error::config(
-                    format!("failed to load .env: {error}"),
-                    "Fix the .env syntax/permissions or remove the file",
-                ));
-            }
+            Err(source) => return Err(ConfigError::DotEnv { source }),
         }
 
         let mut config = Self::default();
