@@ -249,4 +249,4 @@ impl TryFrom<RawProjectConfig> for ProjectConfig {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
