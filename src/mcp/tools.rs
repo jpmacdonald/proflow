@@ -56,7 +56,7 @@ impl ProFlowServer {
     )]
     async fn show_effective_config(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         json_result(&EffectiveConfigResponse {
-            config: self.render_assets.config().clone(),
+            config: self.workstation.render_assets().config().clone(),
             validation: ConfigValidationResponse {
                 valid: true,
                 issues: Vec::new(),
@@ -75,7 +75,7 @@ impl ProFlowServer {
         let config = parse_project_config_value(args.config).map_err(|e| mcp_err(e.to_string()))?;
         let (outcome, validation) = write_config_reviewed(
             &config,
-            self.render_assets.locations(),
+            self.workstation.render_assets().locations(),
             args.activate.unwrap_or(false),
             args.name.as_deref(),
         )?;
@@ -101,27 +101,33 @@ impl ProFlowServer {
         Parameters(args): Parameters<CatalogAssetsArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let sample_limit = bounded_usize("sample_limit", args.sample_limit, 40, 200)?;
-        let mappings = self.render_assets.config();
+        let mappings = self.workstation.render_assets().config();
         let requested_theme = args
             .theme_name
             .as_deref()
             .map(|theme_name| {
-                ThemeCache::load_from_dir(Some(theme_name), self.render_assets.locations().themes())
+                ThemeCache::load_from_dir(
+                    Some(theme_name),
+                    self.workstation.render_assets().locations().themes(),
+                )
             })
             .transpose()
             .map_err(|error| mcp_err(format!("failed to inspect requested theme: {error}")))?;
         let theme_cache = requested_theme
             .as_ref()
-            .unwrap_or_else(|| self.render_assets.themes());
-        let file_index = self.file_index.lock().await;
+            .unwrap_or_else(|| self.workstation.render_assets().themes());
+        let file_index = self.workstation.library().lock().await;
 
         let catalog = setup::catalog_assets(
             mappings,
             theme_cache,
-            self.render_assets.macros(),
-            self.group_catalog.as_ref(),
+            self.workstation.render_assets().macros(),
+            self.workstation.group_catalog(),
             &file_index,
-            self.render_assets.locations().presentation_library(),
+            self.workstation
+                .render_assets()
+                .locations()
+                .presentation_library(),
             sample_limit,
         );
 
@@ -139,10 +145,14 @@ impl ProFlowServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let days = bounded_days(
             args.days_ahead,
-            self.render_assets.config().plan_lookahead_days(),
+            self.workstation
+                .render_assets()
+                .config()
+                .plan_lookahead_days(),
         )?;
         let (services, plans) = self
-            .pco_client
+            .workstation
+            .planning_center()
             .get_upcoming_services(days)
             .await
             .map_err(|e| mcp_err(e.to_string()))?;
@@ -160,9 +170,14 @@ impl ProFlowServer {
         let item_futures: Vec<_> = filtered_plans
             .iter()
             .map(|p| {
-                let client = Arc::clone(&self.pco_client);
+                let workstation = Arc::clone(&self.workstation);
                 let plan_id = p.id.clone();
-                async move { client.get_service_items(&plan_id).await }
+                async move {
+                    workstation
+                        .planning_center()
+                        .get_service_items(&plan_id)
+                        .await
+                }
             })
             .collect();
         let item_results = futures::future::join_all(item_futures).await;
@@ -221,7 +236,7 @@ impl ProFlowServer {
             .overrides
             .unwrap_or_default()
             .into_iter()
-            .map(|entry| resolve_entry_override(self.render_assets.config(), entry))
+            .map(|entry| resolve_entry_override(self.workstation.render_assets().config(), entry))
             .collect::<Result<Vec<_>, _>>()?;
         let playlist_export_mode = args.package_mode.unwrap_or_default();
         let request = BuildRequest {
@@ -238,7 +253,8 @@ impl ProFlowServer {
             },
         };
         let reviewed = self
-            .service_build_executor()
+            .workstation
+            .executor()
             .review_service_request(request)
             .await
             .map_err(|error| mcp_err(error.to_string()))?;
@@ -324,8 +340,8 @@ impl ProFlowServer {
             }),
         };
 
-        let mappings = self.render_assets.config();
-        let index_guard = self.file_index.lock().await;
+        let mappings = self.workstation.render_assets().config();
+        let index_guard = self.workstation.library().lock().await;
         let entries = classify::build_preview(
             &[item],
             mappings,
@@ -353,7 +369,7 @@ impl ProFlowServer {
         Parameters(args): Parameters<SearchLibraryArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let max = bounded_usize("max_results", args.max_results, 10, 100)?;
-        let index = self.file_index.lock().await;
+        let index = self.workstation.library().lock().await;
         let matches = index.find_matches(&args.query, max);
         let results: Vec<FileMatch> = matches
             .iter()
@@ -386,7 +402,8 @@ impl ProFlowServer {
             .map_err(|error| mcp_err(error.to_string()))?
         };
         let result = self
-            .service_build_executor()
+            .workstation
+            .executor()
             .build_prepared_request(reviewed.prepared)
             .await
             .map_err(|e| mcp_err(e.to_string()))?;

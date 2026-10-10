@@ -160,9 +160,8 @@ fn portable_fixture() -> PortableFixture {
         arrangement_uuids.push(arrangement_uuid);
     }
 
-    runtime.file_index = Arc::new(Mutex::new(
-        LibraryCatalog::build(&library).expect("index Default library"),
-    ));
+    runtime.file_index =
+        Mutex::new(LibraryCatalog::build(&library).expect("index Default library"));
     runtime.replace_locations(
         BuildLocations::from_inputs(BuildLocationInputs {
             project_data_root: runtime.locations().project_data_root().to_path_buf(),

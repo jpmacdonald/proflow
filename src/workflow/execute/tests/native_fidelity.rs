@@ -922,9 +922,8 @@ fn restyle_fixture() -> RestyleFixture {
     let source_path = source_library.join("Faithful Song.pro");
     let source_bytes = source.encode_to_vec();
     std::fs::write(&source_path, &source_bytes).expect("write source song");
-    runtime.file_index = std::sync::Arc::new(Mutex::new(
-        LibraryCatalog::build(&source_library).expect("index source library"),
-    ));
+    runtime.file_index =
+        Mutex::new(LibraryCatalog::build(&source_library).expect("index source library"));
     runtime.replace_locations(
         BuildLocations::from_inputs(BuildLocationInputs {
             project_data_root: runtime.locations().project_data_root().to_path_buf(),

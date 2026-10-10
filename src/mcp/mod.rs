@@ -4,22 +4,14 @@
 //! service without bypassing project configuration or preview approval.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool_handler, ServerHandler};
 use tokio::sync::Mutex;
 
-use crate::bible::BibleCorpusSnapshot;
 use crate::config::Config;
-use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
-use crate::planning_center::PlanningCenterClient;
-use crate::project_config::load_project_config;
-use crate::workflow::execute::{RenderAssetSnapshot, ServiceBuildExecutor};
-use proflow_propresenter::groups::GroupCatalog;
-use proflow_propresenter::library::LibraryCatalog;
-use proflow_propresenter::playlist::PlaylistMetadata;
+use crate::workstation::{WorkspaceDiscovery, Workstation, WorkstationLoadError};
 
 mod config;
 mod review;
@@ -37,60 +29,11 @@ pub use schema::{
 // Server struct
 // ---------------------------------------------------------------------------
 
-/// Shared MCP server state holding all service clients and caches.
+/// Shared MCP server state: one loaded workstation plus reviewed previews.
 #[derive(Clone)]
 pub struct ProFlowServer {
-    render_assets: Arc<RenderAssetSnapshot>,
-    pco_client: Arc<PlanningCenterClient>,
-    bible_corpora: Arc<BibleCorpusSnapshot>,
-    file_index: Arc<Mutex<LibraryCatalog>>,
-    group_catalog: Arc<GroupCatalog>,
-    playlist_metadata: Arc<PlaylistMetadata>,
+    workstation: Arc<Workstation>,
     reviewed_plans: Arc<Mutex<HashMap<String, PreparedPlanSnapshot>>>,
-}
-
-/// Errors that prevent the MCP server from starting in a coherent state.
-#[derive(Debug, thiserror::Error)]
-pub enum ProFlowServerInitError {
-    /// The Planning Center client could not be initialized into a usable state.
-    #[error("failed to initialize Planning Center client: {0}")]
-    PlanningCenterClient(#[source] crate::error::Error),
-    /// Workstation paths could not be resolved into one coherent snapshot.
-    #[error(transparent)]
-    Locations(#[from] BuildLocationsError),
-    /// The configured project file could not be loaded.
-    #[error("failed to load project config at {path}: {message}")]
-    ProjectConfig {
-        /// Config path that could not be loaded.
-        path: PathBuf,
-        /// Underlying load failure.
-        message: String,
-    },
-    /// Bible corpora could not be captured into one immutable runtime snapshot.
-    #[error("failed to capture Bible corpora: {0}")]
-    BibleCorpora(#[from] crate::bible::BibleCorpusError),
-    /// The configured `ProPresenter` library could not be indexed.
-    #[error("failed to index ProPresenter library at {path}: {message}")]
-    Library {
-        /// Library root that could not be indexed.
-        path: PathBuf,
-        /// Underlying index failure.
-        message: String,
-    },
-    /// The live playlist library did not provide a valid producer profile.
-    #[error("failed to read playlist metadata for ProPresenter library at {path}: {message}")]
-    PlaylistMetadata {
-        /// Configured library used to find `Playlists/Library`.
-        path: PathBuf,
-        /// Underlying metadata read or decode failure.
-        message: String,
-    },
-    /// A configured theme or macro document could not be loaded.
-    #[error("failed to load configured display assets: {message}")]
-    DisplayAssets {
-        /// Underlying theme or macro load failure.
-        message: String,
-    },
 }
 
 impl ProFlowServer {
@@ -98,71 +41,12 @@ impl ProFlowServer {
     ///
     /// Startup succeeds only after credentials, project config, and configured
     /// library state have been loaded successfully.
-    pub fn new(config: &Config) -> Result<Self, ProFlowServerInitError> {
-        let pco_client = PlanningCenterClient::new(config)
-            .map_err(ProFlowServerInitError::PlanningCenterClient)?;
-
-        let project_data_root = BuildLocations::discover_project_data_root()?;
-        let mappings_path = project_data_root.join(PROJECT_CONFIG_FILE);
-        let mappings = load_project_config(&mappings_path).map_err(|error| {
-            ProFlowServerInitError::ProjectConfig {
-                path: mappings_path.clone(),
-                message: error.to_string(),
-            }
-        })?;
-        let locations = BuildLocations::discover(&mappings.defaults().library)?;
-
-        let bible_path = locations.project_data_root().join("bibles");
-        let bible_corpora = BibleCorpusSnapshot::capture(bible_path)?;
-
-        let library_path = locations.presentation_library();
-        let propresenter_root = locations.propresenter_root();
-        let playlist_metadata = PlaylistMetadata::read_from_propresenter_root(propresenter_root)
-            .map_err(|error| ProFlowServerInitError::PlaylistMetadata {
-                path: propresenter_root.to_path_buf(),
-                message: error.to_string(),
-            })?;
-
-        let file_index = LibraryCatalog::build(library_path).map_err(|error| {
-            ProFlowServerInitError::Library {
-                path: library_path.to_path_buf(),
-                message: error.to_string(),
-            }
-        })?;
-
-        // Load and validate one immutable runtime snapshot. Config activation
-        // writes a new snapshot for the next server process; it never mixes new
-        // mappings with caches created from an older config.
-        let group_catalog = GroupCatalog::load_optional(&locations.groups()).map_err(|error| {
-            ProFlowServerInitError::DisplayAssets {
-                message: error.to_string(),
-            }
-        })?;
-        let render_assets = RenderAssetSnapshot::load(mappings, locations).map_err(|error| {
-            ProFlowServerInitError::DisplayAssets {
-                message: error.to_string(),
-            }
-        })?;
-
+    pub fn new(config: &Config) -> Result<Self, WorkstationLoadError> {
+        let workstation = Workstation::load(config, WorkspaceDiscovery::ActiveShow)?;
         Ok(Self {
-            render_assets: Arc::new(render_assets),
-            pco_client: Arc::new(pco_client),
-            bible_corpora: Arc::new(bible_corpora),
-            file_index: Arc::new(Mutex::new(file_index)),
-            group_catalog: Arc::new(group_catalog),
-            playlist_metadata: Arc::new(playlist_metadata),
+            workstation: Arc::new(workstation),
             reviewed_plans: Arc::new(Mutex::new(HashMap::new())),
         })
-    }
-
-    fn service_build_executor(&self) -> ServiceBuildExecutor<'_> {
-        ServiceBuildExecutor::new(
-            self.pco_client.as_ref(),
-            self.bible_corpora.as_ref(),
-            &self.file_index,
-            self.render_assets.as_ref(),
-            self.playlist_metadata.as_ref(),
-        )
     }
 }
 

@@ -6,25 +6,18 @@
 //! ```
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Context;
-use proflow::bible::BibleCorpusSnapshot;
 use proflow::config::Config;
-use proflow::paths::{expand_user_path, BuildLocations, PROJECT_CONFIG_FILE};
-use proflow::planning_center::PlanningCenterClient;
+use proflow::paths::expand_user_path;
 #[cfg(test)]
 use proflow::project_config::RawProjectConfig;
-use proflow::project_config::{load_project_config, BackgroundId, ProjectConfig};
-use proflow::workflow::execute::{
-    BuildRequest, EntryOverride, OverrideAction, OverrideSlideType, RenderAssetSnapshot,
-    ServiceBuildExecutor,
-};
+use proflow::project_config::{BackgroundId, ProjectConfig};
+use proflow::workflow::execute::{BuildRequest, EntryOverride, OverrideAction, OverrideSlideType};
 use proflow::workflow::ResolvedBackground;
-use proflow_propresenter::library::LibraryCatalog;
-use proflow_propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode, PlaylistMetadata};
+use proflow::workstation::{WorkspaceDiscovery, Workstation};
+use proflow_propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode};
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +66,7 @@ struct BuildCliArgs {
     skip_output_keys: Vec<String>,
     overrides: Vec<DecisionOverride>,
     playlist_export_mode: PlaylistExportMode,
-    configured_workspace: bool,
+    workspace: WorkspaceDiscovery,
 }
 
 #[tokio::main]
@@ -86,38 +79,16 @@ async fn main() -> anyhow::Result<()> {
         skip_output_keys,
         overrides: pending_overrides,
         playlist_export_mode,
-        configured_workspace,
+        workspace,
     } = cli;
 
     let config = Config::load()?;
-    let project_data_root = BuildLocations::discover_project_data_root()?;
-    let mappings = load_project_config(&project_data_root.join(PROJECT_CONFIG_FILE))?;
-    let locations = if configured_workspace {
-        BuildLocations::discover_configured_workspace(&mappings.defaults().library)?
-    } else {
-        BuildLocations::discover(&mappings.defaults().library)?
-    };
+    let workstation = Workstation::load(&config, workspace)?;
     let overrides = pending_overrides
         .into_iter()
-        .map(|pending| resolve_decision_override(pending, &mappings))
+        .map(|pending| resolve_decision_override(pending, workstation.render_assets().config()))
         .collect::<anyhow::Result<Vec<_>>>()?;
-
-    let pco_client = PlanningCenterClient::new(&config)?;
-    let bible_corpora = BibleCorpusSnapshot::capture(locations.project_data_root().join("bibles"))?;
-    let file_index = Arc::new(Mutex::new(LibraryCatalog::build(
-        locations.presentation_library(),
-    )?));
-    let playlist_metadata =
-        PlaylistMetadata::read_from_propresenter_root(locations.propresenter_root())?;
-    let render_assets = RenderAssetSnapshot::load(mappings, locations)?;
-
-    let executor = ServiceBuildExecutor::new(
-        &pco_client,
-        &bible_corpora,
-        &file_index,
-        &render_assets,
-        &playlist_metadata,
-    );
+    let executor = workstation.executor();
 
     let result = executor
         .build_service(&BuildRequest {
@@ -151,7 +122,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
     let mut skip_output_keys = Vec::new();
     let mut overrides = Vec::new();
     let mut playlist_export_mode = PlaylistExportMode::default();
-    let mut configured_workspace = false;
+    let mut workspace = WorkspaceDiscovery::ActiveShow;
     let mut package_mode_was_set = false;
 
     while let Some(arg) = args.next() {
@@ -165,7 +136,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
             skip_output_keys.extend(decisions.skip_output_keys);
             overrides.extend(decisions.overrides);
         } else if arg == "--configured-workspace" {
-            configured_workspace = true;
+            workspace = WorkspaceDiscovery::ConfiguredOnly;
         } else if arg == "--override-file" {
             let output_key = args
                 .next()
@@ -216,7 +187,7 @@ fn parse_args() -> anyhow::Result<BuildCliArgs> {
         skip_output_keys,
         overrides,
         playlist_export_mode,
-        configured_workspace,
+        workspace,
     })
 }
 

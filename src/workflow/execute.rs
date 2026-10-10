@@ -6,7 +6,6 @@
 //! modules own those phase details without introducing runtime wrapper layers.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -466,7 +465,7 @@ pub enum BuildServiceError {
 pub struct ServiceBuildExecutor<'a> {
     pco_client: &'a PlanningCenterClient,
     bible_corpora: &'a BibleCorpusSnapshot,
-    file_index: &'a Arc<Mutex<LibraryCatalog>>,
+    file_index: &'a Mutex<LibraryCatalog>,
     render_assets: &'a RenderAssetSnapshot,
     playlist_metadata: &'a PlaylistMetadata,
 }
@@ -476,7 +475,7 @@ impl<'a> ServiceBuildExecutor<'a> {
     pub const fn new(
         pco_client: &'a PlanningCenterClient,
         bible_corpora: &'a BibleCorpusSnapshot,
-        file_index: &'a Arc<Mutex<LibraryCatalog>>,
+        file_index: &'a Mutex<LibraryCatalog>,
         render_assets: &'a RenderAssetSnapshot,
         playlist_metadata: &'a PlaylistMetadata,
     ) -> Self {
