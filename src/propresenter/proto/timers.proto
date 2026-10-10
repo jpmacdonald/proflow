@@ -40,7 +40,7 @@ message Timer {
   reserved 9;
   message Format {
     enum Style {
-      STYE_NONE = 0;
+      STYLE_NONE = 0;
       STYLE_SHORT = 1;
       STYLE_LONG = 2;
       STYLE_REMOVE_SHORT = 3;

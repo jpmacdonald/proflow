@@ -52,11 +52,12 @@ message RenderLayer {
     int32 segment_size = 1;
   }
 
-  .rv.data.Graphics.Rect bounds = 8;
-  .rv.data.Graphics.Element.FlipMode flip_mode = 9;
-  double rotation = 10;
-  int32 build_index = 11;
-  bool build_out = 12;
+  .rv.data.Graphics.Rect bounds = 9;
+  .rv.data.Graphics.Element.FlipMode flip_mode = 10;
+  double rotation = 11;
+  int32 build_index = 12;
+  bool build_out = 13;
+  int32 build_out_index = 14;
   oneof LayerType {
     .rv.data.RenderLayer.Composite composite = 1;
     .rv.data.Media media = 2;
@@ -65,6 +66,7 @@ message RenderLayer {
     .rv.data.Slide.Element.DataLink.OutputScreen output_screen = 5;
     .rv.data.RenderLayer.Scrolling scrolling = 6;
     .rv.data.Slide.Element.DataLink.SlideImage slide_image = 7;
+    .rv.data.Slide.Element.DataLink.Zone zone = 8;
   }
 }
 

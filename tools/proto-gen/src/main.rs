@@ -12,9 +12,10 @@ fn main() -> Result<()> {
     let proto_dir = repo_root.join("src/propresenter/proto");
     let generated_dir = repo_root.join("src/propresenter/generated");
     let target_file = generated_dir.join("rv_data.rs");
+    let fds_file = repo_root.join("target/schema-audit/proflow.pb");
 
     let temp = tempdir().context("create temporary output directory")?;
-    let generated = generate_rv_data(&proto_dir, temp.path())?;
+    let generated = generate_rv_data(&proto_dir, temp.path(), &fds_file)?;
 
     if check_only {
         let current = fs::read(&target_file)
@@ -33,12 +34,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    fs::copy(&generated, &target_file).with_context(|| {
-        format!(
-            "write regenerated protobufs to {}",
-            target_file.display()
-        )
-    })?;
+    fs::copy(&generated, &target_file)
+        .with_context(|| format!("write regenerated protobufs to {}", target_file.display()))?;
 
     println!("Regenerated {}", target_file.display());
     Ok(())
@@ -63,13 +60,19 @@ fn proto_files(proto_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn generate_rv_data(proto_dir: &Path, out_dir: &Path) -> Result<PathBuf> {
+fn generate_rv_data(proto_dir: &Path, out_dir: &Path, fds_file: &Path) -> Result<PathBuf> {
     let protoc = protoc_bin_vendored::protoc_bin_path().context("locate vendored protoc")?;
     env::set_var("PROTOC", protoc);
+
+    if let Some(parent) = fds_file.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create descriptor set directory {}", parent.display()))?;
+    }
 
     let mut config = Config::new();
     config.out_dir(out_dir);
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    config.file_descriptor_set_path(fds_file);
 
     let protos = proto_files(proto_dir)?;
     config

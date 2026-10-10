@@ -120,6 +120,12 @@ parity:
 proto:
     {{ cargo }} run --manifest-path tools/proto-gen/Cargo.toml -- --check
 
+# Audit a local ProPresenter app (or raw ProCore binary) for schema drift
+# against the checked-in baseline. Requires `just proto` to have emitted the
+# descriptor set. Exits nonzero on new drift or stale baseline entries.
+schema-audit app="/Applications/ProPresenter.app":
+    {{ cargo }} run --quiet --manifest-path tools/schema-audit/Cargo.toml -- "{{ app }}"
+
 # Audit a local directory of independent native exports without making that
 # machine-specific corpus part of the normal repository gate.
 parity-corpus corpus_dir:

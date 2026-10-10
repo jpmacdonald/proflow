@@ -412,6 +412,19 @@ message Slide {
       message TimecodeStatus {
       }
 
+      message KeyValueText {
+        string key = 1;
+      }
+
+      message KeyValueFill {
+        string key = 1;
+      }
+
+      message Zone {
+        .rv.data.UUID uuid = 1;
+        string name = 2;
+      }
+
       enum SlideSourceType {
         SLIDE_SOURCE_TYPE_CURRENT_SLIDE = 0;
         SLIDE_SOURCE_TYPE_NEXT_SLIDE = 1;
@@ -463,6 +476,9 @@ message Slide {
         .rv.data.Slide.Element.DataLink.TimecodeText timecode_text = 33;
         .rv.data.Slide.Element.DataLink.TimecodeStatus timecode_status = 34;
         .rv.data.Message message_text = 35;
+        .rv.data.Slide.Element.DataLink.KeyValueText key_value_text = 36;
+        .rv.data.Slide.Element.DataLink.KeyValueFill key_value_fill = 37;
+        .rv.data.Slide.Element.DataLink.Zone zone = 38;
       }
     }
 

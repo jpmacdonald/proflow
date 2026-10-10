@@ -3840,7 +3840,7 @@ pub mod timer {
         )]
         #[repr(i32)]
         pub enum Style {
-            StyeNone = 0,
+            None = 0,
             Short = 1,
             Long = 2,
             RemoveShort = 3,
@@ -3853,7 +3853,7 @@ pub mod timer {
             /// (if the ProtoBuf definition does not change) and safe for programmatic use.
             pub fn as_str_name(&self) -> &'static str {
                 match self {
-                    Style::StyeNone => "STYE_NONE",
+                    Style::None => "STYLE_NONE",
                     Style::Short => "STYLE_SHORT",
                     Style::Long => "STYLE_LONG",
                     Style::RemoveShort => "STYLE_REMOVE_SHORT",
@@ -3863,7 +3863,7 @@ pub mod timer {
             /// Creates an enum from field names used in the ProtoBuf definition.
             pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
                 match value {
-                    "STYE_NONE" => Some(Self::StyeNone),
+                    "STYLE_NONE" => Some(Self::None),
                     "STYLE_SHORT" => Some(Self::Short),
                     "STYLE_LONG" => Some(Self::Long),
                     "STYLE_REMOVE_SHORT" => Some(Self::RemoveShort),
@@ -4323,7 +4323,7 @@ pub mod slide {
         pub struct DataLink {
             #[prost(
                 oneof = "data_link::PropertyType",
-                tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35"
+                tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38"
             )]
             pub property_type: ::core::option::Option<data_link::PropertyType>,
         }
@@ -5921,6 +5921,29 @@ pub mod slide {
             #[derive(Clone, PartialEq, ::prost::Message)]
             pub struct TimecodeStatus {}
             #[derive(serde::Serialize, serde::Deserialize)]
+            #[allow(clippy::derive_partial_eq_without_eq)]
+            #[derive(Clone, PartialEq, ::prost::Message)]
+            pub struct KeyValueText {
+                #[prost(string, tag = "1")]
+                pub key: ::prost::alloc::string::String,
+            }
+            #[derive(serde::Serialize, serde::Deserialize)]
+            #[allow(clippy::derive_partial_eq_without_eq)]
+            #[derive(Clone, PartialEq, ::prost::Message)]
+            pub struct KeyValueFill {
+                #[prost(string, tag = "1")]
+                pub key: ::prost::alloc::string::String,
+            }
+            #[derive(serde::Serialize, serde::Deserialize)]
+            #[allow(clippy::derive_partial_eq_without_eq)]
+            #[derive(Clone, PartialEq, ::prost::Message)]
+            pub struct Zone {
+                #[prost(message, optional, tag = "1")]
+                pub uuid: ::core::option::Option<super::super::super::Uuid>,
+                #[prost(string, tag = "2")]
+                pub name: ::prost::alloc::string::String,
+            }
+            #[derive(serde::Serialize, serde::Deserialize)]
             #[derive(
                 Clone,
                 Copy,
@@ -6112,6 +6135,12 @@ pub mod slide {
                 TimecodeStatus(TimecodeStatus),
                 #[prost(message, tag = "35")]
                 MessageText(super::super::super::Message),
+                #[prost(message, tag = "36")]
+                KeyValueText(KeyValueText),
+                #[prost(message, tag = "37")]
+                KeyValueFill(KeyValueFill),
+                #[prost(message, tag = "38")]
+                Zone(Zone),
             }
         }
         #[derive(serde::Serialize, serde::Deserialize)]
@@ -13498,17 +13527,19 @@ pub mod layer_identification_overlay {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RenderLayer {
-    #[prost(message, optional, tag = "8")]
+    #[prost(message, optional, tag = "9")]
     pub bounds: ::core::option::Option<graphics::Rect>,
-    #[prost(enumeration = "graphics::element::FlipMode", tag = "9")]
+    #[prost(enumeration = "graphics::element::FlipMode", tag = "10")]
     pub flip_mode: i32,
-    #[prost(double, tag = "10")]
+    #[prost(double, tag = "11")]
     pub rotation: f64,
-    #[prost(int32, tag = "11")]
+    #[prost(int32, tag = "12")]
     pub build_index: i32,
-    #[prost(bool, tag = "12")]
+    #[prost(bool, tag = "13")]
     pub build_out: bool,
-    #[prost(oneof = "render_layer::LayerType", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(int32, tag = "14")]
+    pub build_out_index: i32,
+    #[prost(oneof = "render_layer::LayerType", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
     pub layer_type: ::core::option::Option<render_layer::LayerType>,
 }
 /// Nested message and enum types in `RenderLayer`.
@@ -13542,6 +13573,8 @@ pub mod render_layer {
         Scrolling(Scrolling),
         #[prost(message, tag = "7")]
         SlideImage(super::slide::element::data_link::SlideImage),
+        #[prost(message, tag = "8")]
+        Zone(super::slide::element::data_link::Zone),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
