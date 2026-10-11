@@ -13,6 +13,8 @@ use super::overrides::resolve_requested_plans;
 use super::receipt::receipt_path_for_playlist;
 use super::request::{BoundBuildRequest, BuildRequest, RequestError};
 use super::run::PreparedService;
+#[cfg(test)]
+use super::run::RuntimeEvidence;
 use super::{BuildServiceError, ServiceBuildExecutor};
 use crate::workflow::approval::SourceManifest;
 use crate::workflow::plan::{ReadyAction, ResolvedItemPlan};
@@ -295,6 +297,37 @@ impl PreparedBuildRequest {
         service_name: &str,
         playlist_name: &str,
     ) -> Result<Self, BuildServiceError> {
+        Self::offline_test_with(
+            RuntimeEvidence::diagnostic(),
+            plan_id,
+            service_name,
+            playlist_name,
+        )
+    }
+
+    /// Offline prepared state bound to `executor`'s runtime evidence.
+    #[cfg(test)]
+    pub(crate) fn offline_test_prepared_by(
+        executor: &ServiceBuildExecutor<'_>,
+        plan_id: &str,
+        service_name: &str,
+        playlist_name: &str,
+    ) -> Result<Self, BuildServiceError> {
+        Self::offline_test_with(
+            executor.runtime_evidence(),
+            plan_id,
+            service_name,
+            playlist_name,
+        )
+    }
+
+    #[cfg(test)]
+    fn offline_test_with(
+        runtime: RuntimeEvidence,
+        plan_id: &str,
+        service_name: &str,
+        playlist_name: &str,
+    ) -> Result<Self, BuildServiceError> {
         let request = ReviewedRequest::offline(BuildRequest {
             plan_id: plan_id.to_string(),
             service_name: Some(service_name.to_string()),
@@ -323,7 +356,7 @@ impl PreparedBuildRequest {
             request,
             plans,
             sources,
-            PreparedService::offline_test(transaction),
+            PreparedService::offline_test(runtime, transaction),
         ))
     }
 }

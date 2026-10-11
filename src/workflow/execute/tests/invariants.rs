@@ -557,3 +557,43 @@ fn review_rejects_generated_target_selected_as_another_entries_source() {
         }) if input == "plan 'pco:item:existing'" && output == "plan 'pco:item:generate'"
     ));
 }
+
+#[test]
+fn prepared_build_refuses_commit_through_a_different_runtime() {
+    let preparing_root = tempfile::tempdir().expect("temporary root");
+    let other_root = tempfile::tempdir().expect("other temporary root");
+    let preparing = TestRuntime::new(preparing_root.path());
+    let other = TestRuntime::new(other_root.path());
+    let prepared = PreparedBuildRequest::offline_test_prepared_by(
+        &preparing.executor(),
+        "plan-1",
+        "Sunday Morning",
+        "Cross Runtime",
+    )
+    .expect("prepare offline build against the first runtime");
+
+    let error = other
+        .executor()
+        .build_prepared_offline(prepared)
+        .expect_err("a build prepared against one runtime must not commit through another");
+
+    assert!(matches!(error, BuildServiceError::PreparedRuntimeMismatch));
+}
+
+#[test]
+fn prepared_build_commits_through_the_runtime_it_was_prepared_against() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let prepared = PreparedBuildRequest::offline_test_prepared_by(
+        &runtime.executor(),
+        "plan-1",
+        "Sunday Morning",
+        "Same Runtime",
+    )
+    .expect("prepare offline build");
+
+    runtime
+        .executor()
+        .build_prepared_offline(prepared)
+        .expect("the originating runtime commits its own prepared build");
+}

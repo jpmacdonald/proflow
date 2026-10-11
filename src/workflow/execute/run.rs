@@ -3,6 +3,7 @@
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 
+use crate::bible::BibleCorpusFingerprint;
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::BuildFileTransaction;
 use crate::workflow::transaction::PreparedFileTransaction;
@@ -15,6 +16,7 @@ use super::receipt::{
     prepare_build_receipt, receipt_path_for_playlist, verify_sealed_build_artifacts,
     BuildReceiptError, BuildReceiptInputs,
 };
+use super::render_assets::RenderAssetFingerprint;
 use super::rendered_service::collect_build_warnings;
 use super::review::PreparedBuildRequest;
 use super::{BuildServiceError, ServiceBuildExecutor};
@@ -114,6 +116,7 @@ impl ServiceBuildExecutor<'_> {
         };
 
         let prepared = PreparedService {
+            runtime: self.runtime_evidence(),
             transaction,
             catalog_updates,
             font_programs,
@@ -134,7 +137,11 @@ impl ServiceBuildExecutor<'_> {
             catalog_updates,
             font_programs,
             result,
+            runtime,
         } = prepared;
+        if runtime != self.runtime_evidence() {
+            return Err(BuildServiceError::PreparedRuntimeMismatch);
+        }
         let mut catalog = self.lock_library()?;
         let committed_catalog = catalog.with_prepared_updates(&catalog_updates)?;
         sources.verify()?;
@@ -148,7 +155,44 @@ impl ServiceBuildExecutor<'_> {
     }
 }
 
+/// The render-asset and Bible-corpus evidence a build was prepared against.
+/// Commit verifies freshness through the committing runtime, so that runtime
+/// must hold the same evidence the build was prepared from.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct RuntimeEvidence {
+    render_assets: RenderAssetFingerprint,
+    bible_corpora: BibleCorpusFingerprint,
+}
+
+impl RuntimeEvidence {
+    #[cfg(test)]
+    pub(super) const fn diagnostic() -> Self {
+        Self {
+            render_assets: RenderAssetFingerprint {
+                schema: "diagnostic",
+                config_sha256: String::new(),
+                theme: None,
+                macros: None,
+                audience_workspace: None,
+                audience_themes: Vec::new(),
+                revision: String::new(),
+            },
+            bible_corpora: BibleCorpusFingerprint::diagnostic(),
+        }
+    }
+}
+
+impl ServiceBuildExecutor<'_> {
+    pub(super) fn runtime_evidence(&self) -> RuntimeEvidence {
+        RuntimeEvidence {
+            render_assets: self.render_assets.fingerprint().clone(),
+            bible_corpora: self.bible_corpora.fingerprint(),
+        }
+    }
+}
+
 pub(super) struct PreparedService {
+    runtime: RuntimeEvidence,
     transaction: PreparedFileTransaction,
     catalog_updates: Vec<PreparedLibraryUpdate>,
     font_programs: FontProgramSnapshot,
@@ -167,8 +211,12 @@ impl PreparedService {
         self.transaction.staged_bytes_for(target)
     }
 
-    pub(super) fn offline_test(transaction: PreparedFileTransaction) -> Self {
+    pub(super) fn offline_test(
+        runtime: RuntimeEvidence,
+        transaction: PreparedFileTransaction,
+    ) -> Self {
         Self {
+            runtime,
             transaction,
             catalog_updates: Vec::new(),
             font_programs: FontProgramSnapshot::diagnostic(),

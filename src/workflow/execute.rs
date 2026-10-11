@@ -345,6 +345,12 @@ pub enum BuildServiceError {
         /// First concrete mismatch found.
         actual: String,
     },
+    /// A prepared build was committed through a runtime whose render assets or
+    /// Bible corpora differ from the ones it was prepared against.
+    #[error(
+        "prepared build was committed through a different runtime than it was prepared against"
+    )]
+    PreparedRuntimeMismatch,
     /// A filesystem transaction failed.
     #[error("filesystem transaction failed: {0}")]
     Io(#[from] std::io::Error),

@@ -690,6 +690,24 @@ fn parse_verse_range(text: &str) -> Option<VerseRange> {
     (start > 0 && end >= start).then_some(VerseRange { start, end })
 }
 
+/// Content identity of one captured Bible corpus set: the data root and the
+/// SHA-256 of every installed translation's source bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BibleCorpusFingerprint {
+    root: PathBuf,
+    sources: BTreeMap<&'static str, [u8; 32]>,
+}
+
+impl BibleCorpusFingerprint {
+    #[cfg(test)]
+    pub(crate) const fn diagnostic() -> Self {
+        Self {
+            root: PathBuf::new(),
+            sources: BTreeMap::new(),
+        }
+    }
+}
+
 /// Immutable, parsed Bible corpora captured from one project data bundle.
 ///
 /// Review reconciliation and rendering share this exact snapshot. A caller
@@ -731,6 +749,19 @@ impl BibleCorpusSnapshot {
             );
         }
         Ok(Self { root, corpora })
+    }
+
+    /// Content identity of the exact corpora parsed into this snapshot.
+    #[must_use]
+    pub fn fingerprint(&self) -> BibleCorpusFingerprint {
+        BibleCorpusFingerprint {
+            root: self.root.clone(),
+            sources: self
+                .corpora
+                .iter()
+                .map(|(version, corpus)| (version.name(), corpus.source_sha256))
+                .collect(),
+        }
     }
 
     /// Verify every installed corpus still matches this snapshot.
