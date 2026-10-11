@@ -113,6 +113,14 @@ Dates are the day the work landed on `main`.
   `main`. Deleted from `origin` on 2026-10-10 after confirming six of its nine
   touched files no longer exist; it is preserved in the archive bundle above.
 
+### Requests between sessions
+
+Claude builds and owns this file; Codex audits and writes findings to
+`<area>-findings.txt` in the repo root (see `~/Projects/AGENTS.md` on the
+server). A request one agent has for the other goes here; clear it when done.
+
+- none
+
 ### Server
 
 - 2026-10-10: clone at `~/Projects/proflow` on the home server (Linux
