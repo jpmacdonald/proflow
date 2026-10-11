@@ -9,6 +9,10 @@ use httptest::{
 use serde_json::json;
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn changed_reviewed_source_is_rejected_before_commit() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
@@ -46,6 +50,10 @@ fn changed_reviewed_source_is_rejected_before_commit() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
@@ -90,6 +98,10 @@ fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn reviewed_build_uses_bound_identity_without_refetch() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
@@ -126,6 +138,10 @@ fn reviewed_build_uses_bound_identity_without_refetch() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 async fn planning_center_drift_invalidates_prepared_artifacts_before_commit() {
     let root = tempfile::tempdir().expect("temporary root");
     let server = Server::run();
@@ -244,6 +260,10 @@ fn freshness_snapshot() -> PlanSnapshot {
 
 #[cfg(unix)]
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn additional_portable_media_is_canonicalized_and_embedded() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
@@ -305,6 +325,10 @@ fn additional_portable_media_is_canonicalized_and_embedded() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn portable_review_captures_managed_background() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -346,6 +370,10 @@ fn portable_review_captures_managed_background() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn portable_review_rejects_custom_identity_for_managed_background() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -393,6 +421,10 @@ fn portable_review_rejects_custom_identity_for_managed_background() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn portable_review_prefers_show_relative_theme_media_over_stored_absolute_path() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());

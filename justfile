@@ -108,15 +108,19 @@ invariants:
 
 # Tests that read the live project data root (PROFLOW_DATA, default ./data).
 # The production config and licensed Bible corpora are not tracked, so these
-# tests are #[ignore]d in the deterministic gates. Every ignored lib test
-# belongs to this set. Skips loudly when no data root is present.
+# tests are #[ignore]d in the deterministic gates. On macOS every ignored lib
+# test belongs to this set. Off macOS the executor tests that need the native
+# TextKit oracle are ignored too, and are skipped here because no data root
+# can make them pass. Skips loudly when no data root is present.
 live-data:
     root="${PROFLOW_DATA:-data}"; \
     if [[ ! -f "$root/proflow.config.json" ]]; then \
       echo "skipped live-data: no project data root at $root (set PROFLOW_DATA)"; \
       exit 0; \
     fi; \
-    {{ cargo }} test -p proflow --lib --all-features -- --ignored
+    skip=(); \
+    if [[ "$(uname -s)" != Darwin ]]; then skip=(--skip workflow::execute::tests::); fi; \
+    {{ cargo }} test -p proflow --lib --all-features -- --ignored "${skip[@]}"
 
 # Native ProPresenter fidelity: schema-exact codecs and an independently
 # exported playlist reconstructed through the production writer.

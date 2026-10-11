@@ -82,6 +82,15 @@ Dates are the day the work landed on `main`.
 - `build_service --configured-workspace` trusts the configured ProPresenter
   root without consulting the active macOS show.
 
+### Fixed
+
+- A presentation path that starts at `/Libraries/...` no longer infers the
+  filesystem root as the show root. Show-relative media was being resolved
+  against `/`, so a missing file was reported at the wrong path (and a file
+  that happened to exist there would have been packaged). The existing
+  missing-media test only passed on macOS because temporary directories sit
+  behind the `/var` symlink there.
+
 ### Unfinished or deferred
 
 - `BuildServiceError` is still one flat enum of about fifty variants after the
@@ -130,15 +139,17 @@ Dates are the day the work landed on `main`.
   `planning_center/api.rs` and dropping a `return` in `start_bundled`. None
   of this has been compiled on macOS yet; run `just local` there before
   relying on it.
-- 2026-10-10: `just test` (so `just local`) fails on the server with 25
-  failures; everything else passes (412 of 436 host unit tests, 277 of 278
-  format-crate unit tests, all integration and doc tests).
-  - 24 are `workflow::execute::tests::*` in the host crate. Each one renders
-    through the build executor, which starts the native text-fit oracle and
-    gets `TextFitError::UnsupportedPlatform("linux")`. Unresolved decision:
-    gate these to macOS, or give the executor tests an oracle that does not
-    need TextKit.
-  - 1 is `playlist::tests::package::discovered_missing_media_is_a_typed_error`
-    in `proflow-propresenter`: the export does not return
-    `MissingMediaDependency` for the missing path on Linux. Not yet
-    diagnosed; it may be a real path-handling difference.
+- 2026-10-10: `just local`, `just doctest`, `just doc`, `just audit`,
+  `just deny`, and `just machete` pass on the server (412 host unit tests,
+  279 format-crate unit tests). `cargo-audit`, `cargo-deny`, and
+  `cargo-machete` are not installed there; they ran from
+  `nix shell nixpkgs#cargo-audit nixpkgs#cargo-deny nixpkgs#cargo-machete`.
+  Not run on the server: `just deep` and its heavy members. Nothing from
+  this day's server commits has been compiled or tested on macOS; run
+  `just local` there.
+- Off macOS, 24 `workflow::execute::tests::*` tests are ignored with the
+  reason "requires the native TextKit oracle". Each renders through the
+  build executor, which cannot start the oracle on Linux. They stay compiled
+  and run unchanged on macOS. Gating them with `cfg` instead would have left
+  about thirty shared helpers dead off macOS. The executor's render path
+  therefore has no test coverage on the server.

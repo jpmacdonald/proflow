@@ -357,7 +357,8 @@ fn checked_relative_path(value: &str) -> Option<PathBuf> {
 }
 
 /// Infer the show root from an absolute presentation path containing a real
-/// `Libraries` component.
+/// `Libraries` component. A path that starts at `Libraries` names no show
+/// root; the filesystem root is never one.
 pub fn propresenter_root_from_library_path(value: &str) -> Option<PathBuf> {
     let decoded = decode_file_url_or_path(value)?;
     let normalized = decoded.replace('\\', "/");
@@ -369,6 +370,9 @@ pub fn propresenter_root_from_library_path(value: &str) -> Option<PathBuf> {
         return None;
     }
     let prefix = components[..library].join("/");
+    if prefix.is_empty() {
+        return None;
+    }
     let root = if normalized.starts_with('/') {
         PathBuf::from(format!("/{prefix}"))
     } else {
@@ -448,6 +452,22 @@ mod tests {
 
         let non_library = presentation_document_url("/exports/Song.pro");
         assert!(non_library.relative_file_path.is_none());
+    }
+
+    #[test]
+    fn library_path_without_a_show_prefix_names_no_show_root() {
+        assert_eq!(
+            propresenter_root_from_library_path("/Users/a/ProPresenter/Libraries/Default/Song.pro"),
+            Some(PathBuf::from("/Users/a/ProPresenter"))
+        );
+        assert_eq!(
+            propresenter_root_from_library_path("/Libraries/Default/Song.pro"),
+            None
+        );
+        assert_eq!(
+            propresenter_root_from_library_path("Libraries/Default/Song.pro"),
+            None
+        );
     }
 
     #[test]

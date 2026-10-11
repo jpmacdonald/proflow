@@ -102,6 +102,10 @@ fn use_existing_override_canonicalizes_its_native_source() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn review_rejects_override_with_wrong_size_before_approval() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
@@ -134,6 +138,10 @@ fn review_rejects_override_with_wrong_size_before_approval() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn review_rejects_override_with_missing_arrangement_before_approval() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());

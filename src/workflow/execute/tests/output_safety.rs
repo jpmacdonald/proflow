@@ -1,6 +1,10 @@
 use super::*;
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn generated_target_appearing_after_preview_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -44,6 +48,10 @@ fn generated_target_appearing_after_preview_is_rejected() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -82,6 +90,10 @@ fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn generated_absent_target_gets_one_fresh_stable_uuid() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -135,6 +147,10 @@ fn generated_absent_target_gets_one_fresh_stable_uuid() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -194,6 +210,10 @@ fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn playlist_changed_after_preview_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());

@@ -6,6 +6,10 @@ use sha2::{Digest, Sha256};
 use super::*;
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn receipt_commits_exact_source_artifact_and_structure_evidence() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -262,6 +266,10 @@ fn hex_bytes(bytes: &[u8]) -> String {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn receipt_target_drift_after_review_aborts_the_whole_build() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
@@ -300,6 +308,10 @@ fn receipt_target_drift_after_review_aborts_the_whole_build() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "requires the native TextKit oracle, which only macOS provides"
+)]
 fn final_presentation_reference_diagnostics_block_preparation() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
