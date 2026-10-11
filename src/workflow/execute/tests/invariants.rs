@@ -593,3 +593,87 @@ fn prepared_build_commits_through_the_runtime_it_was_prepared_against() {
         .build_prepared_offline(prepared)
         .expect("the originating runtime commits its own prepared build");
 }
+
+fn prepare_generated_title(runtime: &TestRuntime, playlist_name: &str) -> PreparedBuildRequest {
+    expect_prepared(
+        runtime
+            .executor()
+            .review_build_request(
+                reviewed_request(playlist_name),
+                &[generate_title_plan("pco:item:generated", test_style(None))],
+                proflow_propresenter::PresentationSize::FULL_HD,
+            )
+            .expect("prepare reviewed build"),
+    )
+}
+
+#[test]
+fn rendered_build_commits_through_the_runtime_it_was_prepared_against() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_fixture_theme(&mut runtime);
+    let prepared = prepare_generated_title(&runtime, "Same Runtime Rendered");
+
+    runtime
+        .executor()
+        .build_prepared_offline(prepared)
+        .expect("the originating runtime commits a build it rendered");
+
+    assert!(runtime
+        .locations()
+        .playlist_output()
+        .join("Same Runtime Rendered.proplaylist")
+        .is_file());
+}
+
+#[test]
+fn rendered_build_refuses_commit_through_a_runtime_with_different_render_assets() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut preparing = TestRuntime::new(root.path());
+    install_fixture_theme(&mut preparing);
+    // Same directories, but this runtime never loaded the fixture theme.
+    let other = TestRuntime::new(root.path());
+    let prepared = prepare_generated_title(&preparing, "Other Render Assets");
+
+    let error = other
+        .executor()
+        .build_prepared_offline(prepared)
+        .expect_err("render assets differ from the ones the build was rendered with");
+
+    assert!(matches!(error, BuildServiceError::PreparedRuntimeMismatch));
+    assert!(!other
+        .locations()
+        .playlist_output()
+        .join("Other Render Assets.proplaylist")
+        .exists());
+}
+
+#[test]
+fn rendered_build_refuses_commit_through_a_runtime_with_different_bible_corpora() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut preparing = TestRuntime::new(root.path());
+    install_fixture_theme(&mut preparing);
+    let mut twin = TestRuntime::new(root.path());
+    install_fixture_theme(&mut twin);
+    // Identical render assets; only the Bible corpus root differs.
+    let mut other_corpora = TestRuntime::new(root.path());
+    install_fixture_theme(&mut other_corpora);
+    let other_bibles = root.path().join("other-bibles");
+    std::fs::create_dir_all(&other_bibles).expect("create other Bible root");
+    other_corpora.bible_corpora =
+        BibleCorpusSnapshot::capture(other_bibles).expect("capture other Bible corpora");
+    let for_other_corpora = prepare_generated_title(&preparing, "Other Corpora");
+    let for_twin = prepare_generated_title(&preparing, "Twin Runtime");
+
+    let error = other_corpora
+        .executor()
+        .build_prepared_offline(for_other_corpora)
+        .expect_err("Bible corpora differ from the ones the build was rendered with");
+    assert!(matches!(error, BuildServiceError::PreparedRuntimeMismatch));
+
+    // The twin loaded the same files, so equal evidence commits: the refusal
+    // above was about the corpora, not about two loads of one theme.
+    twin.executor()
+        .build_prepared_offline(for_twin)
+        .expect("a runtime holding identical evidence commits the build");
+}

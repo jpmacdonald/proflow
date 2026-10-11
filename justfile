@@ -111,7 +111,7 @@ invariants:
 # tests are #[ignore]d in the deterministic gates. On macOS every ignored lib
 # test belongs to this set. Off macOS one executor test that asserts native
 # TextKit font evidence is ignored too, and is skipped here because no data root
-# can make them pass. Skips loudly when no data root is present.
+# can make it pass. Skips loudly when no data root is present.
 live-data:
     root="${PROFLOW_DATA:-data}"; \
     if [[ ! -f "$root/proflow.config.json" ]]; then \
