@@ -115,3 +115,6 @@ jspm_packages/
 # real people, so this directory is never tracked. examples/ holds the
 # shareable starter config.
 /data/
+
+# Agent working notes (findings, requests between sessions)
+/.agents/
