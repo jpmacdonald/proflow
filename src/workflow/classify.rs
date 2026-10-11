@@ -688,4 +688,4 @@ pub(super) fn file_stem(path: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

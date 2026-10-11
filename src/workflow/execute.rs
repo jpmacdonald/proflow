@@ -351,6 +351,10 @@ pub enum BuildServiceError {
         "prepared build was committed through a different runtime than it was prepared against"
     )]
     PreparedRuntimeMismatch,
+    /// A `.pro` file appeared in or vanished from the presentation library
+    /// after the build was prepared, so ambiguity review is no longer valid.
+    #[error("presentation library candidates changed after preview; preview again")]
+    LibraryCandidatesChanged,
     /// A filesystem transaction failed.
     #[error("filesystem transaction failed: {0}")]
     Io(#[from] std::io::Error),
@@ -463,7 +467,10 @@ impl<'a> ServiceBuildExecutor<'a> {
         self.bible_corpora.verify_current()?;
         let request = Self::bind_request_identity(request, &planning_center)?;
         let mappings = self.render_assets.config();
-        let index_guard = self.lock_library()?;
+        let mut index_guard = self.lock_library()?;
+        // Ambiguity is decided over the library as it is now, not as it was
+        // when the process loaded its catalog.
+        *index_guard = index_guard.refreshed()?;
         let plans = classify::build_plan(
             planning_center.items(),
             mappings,

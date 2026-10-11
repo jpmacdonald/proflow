@@ -5,4 +5,4 @@ mod description;
 mod expansion_required;
 mod scripture;
 mod song;
-mod support;
+pub(crate) mod support;

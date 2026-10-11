@@ -93,6 +93,14 @@ impl PlanSnapshot {
     }
 
     #[cfg(test)]
+    pub(crate) fn offline_with_items(plan_id: &str, service_name: &str, items: Vec<Item>) -> Self {
+        Self {
+            items,
+            ..Self::offline(plan_id, service_name)
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn offline(plan_id: &str, service_name: &str) -> Self {
         Self {
             plan_id: plan_id.to_string(),

@@ -4,6 +4,8 @@
 use std::path::Path;
 
 use crate::planning_center::{PlanFreshnessError, PlanSnapshot};
+#[cfg(test)]
+use proflow_propresenter::library::LibraryCandidates;
 use proflow_propresenter::playlist::{
     playlist_output_path, PlaylistExportMode, PlaylistMediaAsset,
 };
@@ -299,6 +301,7 @@ impl PreparedBuildRequest {
     ) -> Result<Self, BuildServiceError> {
         Self::offline_test_with(
             RuntimeEvidence::diagnostic(),
+            LibraryCandidates::empty(),
             plan_id,
             service_name,
             playlist_name,
@@ -315,6 +318,7 @@ impl PreparedBuildRequest {
     ) -> Result<Self, BuildServiceError> {
         Self::offline_test_with(
             executor.runtime_evidence(),
+            executor.lock_library()?.scan_candidates()?,
             plan_id,
             service_name,
             playlist_name,
@@ -324,6 +328,7 @@ impl PreparedBuildRequest {
     #[cfg(test)]
     fn offline_test_with(
         runtime: RuntimeEvidence,
+        library_candidates: LibraryCandidates,
         plan_id: &str,
         service_name: &str,
         playlist_name: &str,
@@ -356,7 +361,7 @@ impl PreparedBuildRequest {
             request,
             plans,
             sources,
-            PreparedService::offline_test(runtime, transaction),
+            PreparedService::offline_test(runtime, library_candidates, transaction),
         ))
     }
 }

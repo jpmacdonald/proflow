@@ -23,6 +23,7 @@ mod support;
 use support::*;
 
 mod invariants;
+mod library_freshness;
 mod native_fidelity;
 mod output_safety;
 mod overrides;

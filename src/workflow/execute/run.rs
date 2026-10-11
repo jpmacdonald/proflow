@@ -7,7 +7,7 @@ use crate::bible::BibleCorpusFingerprint;
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::BuildFileTransaction;
 use crate::workflow::transaction::PreparedFileTransaction;
-use proflow_propresenter::library::PreparedLibraryUpdate;
+use proflow_propresenter::library::{LibraryCandidates, PreparedLibraryUpdate};
 use proflow_propresenter::text_fit::FontProgramSnapshot;
 #[cfg(test)]
 use proflow_propresenter::text_fit::TextFitContractSummary;
@@ -117,6 +117,7 @@ impl ServiceBuildExecutor<'_> {
 
         let prepared = PreparedService {
             runtime: self.runtime_evidence(),
+            library_candidates: self.lock_library()?.scan_candidates()?,
             transaction,
             catalog_updates,
             font_programs,
@@ -138,11 +139,15 @@ impl ServiceBuildExecutor<'_> {
             font_programs,
             result,
             runtime,
+            library_candidates,
         } = prepared;
         if runtime != self.runtime_evidence() {
             return Err(BuildServiceError::PreparedRuntimeMismatch);
         }
         let mut catalog = self.lock_library()?;
+        if catalog.scan_candidates()? != library_candidates {
+            return Err(BuildServiceError::LibraryCandidatesChanged);
+        }
         let committed_catalog = catalog.with_prepared_updates(&catalog_updates)?;
         sources.verify()?;
         self.render_assets.verify_current()?;
@@ -193,6 +198,7 @@ impl ServiceBuildExecutor<'_> {
 
 pub(super) struct PreparedService {
     runtime: RuntimeEvidence,
+    library_candidates: LibraryCandidates,
     transaction: PreparedFileTransaction,
     catalog_updates: Vec<PreparedLibraryUpdate>,
     font_programs: FontProgramSnapshot,
@@ -213,10 +219,12 @@ impl PreparedService {
 
     pub(super) fn offline_test(
         runtime: RuntimeEvidence,
+        library_candidates: LibraryCandidates,
         transaction: PreparedFileTransaction,
     ) -> Self {
         Self {
             runtime,
+            library_candidates,
             transaction,
             catalog_updates: Vec::new(),
             font_programs: FontProgramSnapshot::diagnostic(),

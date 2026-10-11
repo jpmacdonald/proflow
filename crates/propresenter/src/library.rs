@@ -5,7 +5,7 @@
 //! installed as a new catalog snapshot only after the filesystem transaction
 //! succeeds.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -334,6 +334,22 @@ pub struct LibraryCatalog {
     library_path: PathBuf,
 }
 
+/// Every `.pro` file path under a library at one moment, whether or not it
+/// decoded as a native presentation.
+///
+/// Library-title ambiguity is decided over this candidate set, so a build
+/// prepared against one set is stale once the set differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryCandidates(BTreeSet<PathBuf>);
+
+impl LibraryCandidates {
+    /// An empty candidate set, for diagnostic fixtures that never scan a library.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(BTreeSet::new())
+    }
+}
+
 /// A decoded catalog replacement prepared from exact bytes awaiting commit.
 #[derive(Debug, Clone)]
 pub struct PreparedLibraryUpdate {
@@ -394,6 +410,28 @@ impl LibraryCatalog {
             entries,
             library_path,
         })
+    }
+
+    /// Rebuild this catalog from the library files as they are now.
+    pub fn refreshed(&self) -> Result<Self> {
+        Self::build(&self.library_path)
+    }
+
+    /// List the `.pro` files under this catalog's library without decoding
+    /// them, so a prepared build can prove its candidate set is unchanged.
+    pub fn scan_candidates(&self) -> Result<LibraryCandidates> {
+        let mut paths = BTreeSet::new();
+        for directory_entry in WalkDir::new(&self.library_path).follow_links(false) {
+            let directory_entry =
+                directory_entry.map_err(|source| LibraryCatalogError::Traverse {
+                    path: self.library_path.clone(),
+                    source,
+                })?;
+            if directory_entry.file_type().is_file() && is_pro_path(directory_entry.path()) {
+                paths.insert(directory_entry.path().to_path_buf());
+            }
+        }
+        Ok(LibraryCandidates(paths))
     }
 
     /// All native presentations in this catalog snapshot.

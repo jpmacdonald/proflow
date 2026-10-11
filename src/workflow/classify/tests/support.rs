@@ -120,7 +120,7 @@ pub(super) fn write_library_presentation_with_size(path: &Path, width: f64, heig
     std::fs::write(path, presentation.encode_to_vec()).expect("write sized presentation fixture");
 }
 
-pub(super) fn write_song_with_arrangements(path: &Path, arrangements: &[(&str, Option<&str>)]) {
+pub(crate) fn write_song_with_arrangements(path: &Path, arrangements: &[(&str, Option<&str>)]) {
     let name = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -165,7 +165,7 @@ pub(super) fn write_song_with_arrangements(path: &Path, arrangements: &[(&str, O
     std::fs::write(path, presentation.encode_to_vec()).expect("write song fixture");
 }
 
-pub(super) fn song_config(
+pub(crate) fn song_config(
     configured_arrangement: Option<&str>,
     override_arrangement: Option<&str>,
 ) -> ProjectConfig {
@@ -198,7 +198,7 @@ pub(super) fn song_config(
     parse_project_config_str(&config.to_string()).expect("song config should parse")
 }
 
-pub(super) fn song_item(arrangement: Option<&str>) -> Item {
+pub(crate) fn song_item(arrangement: Option<&str>) -> Item {
     Item {
         id: "song".to_string(),
         position: 1,

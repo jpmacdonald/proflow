@@ -260,6 +260,12 @@ impl TestRuntime {
             RenderAssetSnapshot::load(config, locations).expect("reload test render assets");
     }
 
+    pub(super) fn replace_config(&mut self, config: ProjectConfig) {
+        let locations = self.render_assets.locations().clone();
+        self.render_assets = RenderAssetSnapshot::load(config, locations)
+            .expect("load test render assets from replacement config");
+    }
+
     pub(super) fn replace_locations(&mut self, locations: BuildLocations) {
         let config = self.render_assets.config().clone();
         self.render_assets = RenderAssetSnapshot::load(config, locations)
