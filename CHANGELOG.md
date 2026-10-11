@@ -20,7 +20,10 @@ Dates are the day the work landed on `main`.
 - Verification on this state: `just local` (734 tests), `just live-data`
   (7 tests), `just doctest`, `just doc`, `just audit`, `just deny`,
   `just machete`, `just parity`, `just invariants`, and `just proto` pass on
-  macOS. Not run: `just prop`, `just mutants`, `just deep` as a whole,
+  macOS. `just prop` (10000 cases) and `just mutants` pass on the server;
+  a mutation run scoped to the 2026-10-10 audit fixes caught every mutant
+  but the MCP `preview_playlist` handler stub, which needs a live
+  Planning Center workstation. Not run: `just deep` as a whole,
   `just schema-audit`, `just release-audit`.
 - The server checkout (`~/Projects/proflow` on the home server, reached as
   `server-ts`) has no global Rust toolchain; `nix develop
@@ -106,8 +109,9 @@ Dates are the day the work landed on `main`.
     duplicate title added outside the workflow is reviewed as ambiguous.
     Prepared state records the library's `.pro` candidate set (taken when the
     build is prepared) and commit refuses with `LibraryCandidatesChanged` if it
-    differs. A file added between the catalog rebuild and preparation of the
-    same review is not caught.
+    differs. The set is scanned before the rebuild and preparation refuses a
+    library that no longer matches it, so a file added between the rebuild
+    and preparation of the same review is caught too.
   behind the `/var` symlink there.
 
 ### Unfinished or deferred
@@ -129,7 +133,14 @@ Dates are the day the work landed on `main`.
   imported playlist) and section 5 (extracting the format crate to its own
   repository) are unchanged. The workspace split is the in-repo step toward
   section 5.
-- `just prop` and `just mutants` have not been run since the workspace split.
+- Unverified on macOS (2026-10-11 server work): `text_fit/client.rs` now holds
+  the helper in a private `HelperSession` inside `NativeTextFitOracle`
+  (mechanical move, behavior meant to be identical); `render_plans` has a
+  `cfg(all(test, not(macos)))` branch; `generated_target_appearing_after_
+  preview_is_rejected` now expects `LibraryCandidatesChanged` (it would have
+  failed on macOS since 68e3286); `ReviewedBuildInputs::capture` and
+  `review_planned_request` take the library candidate set. Run `just local`
+  and `just live-data` on macOS.
 
 ### Dropped
 
@@ -159,16 +170,22 @@ Dates are the day the work landed on `main`.
   of this has been compiled on macOS yet; run `just local` there before
   relying on it.
 - 2026-10-10: `just local`, `just doctest`, `just doc`, `just audit`,
-  `just deny`, and `just machete` pass on the server (417 host unit tests,
-  279 format-crate unit tests). `cargo-audit`, `cargo-deny`, and
+  `just deny`, and `just machete` pass on the server (447 host unit tests,
+  281 format-crate unit tests). `cargo-audit`, `cargo-deny`, and
   `cargo-machete` are not installed there; they ran from
   `nix shell nixpkgs#cargo-audit nixpkgs#cargo-deny nixpkgs#cargo-machete`.
-  Not run on the server: `just deep` and its heavy members. Nothing from
-  this day's server commits has been compiled or tested on macOS; run
-  `just local` there.
-- Off macOS, 24 `workflow::execute::tests::*` tests are ignored with the
-  reason "requires the native TextKit oracle". Each renders through the
-  build executor, which cannot start the oracle on Linux. They stay compiled
-  and run unchanged on macOS. Gating them with `cfg` instead would have left
-  about thirty shared helpers dead off macOS. The executor's render path
-  therefore has no test coverage on the server.
+  `just prop` and `just mutants` also pass there (2026-10-11). Not run on
+  the server: the rest of `just deep`. Nothing from the server commits has
+  been compiled or tested on macOS; run `just local` there.
+- Off macOS the executor tests run against `NativeTextFitOracle::diagnostic()`:
+  fixed one-line, always-fitting, font-free evidence, built only under
+  `cfg(test)` or the dev-dependency `diagnostics` feature and selected by
+  `render_plans` only in this crate's tests off macOS. Production off macOS
+  still fails with `TextFitError::UnsupportedPlatform`; macOS tests still use
+  the real helper. 23 of the 24 formerly ignored executor tests run on the
+  server, covering prepare-then-commit freshness, refusal, catalog, drift and
+  override invariants. One stays macOS-only
+  (`receipt_commits_exact_source_artifact_and_structure_evidence`, it asserts
+  resolved-font evidence). The diagnostic oracle proves nothing about real
+  text metrics, text splitting, or overflow: goldens and fit sizes remain
+  macOS-only.
