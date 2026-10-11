@@ -10,7 +10,9 @@ Dates are the day the work landed on `main`.
 
 ### State as of 2026-10-10
 
-- `main` is the only branch. Everything described below is on `origin/main`.
+- `main` is the only branch. Everything described below is on `origin/main`
+  except the four architecture-audit fixes under "Fixed", which are committed
+  on the server checkout and not yet pushed.
 - Git history was rewritten on 2026-10-10 to remove `data/` (licensed Bible
   text and a real project config) from every commit. A bundle of every ref
   from before the rewrite lives outside the repository at
@@ -89,6 +91,25 @@ Dates are the day the work landed on `main`.
   against `/`, so a missing file was reported at the wrong path (and a file
   that happened to exist there would have been packaged). The existing
   missing-media test only passed on macOS because temporary directories sit
+- Architecture audit of 24e2246 (all four findings):
+  - A prepared build carries the render-asset and Bible-corpus fingerprints it
+    was prepared from; committing it through a runtime holding different
+    evidence is `BuildServiceError::PreparedRuntimeMismatch`. This is a
+    runtime check, not a type-level binding: a lifetime brand would force
+    every holder of a prepared build (the MCP server keeps them between
+    calls) to borrow the workstation.
+  - `ServiceBuildExecutor::build_prepared_request`, which takes the caller's
+    "current" snapshot, is `pub(crate)`. `workstation::build_prepared_request`
+    (refresh, then commit) is the only public commit; a `compile_fail` doctest
+    on `ServiceBuildExecutor` pins it.
+  - `preview_playlist` returns `invalid_params` for `media_assets` combined
+    with `package_mode` `library_local` instead of dropping the media.
+  - `review_snapshot` rebuilds the library catalog before classifying, so a
+    duplicate title added outside the workflow is reviewed as ambiguous.
+    Prepared state records the library's `.pro` candidate set (taken when the
+    build is prepared) and commit refuses with `LibraryCandidatesChanged` if it
+    differs. A file added between the catalog rebuild and preparation of the
+    same review is not caught.
   behind the `/var` symlink there.
 
 ### Unfinished or deferred
@@ -140,7 +161,7 @@ Dates are the day the work landed on `main`.
   of this has been compiled on macOS yet; run `just local` there before
   relying on it.
 - 2026-10-10: `just local`, `just doctest`, `just doc`, `just audit`,
-  `just deny`, and `just machete` pass on the server (412 host unit tests,
+  `just deny`, and `just machete` pass on the server (417 host unit tests,
   279 format-crate unit tests). `cargo-audit`, `cargo-deny`, and
   `cargo-machete` are not installed there; they ran from
   `nix shell nixpkgs#cargo-audit nixpkgs#cargo-deny nixpkgs#cargo-machete`.
