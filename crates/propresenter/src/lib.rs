@@ -73,6 +73,8 @@ mod native_zip;
 pub mod package;
 /// Playlist file support (.proplaylist).
 pub mod playlist;
+/// Versioned, LLM-readable description of an existing playlist.
+pub mod playlist_document;
 mod presentation_graph;
 /// Checked renderer-independent presentation specifications.
 pub mod presentation_spec;

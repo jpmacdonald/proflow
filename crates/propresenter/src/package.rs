@@ -12,6 +12,7 @@ mod presentation;
 mod read;
 
 pub use comparison::{compare_playlist_packages, infer_archive_shape};
+pub(crate) use items::summarize_presentation_item;
 pub use items::{compare_playlist_items_aligned, presentation_items};
 pub use model::{
     EmbeddedPresentationStructure, EmbeddedPresentationSummary, PackageError, PackageFileSummary,

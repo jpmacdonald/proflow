@@ -23,7 +23,7 @@ pub struct PresentationStructureSummary {
 }
 
 /// A malformed or ambiguous native presentation reference.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PresentationReferenceDiagnostic {
     /// More than one cue owns the same UUID.

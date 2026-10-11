@@ -213,7 +213,7 @@ fn collect_playlist_items(playlist: &rv_data::Playlist, items: &mut Vec<Playlist
     }
 }
 
-fn summarize_presentation_item(item: &rv_data::PlaylistItem) -> Option<PlaylistItemSummary> {
+pub fn summarize_presentation_item(item: &rv_data::PlaylistItem) -> Option<PlaylistItemSummary> {
     let Some(playlist_item::ItemType::Presentation(presentation)) = &item.item_type else {
         return None;
     };
