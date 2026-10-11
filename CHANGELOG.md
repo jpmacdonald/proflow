@@ -53,6 +53,20 @@ Dates are the day the work landed on `main`.
   preview replaces an earlier executable one.
 - `docs/semantic-resolution.md` (translation, song identity, arrangement
   contracts) and `docs/text-fit-strategy.md` (proposal).
+- Playlist document (`docs/playlist-document.md`): `PlaylistDocument`, in
+  `proflow-propresenter`, is a versioned, schemars-described JSON
+  view of an existing playlist for LLM readers (items with a `kind` enum,
+  source link, arrangement, and a compact summary of cue groups, scripture
+  and media). It is built from a `.proplaylist` package or from a named
+  playlist in the live `Playlists/Library`; an unreadable linked presentation
+  stays in the document with a typed reason. Read side only: nothing accepts
+  a document as build input, and `preview_playlist` does not embed one yet.
+  The schema is checked in as a golden
+  (`crates/propresenter/tests/fixtures/playlist-document.schema.json`) and
+  every fixture playlist is validated against it. New MCP tools:
+  `playlist_document_schema` and `read_playlist { name | path }` (path
+  confined to the playlist output directory and ProPresenter root). New
+  dev-dependency in the format crate: `jsonschema`.
 
 ### Changed
 
@@ -141,6 +155,11 @@ Dates are the day the work landed on `main`.
   failed on macOS since 68e3286); `ReviewedBuildInputs::capture` and
   `review_planned_request` take the library candidate set. Run `just local`
   and `just live-data` on macOS.
+- Unverified on macOS (2026-10-11 server work, playlist document): no
+  macOS-only path was touched, but the new module, the `jsonschema`
+  dev-dependency (and the `Cargo.lock` additions it brought, plus two minor
+  bumps of `regex-automata` and `zmij`) and the two MCP tools have only been
+  built and tested on Linux. `just local` covers them.
 
 ### Dropped
 
@@ -189,3 +208,6 @@ Dates are the day the work landed on `main`.
   resolved-font evidence). The diagnostic oracle proves nothing about real
   text metrics, text splitting, or overflow: goldens and fit sizes remain
   macOS-only.
+- 2026-10-11: with the playlist document, `just local` (455 host and 298
+  format-crate unit tests), `just doctest`, `just doc`, `just invariants`,
+  `just parity`, `just machete`, and `just deny` pass on the server.
