@@ -140,6 +140,7 @@ async fn planning_center_drift_invalidates_prepared_artifacts_before_commit() {
             &[test_plan("pco:item:main", PlanDisposition::Skip)],
             proflow_propresenter::PresentationSize::FULL_HD,
             super::review::ReviewedPlanningCenterSource::captured(freshness_snapshot()),
+            proflow_propresenter::library::LibraryCandidates::empty(),
         )
         .expect("capture production-style review");
     let reviewed = expect_prepared(reviewed);

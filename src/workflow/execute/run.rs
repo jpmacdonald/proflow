@@ -34,6 +34,7 @@ impl ServiceBuildExecutor<'_> {
             presentation_size,
             backgrounds,
             outputs,
+            library_candidates: reviewed_candidates,
         } = inputs;
         let bound_request = request.bound();
         let transaction = BuildFileTransaction::from_reviewed(outputs);
@@ -115,9 +116,13 @@ impl ServiceBuildExecutor<'_> {
                 .collect()
         };
 
+        let library_candidates = self.lock_library()?.scan_candidates()?;
+        if library_candidates != reviewed_candidates {
+            return Err(BuildServiceError::LibraryCandidatesChanged);
+        }
         let prepared = PreparedService {
             runtime: self.runtime_evidence(),
-            library_candidates: self.lock_library()?.scan_candidates()?,
+            library_candidates,
             transaction,
             catalog_updates,
             font_programs,

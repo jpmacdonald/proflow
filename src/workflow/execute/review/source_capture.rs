@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::workflow::approval::{OutputManifest, PhysicalPath, ReviewedServicePlan};
 use crate::workflow::plan::{ReadyAction, ResolvedItemPlan};
 use crate::workflow::presentation_render::PresentationRenderError;
+use proflow_propresenter::library::LibraryCandidates;
 use proflow_propresenter::media::{
     presentation_media_dependencies_from_bytes, MediaDependencyResolution,
 };
@@ -23,6 +24,9 @@ pub(in crate::workflow::execute) struct ReviewedBuildInputs {
     pub(in crate::workflow::execute) presentation_size: PresentationSize,
     pub(in crate::workflow::execute) backgrounds: Vec<ReviewedBackgroundPath>,
     pub(in crate::workflow::execute) outputs: OutputManifest,
+    /// The `.pro` files the plans were classified against. Preparation refuses
+    /// to run if the library no longer holds exactly this set.
+    pub(in crate::workflow::execute) library_candidates: LibraryCandidates,
 }
 
 #[derive(Debug)]
@@ -32,6 +36,10 @@ pub(in crate::workflow::execute) struct ReviewedBackgroundPath {
 }
 
 impl ReviewedBuildInputs {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct reviewed fact; a parameter struct would only rename them"
+    )]
     pub(in crate::workflow::execute) fn capture(
         request: ReviewedRequest,
         plans: Vec<ResolvedItemPlan>,
@@ -40,6 +48,7 @@ impl ReviewedBuildInputs {
         propresenter_root: &Path,
         additional_sources: impl IntoIterator<Item = PathBuf>,
         output_targets: impl IntoIterator<Item = PhysicalPath>,
+        library_candidates: LibraryCandidates,
     ) -> Result<Self, BuildServiceError> {
         let backgrounds = resolve_reviewed_backgrounds(&plans, project_data_root)?;
         let mut additional_sources = additional_sources.into_iter().collect::<Vec<_>>();
@@ -64,6 +73,7 @@ impl ReviewedBuildInputs {
             presentation_size,
             backgrounds,
             outputs,
+            library_candidates,
         })
     }
 

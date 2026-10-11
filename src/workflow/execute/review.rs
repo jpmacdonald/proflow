@@ -4,7 +4,6 @@
 use std::path::Path;
 
 use crate::planning_center::{PlanFreshnessError, PlanSnapshot};
-#[cfg(test)]
 use proflow_propresenter::library::LibraryCandidates;
 use proflow_propresenter::playlist::{
     playlist_output_path, PlaylistExportMode, PlaylistMediaAsset,
@@ -347,6 +346,7 @@ impl PreparedBuildRequest {
             Path::new("."),
             std::iter::empty(),
             std::iter::empty(),
+            LibraryCandidates::empty(),
         )?;
         let ReviewedBuildInputs {
             request,
@@ -375,6 +375,7 @@ impl ServiceBuildExecutor<'_> {
         plans: &[ResolvedItemPlan],
         presentation_size: PresentationSize,
         planning_center: ReviewedPlanningCenterSource,
+        library_candidates: LibraryCandidates,
     ) -> Result<BuildReview, BuildServiceError> {
         self.render_assets.verify_current()?;
         let skip_output_keys = std::mem::take(&mut request.skip_output_keys);
@@ -457,6 +458,7 @@ impl ServiceBuildExecutor<'_> {
             self.render_assets.locations().propresenter_root(),
             additional_sources,
             output_targets.into_iter().map(|target| target.physical),
+            library_candidates,
         )?;
         validate_reviewed_background_bindings(&reviewed)?;
         let prepared = self.prepare_reviewed_service(reviewed)?;
@@ -471,6 +473,13 @@ impl ServiceBuildExecutor<'_> {
         presentation_size: PresentationSize,
     ) -> Result<BuildReview, BuildServiceError> {
         let planning_center = ReviewedPlanningCenterSource::offline(&request);
-        self.review_planned_request(request, plans, presentation_size, planning_center)
+        let library_candidates = self.lock_library()?.scan_candidates()?;
+        self.review_planned_request(
+            request,
+            plans,
+            presentation_size,
+            planning_center,
+            library_candidates,
+        )
     }
 }

@@ -469,7 +469,10 @@ impl<'a> ServiceBuildExecutor<'a> {
         let mappings = self.render_assets.config();
         let mut index_guard = self.lock_library()?;
         // Ambiguity is decided over the library as it is now, not as it was
-        // when the process loaded its catalog.
+        // when the process loaded its catalog. The candidate set is scanned
+        // before the rebuild: a file that lands in between is then absent
+        // from the recorded set and preparation refuses it.
+        let library_candidates = index_guard.scan_candidates()?;
         *index_guard = index_guard.refreshed()?;
         let plans = classify::build_plan(
             planning_center.items(),
@@ -483,6 +486,7 @@ impl<'a> ServiceBuildExecutor<'a> {
             &plans,
             mappings.defaults().presentation_size,
             review::ReviewedPlanningCenterSource::captured(planning_center),
+            library_candidates,
         )
     }
 

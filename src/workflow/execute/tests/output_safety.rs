@@ -279,6 +279,7 @@ fn reviewed_background_keeps_canonical_identity_after_symlink_retarget() {
         root.path(),
         std::iter::empty(),
         std::iter::empty(),
+        proflow_propresenter::library::LibraryCandidates::empty(),
     )
     .expect("capture background");
 

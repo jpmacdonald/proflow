@@ -116,3 +116,60 @@ fn reviewed_song_build_refuses_commit_when_a_duplicate_title_appears_after_revie
         .join("Prepared Song.proplaylist")
         .exists());
 }
+
+fn review_against_candidates(
+    runtime: &TestRuntime,
+    candidates: proflow_propresenter::library::LibraryCandidates,
+) -> Result<BuildReview, BuildServiceError> {
+    let request = reviewed_request("Scanned Candidates");
+    let planning_center = super::review::ReviewedPlanningCenterSource::offline(&request);
+    runtime.executor().review_planned_request(
+        request,
+        &[generate_title_plan("pco:item:generated", test_style(None))],
+        proflow_propresenter::PresentationSize::FULL_HD,
+        planning_center,
+        candidates,
+    )
+}
+
+#[test]
+fn preparation_refuses_a_library_that_changed_after_review_scanned_it() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_fixture_theme(&mut runtime);
+    let library = runtime.locations().presentation_library().to_path_buf();
+    write_song_with_arrangements(&library.join("Amazing Grace.pro"), &[]);
+    let scanned = runtime
+        .file_index
+        .lock()
+        .expect("catalog lock")
+        .scan_candidates()
+        .expect("scan candidates");
+
+    // A duplicate lands after the classification the review was based on but
+    // before the artifacts are prepared.
+    write_song_with_arrangements(&library.join("Amazing Grace Copy.pro"), &[]);
+    let error = review_against_candidates(&runtime, scanned)
+        .expect_err("preparation must notice the changed library");
+
+    assert!(matches!(error, BuildServiceError::LibraryCandidatesChanged));
+}
+
+#[test]
+fn preparation_accepts_a_library_unchanged_since_review_scanned_it() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let mut runtime = TestRuntime::new(root.path());
+    install_fixture_theme(&mut runtime);
+    let library = runtime.locations().presentation_library().to_path_buf();
+    write_song_with_arrangements(&library.join("Amazing Grace.pro"), &[]);
+    let scanned = runtime
+        .file_index
+        .lock()
+        .expect("catalog lock")
+        .scan_candidates()
+        .expect("scan candidates");
+
+    let review = review_against_candidates(&runtime, scanned).expect("prepare against same set");
+
+    assert!(matches!(review, BuildReview::Prepared(_)));
+}
