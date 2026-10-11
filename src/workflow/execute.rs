@@ -387,6 +387,24 @@ impl From<PlanCaptureError> for BuildServiceError {
 /// to Planning Center: the executor describes the lookup it needs through
 /// [`Self::plan_lookup`] and consumes the captured [`PlanSnapshot`]. The
 /// boundary that performs those reads lives in [`crate::workstation`].
+///
+/// The only public way to commit a prepared build is
+/// [`crate::workstation::build_prepared_request`], which refreshes the Planning
+/// Center snapshot first. The raw verify-and-commit step is crate-private, so
+/// an outside caller cannot hand it the original snapshot and skip the refresh:
+///
+/// ```compile_fail
+/// use proflow::planning_center::PlanSnapshot;
+/// use proflow::workflow::execute::{PreparedBuildRequest, ServiceBuildExecutor};
+///
+/// fn skip_the_refresh(
+///     executor: &ServiceBuildExecutor<'_>,
+///     prepared: PreparedBuildRequest,
+/// ) {
+///     let original: PlanSnapshot = prepared.plan_snapshot().clone();
+///     let _ = executor.build_prepared_request(prepared, &original);
+/// }
+/// ```
 pub struct ServiceBuildExecutor<'a> {
     bible_corpora: &'a BibleCorpusSnapshot,
     file_index: &'a Mutex<LibraryCatalog>,
@@ -461,11 +479,13 @@ impl<'a> ServiceBuildExecutor<'a> {
         )
     }
 
-    /// Verify and commit exact native artifacts produced by
+    /// Crate-private: callers outside this crate commit through
+    /// [`crate::workstation::build_prepared_request`], which refreshes the
+    /// snapshot. Verify and commit exact native artifacts produced by
     /// [`BuildReview::Prepared`]. `current` is a Planning Center snapshot
     /// refreshed after review; any difference from the reviewed snapshot
     /// rejects the commit.
-    pub fn build_prepared_request(
+    pub(crate) fn build_prepared_request(
         &self,
         reviewed: PreparedBuildRequest,
         current: &PlanSnapshot,
