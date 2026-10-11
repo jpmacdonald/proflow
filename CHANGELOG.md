@@ -9,9 +9,7 @@ Dates are the day the work landed on `main`.
 ## Unreleased
 
 ### State as of 2026-10-10
-
-- `main` is the only branch. Everything described below is on `origin/main`
-  except the four architecture-audit fixes under "Fixed", which are committed
+- `main` is the only branch. Everything described below is on `origin/main`.
   on the server checkout and not yet pushed.
 - Git history was rewritten on 2026-10-10 to remove `data/` (licensed Bible
   text and a real project config) from every commit. A bundle of every ref
