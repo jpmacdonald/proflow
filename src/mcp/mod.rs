@@ -15,6 +15,7 @@ use crate::workflow::execute::BuildServiceError;
 use crate::workstation::{WorkspaceDiscovery, Workstation, WorkstationLoadError};
 
 mod config;
+mod playlist;
 mod review;
 mod schema;
 mod tools;
@@ -22,7 +23,7 @@ mod tools;
 use review::PreparedPlanSnapshot;
 pub use schema::{
     BuildServiceArgs, CatalogAssetsArgs, EntryOverride, EntryOverrideAction, ExplainRuleMatchArgs,
-    FetchPlanArgs, PlaylistMediaAssetArg, PreviewPlaylistArgs, SearchLibraryArgs,
+    FetchPlanArgs, PlaylistMediaAssetArg, PreviewPlaylistArgs, ReadPlaylistArgs, SearchLibraryArgs,
     WriteProjectConfigArgs,
 };
 

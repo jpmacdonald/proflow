@@ -328,3 +328,20 @@ pub(super) const fn format_category(category: Category) -> &'static str {
         Category::Other => "other",
     }
 }
+
+/// Arguments for the `read_playlist` tool. Exactly one of `name` or `path`.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadPlaylistArgs {
+    /// Name of a playlist or folder in the live `ProPresenter` playlist library.
+    #[schemars(
+        description = "Name of a playlist (or folder of playlists) in the ProPresenter playlist library. Exactly one of name or path."
+    )]
+    pub name: Option<String>,
+    /// A `.proplaylist` file inside the configured playlist output directory or
+    /// `ProPresenter` data root.
+    #[schemars(
+        description = "Path to a .proplaylist file inside the configured playlist output directory or ProPresenter data root; relative paths are resolved against the playlist output directory. Exactly one of name or path."
+    )]
+    pub path: Option<String>,
+}

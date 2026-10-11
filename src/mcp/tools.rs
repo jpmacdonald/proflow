@@ -6,6 +6,7 @@
 use std::sync::{Arc, MutexGuard};
 
 use proflow_propresenter::library::LibraryCatalog;
+use proflow_propresenter::playlist_document::playlist_document_schema;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
@@ -19,6 +20,7 @@ use crate::workflow::execute::BuildRequest;
 use proflow_propresenter::theme::ThemeCache;
 
 use super::config::write_config_reviewed;
+use super::playlist::{read_playlist_document, read_playlist_err, PlaylistRequest};
 use super::review::{
     bounded_days, bounded_usize, consume_reviewed_plan, playlist_export_intent,
     replace_prepared_snapshot, resolve_entry_override, PreviewRevision,
@@ -27,8 +29,8 @@ use super::schema::{
     format_category, BuildServiceArgs, CatalogAssetsArgs, ConfigValidationResponse,
     ConfigWriteResponse, EffectiveConfigResponse, ExplainRuleMatchArgs, ExplainRuleMatchInput,
     ExplainRuleMatchResponse, FetchPlanArgs, FileMatch, ItemResponse, PlanResponse,
-    PreviewPlaylistArgs, ReviewedMediaAssetResponse, ReviewedPreviewResponse, ScriptureResponse,
-    SearchLibraryArgs, SongResponse, WriteProjectConfigArgs,
+    PreviewPlaylistArgs, ReadPlaylistArgs, ReviewedMediaAssetResponse, ReviewedPreviewResponse,
+    ScriptureResponse, SearchLibraryArgs, SongResponse, WriteProjectConfigArgs,
 };
 use super::{build_err, mcp_err, ProFlowServer};
 
@@ -57,6 +59,29 @@ impl ProFlowServer {
     )]
     async fn project_config_schema(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         json_result(&schemars::schema_for!(RawProjectConfig))
+    }
+
+    /// Return the machine-readable playlist document contract.
+    #[tool(
+        description = "Return the JSON Schema of the playlist document returned by read_playlist (versioned by its schema_version field). Use this to interpret item kinds, presentation content states, and diagnostics."
+    )]
+    async fn playlist_document_schema(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        json_result(&playlist_document_schema())
+    }
+
+    /// Read an existing playlist as a playlist document.
+    #[tool(
+        description = "Read an existing ProPresenter playlist as a versioned JSON playlist document: ordered items with kind, source file, arrangement, and a compact content summary (cue groups and labels, scripture reference, media). Pass exactly one of name (a playlist or folder in the ProPresenter playlist library) or path (a .proplaylist file inside the playlist output directory or ProPresenter data root). A presentation that cannot be read stays in the document with a typed unavailable reason. Read-only; the document cannot be used as build input."
+    )]
+    async fn read_playlist(
+        &self,
+        Parameters(args): Parameters<ReadPlaylistArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = PlaylistRequest::try_from(args).map_err(|error| read_playlist_err(&error))?;
+        let document =
+            read_playlist_document(self.workstation.render_assets().locations(), &request)
+                .map_err(|error| read_playlist_err(&error))?;
+        json_result(&document)
     }
 
     /// Show the normalized config the runtime is actually using.
