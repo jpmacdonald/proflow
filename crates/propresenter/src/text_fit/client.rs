@@ -1,12 +1,21 @@
 //! Process ownership and request/response correlation for `TextKit` measurement.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::io::{BufWriter, Write};
+use std::process::{Child, ChildStdin};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+// Only macOS can spawn the helper; other hosts compile the session type but
+// can never construct one.
+#[cfg(target_os = "macos")]
+use std::{
+    io::{BufRead, BufReader, Read},
+    path::Path,
+    process::{ChildStdout, Command, Stdio},
+    sync::mpsc::{self, SyncSender},
+};
 
 use super::evidence::{validate_evidence, TextFitContractSummary, TextFitEvidence};
 use super::request::TextFitRequest;
@@ -20,8 +29,16 @@ mod error;
 pub use error::TextFitError;
 
 const MAX_RESPONSE_FRAME_BYTES: usize = 1024 * 1024;
+#[cfg(target_os = "macos")]
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg_attr(
+    not(target_os = "macos"),
+    expect(
+        dead_code,
+        reason = "only the macOS reader thread constructs frames; `measure` still matches them"
+    )
+)]
 enum HelperFrame {
     Line(Vec<u8>),
     EndOfStream,
@@ -30,6 +47,7 @@ enum HelperFrame {
     Truncated,
 }
 
+#[cfg(target_os = "macos")]
 fn read_helper_frames(stdout: ChildStdout, sender: &SyncSender<HelperFrame>) {
     let mut reader = BufReader::new(stdout);
     loop {
@@ -70,9 +88,9 @@ impl NativeTextFitOracle {
     pub fn start_bundled() -> Result<Self, TextFitError> {
         #[cfg(not(target_os = "macos"))]
         {
-            return Err(TextFitError::UnsupportedPlatform(
+            Err(TextFitError::UnsupportedPlatform(
                 std::env::consts::OS.to_string(),
-            ));
+            ))
         }
         #[cfg(target_os = "macos")]
         {
@@ -81,21 +99,13 @@ impl NativeTextFitOracle {
     }
 
     /// Start a checked helper session from an explicit executable path.
+    #[cfg(target_os = "macos")]
     pub(crate) fn start(executable: &Path) -> Result<Self, TextFitError> {
-        #[cfg(not(target_os = "macos"))]
-        {
-            return Err(TextFitError::UnsupportedPlatform(
-                std::env::consts::OS.to_string(),
-            ));
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Self::start_with_contract(
-                executable,
-                bundled_helper::contract(executable)?,
-                RESPONSE_TIMEOUT,
-            )
-        }
+        Self::start_with_contract(
+            executable,
+            bundled_helper::contract(executable)?,
+            RESPONSE_TIMEOUT,
+        )
     }
 
     #[cfg(all(test, target_os = "macos"))]

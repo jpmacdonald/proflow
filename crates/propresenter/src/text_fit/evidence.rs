@@ -107,7 +107,7 @@ impl TextFitContractSummary {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn helper_sha256(&self) -> &str {
         &self.helper_sha256
     }
@@ -225,21 +225,21 @@ pub struct ResolvedFontEvidence {
     font_program_sha256: String,
 }
 
+/// Only the macOS tests measure against a live helper, so only they read the
+/// resolved-font evidence back out.
+#[cfg(all(test, target_os = "macos"))]
 impl ResolvedFontEvidence {
     /// Resolved font family name.
-    #[cfg(test)]
     pub(crate) fn family_name(&self) -> &str {
         &self.family_name
     }
 
     /// SHA-256 of the resolved CoreText font program.
-    #[cfg(test)]
     pub(crate) fn font_program_sha256(&self) -> &str {
         &self.font_program_sha256
     }
 
     /// Exact local font-program path resolved by CoreText.
-    #[cfg(test)]
     pub(crate) fn font_program_path(&self) -> &Path {
         &self.font_program_path
     }
@@ -288,19 +288,19 @@ impl TextFitEvidence {
     }
 
     /// Total visible-text length measured in UTF-16 code units.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) const fn input_utf16_length(&self) -> usize {
         self.input_utf16_length
     }
 
     /// Uniform font scale used for the reported layout.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) const fn effective_scale(&self) -> f64 {
         self.effective_scale
     }
 
     /// Fonts resolved by `AppKit` for visible attributed runs.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn resolved_fonts(&self) -> &[ResolvedFontEvidence] {
         &self.resolved_fonts
     }

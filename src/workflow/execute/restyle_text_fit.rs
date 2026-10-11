@@ -222,7 +222,8 @@ fn measure_audience_screen(
     )
 }
 
-#[cfg(test)]
+/// Only the macOS restyle-proof tests can reach a live native oracle.
+#[cfg(all(test, target_os = "macos"))]
 pub(crate) fn prove_restyled_text_fit_for_test(
     presentation: &rv_data::Presentation,
     assets: &RenderAssetSnapshot,

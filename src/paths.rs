@@ -294,12 +294,19 @@ fn active_macos_show_directory() -> Result<Option<PathBuf>, BuildLocationsError>
 }
 
 #[cfg(not(target_os = "macos"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "shares the fallible signature of the macOS preference read"
+)]
 const fn active_macos_show_directory() -> Result<Option<PathBuf>, BuildLocationsError> {
     Ok(None)
 }
 
+#[cfg(any(target_os = "macos", test))]
 const MISSING_ACTIVE_SHOW_PREFERENCE: &str = "The domain/default pair of (com.renewedvision.propresenter, applicationShowDirectory) does not exist";
 
+/// Only macOS reads the preference, but the tests cover the parse on every host.
+#[cfg(any(target_os = "macos", test))]
 fn interpret_active_show_preference(
     success: bool,
     status: String,

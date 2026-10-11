@@ -466,6 +466,7 @@ fn rendered_text(rendered: &RenderedPresentation, index: usize) -> String {
         .expect("rendered text")
 }
 
+#[cfg(target_os = "macos")]
 fn first_presentation_slide_mut(
     presentation: &mut rv_data::Presentation,
 ) -> &mut rv_data::PresentationSlide {

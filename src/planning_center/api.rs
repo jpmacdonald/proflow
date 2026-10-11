@@ -396,7 +396,7 @@ impl PlanningCenterClient {
         // Sort services alphabetically, plans by date
         let mut sorted_services = services;
         sorted_services.sort_by(|a, b| a.name.cmp(&b.name));
-        all_plans.sort_by(|a, b| a.date.cmp(&b.date));
+        all_plans.sort_by_key(|a| a.date);
 
         Ok((sorted_services, all_plans))
     }
@@ -416,7 +416,7 @@ impl PlanningCenterClient {
 
         let mut sorted_services = services;
         sorted_services.sort_by(|a, b| a.name.cmp(&b.name));
-        all_plans.sort_by(|a, b| a.date.cmp(&b.date));
+        all_plans.sort_by_key(|a| a.date);
 
         Ok((sorted_services, all_plans))
     }

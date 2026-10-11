@@ -27,7 +27,7 @@ Dates are the day the work landed on `main`.
   ~/Projects/nix-config#rust` provides one. The Swift text-fit helper only
   builds on macOS; off macOS the crate compiles without it and text-fit
   measurement is a typed unavailable error. See "Server" below for what has
-  been verified there.
+  been verified there and what still fails.
 
 ### Added
 
@@ -119,9 +119,26 @@ Dates are the day the work landed on `main`.
   x86_64, reached as `server-ts`), fast-forwarded to `30f637e`.
 - 2026-10-10: `cargo check --workspace --all-targets --all-features` passes
   there under `nix develop ~/Projects/nix-config#rust` (rustc 1.97.1, 48 s
-  cold). It emits four dead-code warnings for functions that only macOS code
-  paths call (`interpret_active_show_preference`,
-  `prove_restyled_text_fit_for_test`, and two test helpers), so `just clippy`
-  with `-D warnings` would fail on Linux until those are gated or shared.
-  `just test` has not been run on the server, and `just` itself was not
-  checked for on the server.
+  cold). `just` is installed on the server.
+- 2026-10-10: `just fmt`, `just check`, and `just clippy` pass on the server.
+  Getting there took more than the four dead-code warnings first recorded:
+  the helper-process plumbing in `text_fit/client.rs`, the macOS-test-only
+  evidence accessors, `interpret_active_show_preference`, and two test
+  helpers are now gated to the hosts that use them; `HelperFrame` and the
+  non-macOS `active_macos_show_directory` stub carry a scoped `expect` with a
+  reason; and clippy 0.1.97 required `sort_by_key` in
+  `planning_center/api.rs` and dropping a `return` in `start_bundled`. None
+  of this has been compiled on macOS yet; run `just local` there before
+  relying on it.
+- 2026-10-10: `just test` (so `just local`) fails on the server with 25
+  failures; everything else passes (412 of 436 host unit tests, 277 of 278
+  format-crate unit tests, all integration and doc tests).
+  - 24 are `workflow::execute::tests::*` in the host crate. Each one renders
+    through the build executor, which starts the native text-fit oracle and
+    gets `TextFitError::UnsupportedPlatform("linux")`. Unresolved decision:
+    gate these to macOS, or give the executor tests an oracle that does not
+    need TextKit.
+  - 1 is `playlist::tests::package::discovered_missing_media_is_a_typed_error`
+    in `proflow-propresenter`: the export does not return
+    `MissingMediaDependency` for the missing path on Linux. Not yet
+    diagnosed; it may be a real path-handling difference.
