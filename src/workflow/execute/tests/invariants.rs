@@ -200,10 +200,6 @@ fn review_rejects_render_asset_drift_before_staging_outputs() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn prepared_build_rejects_render_asset_drift_before_commit() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());

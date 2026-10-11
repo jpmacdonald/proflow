@@ -6,10 +6,6 @@ use proflow_propresenter::playlist::linked_presentation_filename;
 use proflow_propresenter::SlideType;
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn portable_restyle_embeds_exact_canonical_default_files_and_final_media() {
     let fixture = portable_fixture();
     let executor = fixture.runtime.executor();
@@ -35,10 +31,6 @@ fn portable_restyle_embeds_exact_canonical_default_files_and_final_media() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn portable_receipt_records_each_missing_native_media_reference_and_warning() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());

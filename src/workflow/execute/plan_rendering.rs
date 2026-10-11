@@ -31,6 +31,14 @@ impl ServiceBuildExecutor<'_> {
         sources: &CapturedSources,
         transaction: BuildFileTransaction,
     ) -> Result<RenderedService, BuildServiceError> {
+        // Production always starts the native helper, so off macOS a build fails
+        // with the typed unavailable error. Only this crate's own tests off
+        // macOS substitute the fixed diagnostic oracle, which keeps the
+        // workflow's freshness and commit invariants provable on Linux; on macOS
+        // the tests measure with the real helper.
+        #[cfg(all(test, not(target_os = "macos")))]
+        let mut text_fit = NativeTextFitOracle::diagnostic();
+        #[cfg(not(all(test, not(target_os = "macos"))))]
         let mut text_fit = NativeTextFitOracle::start_bundled()
             .map_err(crate::workflow::presentation_render::PresentationRenderError::from)?;
         let mut rendered = RenderedService::new(transaction, text_fit.contract().clone());

@@ -657,3 +657,27 @@ fn oversized_helper_frame_is_rejected_without_unbounded_buffering(
     ));
     Ok(())
 }
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn off_macos_the_bundled_oracle_is_a_typed_unavailable_error() {
+    assert!(matches!(
+        NativeTextFitOracle::start_bundled(),
+        Err(super::TextFitError::UnsupportedPlatform(platform))
+            if platform == std::env::consts::OS
+    ));
+}
+
+#[test]
+fn diagnostic_oracle_reports_its_own_non_native_identity() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut oracle = NativeTextFitOracle::diagnostic();
+    assert_eq!(
+        *oracle.contract(),
+        super::TextFitContractSummary::diagnostic()
+    );
+    let evidence = oracle.measure(&request()?)?;
+    assert!(evidence.fits_bounds());
+    assert_eq!(evidence.line_count(), 1);
+    Ok(())
+}

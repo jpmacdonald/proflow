@@ -1,10 +1,6 @@
 use super::*;
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn generated_target_appearing_after_preview_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -28,10 +24,9 @@ fn generated_target_appearing_after_preview_is_rejected() {
         .build_prepared_offline(reviewed)
         .expect_err("appeared target cannot be overwritten");
 
-    assert!(matches!(error, BuildServiceError::Io(_)));
-    assert!(error
-        .to_string()
-        .contains("build output target changed concurrently"));
+    // The new `.pro` file is a library candidate, so the candidate check
+    // refuses the commit before the transaction's own target check runs.
+    assert!(matches!(error, BuildServiceError::LibraryCandidatesChanged));
     assert_eq!(
         std::fs::read(&target).expect("preserve external target"),
         b"external presentation"
@@ -48,10 +43,6 @@ fn generated_target_appearing_after_preview_is_rejected() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -90,10 +81,6 @@ fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn generated_absent_target_gets_one_fresh_stable_uuid() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -147,10 +134,6 @@ fn generated_absent_target_gets_one_fresh_stable_uuid() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -210,10 +193,6 @@ fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn playlist_changed_after_preview_is_rejected() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());

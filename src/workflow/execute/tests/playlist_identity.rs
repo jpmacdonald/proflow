@@ -3,10 +3,6 @@ use prost::Message;
 use super::*;
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn generated_item_uses_native_presentation_name_like_propresenter() {
     let root = tempfile::tempdir().expect("temporary root");
     let mut runtime = TestRuntime::new(root.path());
@@ -91,10 +87,6 @@ fn generated_item_uses_native_presentation_name_like_propresenter() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn unchanged_item_uses_native_presentation_name_like_propresenter() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());

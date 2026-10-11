@@ -823,10 +823,6 @@ fn assert_no_dangling_group_or_arrangement_references(presentation: &rv_data::Pr
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "requires the native TextKit oracle, which only macOS provides"
-)]
 fn restyled_song_atomically_rewrites_its_canonical_library_file() {
     let fixture = restyle_fixture();
     let executor = fixture.runtime.executor();

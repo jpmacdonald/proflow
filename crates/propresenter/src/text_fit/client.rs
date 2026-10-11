@@ -72,6 +72,26 @@ fn read_helper_frames(stdout: ChildStdout, sender: &SyncSender<HelperFrame>) {
 
 /// A persistent native `TextKit` helper session.
 pub struct NativeTextFitOracle {
+    session: Session,
+    contract: TextFitContractSummary,
+}
+
+enum Session {
+    // Only macOS starts a helper; other hosts compile the variant but never
+    // build it.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "only macOS starts a helper")
+    )]
+    Helper(HelperSession),
+    /// Fixed non-native evidence for tests of workflow invariants. Only
+    /// `NativeTextFitOracle::diagnostic` builds it, and that exists only for
+    /// tests.
+    #[cfg(any(test, feature = "diagnostics"))]
+    Diagnostic,
+}
+
+struct HelperSession {
     child: Child,
     stdin: BufWriter<ChildStdin>,
     responses: Option<Receiver<HelperFrame>>,
@@ -80,7 +100,6 @@ pub struct NativeTextFitOracle {
     poisoned: bool,
     next_request_id: u64,
     cache: BTreeMap<Vec<u8>, TextFitEvidence>,
-    contract: TextFitContractSummary,
 }
 
 impl NativeTextFitOracle {
@@ -95,6 +114,18 @@ impl NativeTextFitOracle {
         #[cfg(target_os = "macos")]
         {
             Self::start(&bundled_helper::materialize()?)
+        }
+    }
+
+    /// A session that reports fixed, non-native evidence: one line, always
+    /// fitting, no resolved fonts. It lets tests of workflow invariants run
+    /// where the `TextKit` helper cannot. It proves nothing about real text
+    /// metrics, and no production build enables the `diagnostics` feature.
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub fn diagnostic() -> Self {
+        Self {
+            session: Session::Diagnostic,
+            contract: TextFitContractSummary::diagnostic(),
         }
     }
 
@@ -154,14 +185,16 @@ impl NativeTextFitOracle {
             }
         };
         Ok(Self {
-            child,
-            stdin: BufWriter::new(stdin),
-            responses: Some(responses),
-            reader_thread: Some(reader_thread),
-            response_timeout,
-            poisoned: false,
-            next_request_id: 1,
-            cache: BTreeMap::new(),
+            session: Session::Helper(HelperSession {
+                child,
+                stdin: BufWriter::new(stdin),
+                responses: Some(responses),
+                reader_thread: Some(reader_thread),
+                response_timeout,
+                poisoned: false,
+                next_request_id: 1,
+                cache: BTreeMap::new(),
+            }),
             contract,
         })
     }
@@ -173,6 +206,44 @@ impl NativeTextFitOracle {
 
     /// Measure one request and validate all returned evidence.
     pub fn measure(&mut self, request: &TextFitRequest) -> Result<TextFitEvidence, TextFitError> {
+        match &mut self.session {
+            Session::Helper(helper) => helper.measure(request),
+            #[cfg(any(test, feature = "diagnostics"))]
+            Session::Diagnostic => Ok(TextFitEvidence::diagnostic(1, true)),
+        }
+    }
+
+    pub(super) fn decode_response(
+        request_id: u64,
+        request: &TextFitRequest,
+        line: impl AsRef<[u8]>,
+    ) -> Result<TextFitEvidence, TextFitError> {
+        let response: WireResponse =
+            serde_json::from_slice(line.as_ref()).map_err(TextFitError::DecodeResponse)?;
+        if response.protocol_version != TEXT_FIT_PROTOCOL_VERSION {
+            return Err(TextFitError::ProtocolVersionMismatch {
+                expected: TEXT_FIT_PROTOCOL_VERSION,
+                actual: response.protocol_version,
+            });
+        }
+        if response.request_id != request_id {
+            return Err(TextFitError::ResponseIdMismatch {
+                expected: request_id,
+                actual: response.request_id,
+            });
+        }
+        match (response.status.as_str(), response.evidence, response.error) {
+            ("ok", Some(evidence), None) => validate_evidence(evidence, request),
+            ("error", None, Some(error)) => Err(map_helper_error(error)),
+            _ => Err(TextFitError::HelperProtocol(
+                "response must contain exactly one matching status payload".to_string(),
+            )),
+        }
+    }
+}
+
+impl HelperSession {
+    fn measure(&mut self, request: &TextFitRequest) -> Result<TextFitEvidence, TextFitError> {
         if self.poisoned {
             return Err(TextFitError::SessionPoisoned);
         }
@@ -229,7 +300,7 @@ impl NativeTextFitOracle {
                 return Err(TextFitError::ResponseTimeout { timeout });
             }
         };
-        let evidence = match Self::decode_response(request_id, request, &frame) {
+        let evidence = match NativeTextFitOracle::decode_response(request_id, request, &frame) {
             Ok(evidence) => evidence,
             Err(error) => {
                 self.poison();
@@ -238,34 +309,6 @@ impl NativeTextFitOracle {
         };
         self.cache.insert(cache_key, evidence.clone());
         Ok(evidence)
-    }
-
-    pub(super) fn decode_response(
-        request_id: u64,
-        request: &TextFitRequest,
-        line: impl AsRef<[u8]>,
-    ) -> Result<TextFitEvidence, TextFitError> {
-        let response: WireResponse =
-            serde_json::from_slice(line.as_ref()).map_err(TextFitError::DecodeResponse)?;
-        if response.protocol_version != TEXT_FIT_PROTOCOL_VERSION {
-            return Err(TextFitError::ProtocolVersionMismatch {
-                expected: TEXT_FIT_PROTOCOL_VERSION,
-                actual: response.protocol_version,
-            });
-        }
-        if response.request_id != request_id {
-            return Err(TextFitError::ResponseIdMismatch {
-                expected: request_id,
-                actual: response.request_id,
-            });
-        }
-        match (response.status.as_str(), response.evidence, response.error) {
-            ("ok", Some(evidence), None) => validate_evidence(evidence, request),
-            ("error", None, Some(error)) => Err(map_helper_error(error)),
-            _ => Err(TextFitError::HelperProtocol(
-                "response must contain exactly one matching status payload".to_string(),
-            )),
-        }
     }
 
     fn poison(&mut self) {
@@ -279,7 +322,7 @@ impl NativeTextFitOracle {
     }
 }
 
-impl Drop for NativeTextFitOracle {
+impl Drop for HelperSession {
     fn drop(&mut self) {
         self.poison();
     }
