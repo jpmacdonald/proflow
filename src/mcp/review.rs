@@ -10,7 +10,9 @@ use crate::workflow::execute::{
     EntryOverride as WorkflowEntryOverride, OverrideAction, PreparedBuildRequest,
 };
 use crate::workflow::plan::ResolvedBackground;
-use proflow_propresenter::playlist::PlaylistMediaAsset;
+use proflow_propresenter::playlist::{
+    PlaylistExportIntent, PlaylistExportMode, PlaylistMediaAsset,
+};
 
 use super::mcp_err;
 use super::schema::{EntryOverride, EntryOverrideAction, PlaylistMediaAssetArg};
@@ -86,16 +88,36 @@ pub(super) enum ReviewedPlanError {
     ServiceNameMismatch { actual: String },
 }
 
-pub(super) fn parse_media_assets(
-    args: Option<Vec<PlaylistMediaAssetArg>>,
-) -> Vec<PlaylistMediaAsset> {
-    args.unwrap_or_default()
+/// Build the playlist export intent a preview request asks for.
+///
+/// Media assets only exist in a portable package; supplying them with
+/// `LibraryLinks` would silently drop them, so that combination is rejected.
+pub(super) fn playlist_export_intent(
+    mode: PlaylistExportMode,
+    media_assets: Option<Vec<PlaylistMediaAssetArg>>,
+) -> Result<PlaylistExportIntent, rmcp::ErrorData> {
+    if mode == PlaylistExportMode::LibraryLinks
+        && media_assets
+            .as_ref()
+            .is_some_and(|assets| !assets.is_empty())
+    {
+        return Err(rmcp::ErrorData::invalid_params(
+            "media_assets require package_mode export_portable; library_local exports carry no media",
+            None,
+        ));
+    }
+    let media_assets = media_assets
+        .unwrap_or_default()
         .into_iter()
         .map(|asset| PlaylistMediaAsset {
             source_path: PathBuf::from(asset.path),
             archive_path: asset.archive_path,
         })
-        .collect()
+        .collect();
+    Ok(match mode {
+        PlaylistExportMode::LibraryLinks => PlaylistExportIntent::library_links(),
+        PlaylistExportMode::PortableImport => PlaylistExportIntent::portable_import(media_assets),
+    })
 }
 
 pub(super) fn resolve_entry_override(

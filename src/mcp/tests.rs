@@ -424,3 +424,24 @@ fn build_override_rejects_unknown_background_id() {
 
     assert!(result.is_err());
 }
+
+#[test]
+fn linked_library_export_rejects_supplied_media_assets() {
+    let media = || {
+        Some(vec![super::schema::PlaylistMediaAssetArg {
+            path: "/media/loop.mp4".to_string(),
+            archive_path: None,
+        }])
+    };
+
+    let error = super::review::playlist_export_intent(PlaylistExportMode::LibraryLinks, media())
+        .expect_err("library links cannot carry portable media; it must not be dropped");
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+
+    let portable =
+        super::review::playlist_export_intent(PlaylistExportMode::PortableImport, media())
+            .expect("portable import accepts media assets");
+    assert_eq!(portable.media_assets().len(), 1);
+    super::review::playlist_export_intent(PlaylistExportMode::LibraryLinks, None)
+        .expect("library links without media is valid");
+}

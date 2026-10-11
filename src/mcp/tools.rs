@@ -16,12 +16,11 @@ use crate::project_config::{parse_project_config_value, RawProjectConfig};
 use crate::setup;
 use crate::workflow::classify;
 use crate::workflow::execute::BuildRequest;
-use proflow_propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode};
 use proflow_propresenter::theme::ThemeCache;
 
 use super::config::write_config_reviewed;
 use super::review::{
-    bounded_days, bounded_usize, consume_reviewed_plan, parse_media_assets,
+    bounded_days, bounded_usize, consume_reviewed_plan, playlist_export_intent,
     replace_prepared_snapshot, resolve_entry_override, PreviewRevision,
 };
 use super::schema::{
@@ -242,7 +241,6 @@ impl ProFlowServer {
         &self,
         Parameters(args): Parameters<PreviewPlaylistArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let media_assets = parse_media_assets(args.media_assets);
         let overrides = args
             .overrides
             .unwrap_or_default()
@@ -256,12 +254,7 @@ impl ProFlowServer {
             playlist_name: args.playlist_name,
             skip_output_keys: args.skip_output_keys.unwrap_or_default(),
             overrides,
-            playlist_export: match playlist_export_mode {
-                PlaylistExportMode::LibraryLinks => PlaylistExportIntent::library_links(),
-                PlaylistExportMode::PortableImport => {
-                    PlaylistExportIntent::portable_import(media_assets)
-                }
-            },
+            playlist_export: playlist_export_intent(playlist_export_mode, args.media_assets)?,
         };
         let reviewed = self
             .workstation
