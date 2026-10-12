@@ -340,7 +340,7 @@ fn classified_actions_cannot_bypass_path_identity_checks() {
         }),
     );
     assert!(matches!(
-        resolve_requested_plans(&[plan], &[], &[]),
+        resolve_requested_plans(&[plan], &[], &[], &BTreeMap::new()),
         Err(RequestError::InvalidIdentity {
             field: "plan arrangement"
         })

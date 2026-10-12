@@ -29,6 +29,7 @@ pub(super) fn recorded_decisions(args: PreviewPlaylistArgs) -> ReviewDecisions {
         });
     ReviewDecisions {
         playlist_name: args.playlist_name,
+        backgrounds: args.background_files.unwrap_or_default(),
         package_mode: args.package_mode.unwrap_or_default(),
         media: args
             .media_assets

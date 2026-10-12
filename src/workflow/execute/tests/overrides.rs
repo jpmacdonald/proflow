@@ -244,8 +244,8 @@ fn duplicate_plan_identities_fail_resolution() {
         test_plan("pco:item-1:main", PlanDisposition::Skip),
     ];
 
-    let error =
-        resolve_requested_plans(&plans, &[], &[]).expect_err("duplicate identities are ambiguous");
+    let error = resolve_requested_plans(&plans, &[], &[], &BTreeMap::new())
+        .expect_err("duplicate identities are ambiguous");
 
     assert_eq!(
         error.to_string(),

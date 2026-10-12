@@ -1,10 +1,11 @@
 //! Checked operator decisions and their application to semantic plans.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::request::RequestError;
 use super::request::{canonical_presentation_source, validate_identity, validate_path_identity};
+use crate::project_config::{BackgroundAssetPath, BackgroundId};
 use crate::workflow::plan::{ReadyAction, ResolvedBackground, ResolvedItemPlan};
 use proflow_propresenter::SlideType;
 
@@ -190,6 +191,7 @@ pub(super) fn resolve_requested_plans(
     plans: &[ResolvedItemPlan],
     skip_output_keys: &[String],
     overrides: &[EntryOverride],
+    background_files: &BTreeMap<BackgroundId, BackgroundAssetPath>,
 ) -> Result<Vec<ResolvedItemPlan>, RequestError> {
     validate_request_edits(skip_output_keys, overrides)?;
     let skip_set = skip_output_keys
@@ -211,7 +213,12 @@ pub(super) fn resolve_requested_plans(
                 skipped.reason = "Skipped by reviewed build request".to_string();
                 Ok(skipped)
             } else {
-                apply_override(plan, override_map.get(plan.output_key.as_str()).copied())
+                let mut effective =
+                    apply_override(plan, override_map.get(plan.output_key.as_str()).copied())?;
+                // Applied last, so the file follows whichever background the
+                // item ends up with, including one an override selected.
+                effective.use_background_files(background_files);
+                Ok(effective)
             }
         })
         .collect()

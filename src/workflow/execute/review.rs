@@ -367,7 +367,12 @@ impl ServiceBuildExecutor<'_> {
         let skip_output_keys = std::mem::take(&mut request.skip_output_keys);
         let overrides = std::mem::take(&mut request.overrides);
         let request = BoundBuildRequest::try_from(request)?;
-        let mut plans = resolve_requested_plans(plans, &skip_output_keys, &overrides)?;
+        let mut plans = resolve_requested_plans(
+            plans,
+            &skip_output_keys,
+            &overrides,
+            &request.background_files,
+        )?;
         reconcile_description_scripture_excerpts(&mut plans, self.bible_corpora)?;
         let build = self.classified_build(
             &ReviewedDecisions {

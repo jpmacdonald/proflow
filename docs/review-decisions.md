@@ -52,6 +52,28 @@ ones a build offers:
 `decide` does not fetch the plan. An item the plan does not have is reported
 by the next build.
 
+## A different image for a background, for one plan
+
+A background is configured once, by id, in `proflow.config.json`. To use
+another image for it in one plan, such as this week's sermon graphic:
+
+```bash
+proflow background --plan 12345 --id sermon --file backgrounds/2026-10-18.png
+```
+
+Every item in that plan whose background is `sermon` then uses that file.
+The file is a jpg, png or tiff below the data root; the id must be a
+configured background. Other plans and the configuration are unchanged.
+`--reset` in place of `--file` goes back to the configured image. In
+`review.toml` it is:
+
+```toml
+[backgrounds]
+sermon = "backgrounds/2026-10-18.png"
+```
+
+MCP `preview_playlist` takes the same mapping as `background_files`.
+
 ## Remembered choices and defaults
 
 Some questions come back. A question is an item's title and what is being

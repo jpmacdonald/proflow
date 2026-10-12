@@ -3,6 +3,7 @@
 //! ```text
 //! proflow build  --plan <id|next> [--service <service type>]
 //! proflow decide --plan <id|next> --item <item> <decision>
+//! proflow background --plan <id|next> --id <background> (--file <image> | --reset)
 //! proflow commit --plan <id|next> [--service <service type>]
 //! ```
 //!
@@ -15,7 +16,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::project_config::BackgroundId;
+use crate::project_config::{BackgroundAssetPath, BackgroundId};
 use crate::workflow::execute::{
     BuildServiceError, DecisionChoice, EntryOverrideAction, OpenDecision, Remembered,
 };
@@ -26,11 +27,16 @@ use crate::workstation::{AppliedDefault, RecordedBuild, WorkspaceDiscovery, Work
 pub const USAGE: &str = "\
 usage: proflow build  --plan <id|next> [--service <service type>]
        proflow decide --plan <id|next> --item <item> <decision>
+       proflow background --plan <id|next> --id <background> (--file <image> | --reset)
        proflow commit --plan <id|next> [--service <service type>]
 
   build    review the plan with the decisions in its review.toml, then render
            and verify it; exits 2 and lists the open decisions if any remain
   decide   record one decision in the plan's review.toml
+  background
+           use an image for a configured background in this plan only;
+           <image> is a path below the data root. --reset goes back to the
+           configured image
   commit   install the verified build of the plan as it stands now
 
   <decision> is one of:
@@ -67,6 +73,13 @@ pub enum Command {
         /// Also choose this for the same question from now on.
         as_default: bool,
     },
+    /// Use an image for a configured background in this plan only.
+    Background {
+        /// Configured background identity.
+        id: BackgroundId,
+        /// Image below the data root, or `None` for the configured image.
+        file: Option<BackgroundAssetPath>,
+    },
     /// Install the verified build.
     Commit,
 }
@@ -97,13 +110,13 @@ pub struct Invocation {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UsageError {
     /// The first argument is not a command.
-    #[error("expected `build`, `decide` or `commit`, found '{found}'")]
+    #[error("expected `build`, `decide`, `background` or `commit`, found '{found}'")]
     UnknownCommand {
         /// What was given.
         found: String,
     },
     /// No command was given.
-    #[error("expected `build`, `decide` or `commit`")]
+    #[error("expected `build`, `decide`, `background` or `commit`")]
     MissingCommand,
     /// `decide` was given without `--item`.
     #[error("decide requires --item <item>")]
@@ -142,11 +155,22 @@ impl Invocation {
     pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, UsageError> {
         let mut arguments = arguments.into_iter();
         let command = match arguments.next() {
-            Some(command) if matches!(command.as_str(), "build" | "decide" | "commit") => command,
+            Some(command)
+                if matches!(
+                    command.as_str(),
+                    "build" | "decide" | "background" | "commit"
+                ) =>
+            {
+                command
+            }
             Some(found) => return Err(UsageError::UnknownCommand { found }),
             None => return Err(UsageError::MissingCommand),
         };
         let deciding = command == "decide";
+        let background = command == "background";
+        let mut background_id = None;
+        let mut background_file = None;
+        let mut reset = None;
         let mut plan = None;
         let mut service = None;
         let mut workspace = None;
@@ -163,6 +187,9 @@ impl Invocation {
                     "--configured-workspace",
                     Some(WorkspaceDiscovery::ConfiguredOnly),
                 )?,
+                "--id" if background => set_once(&mut background_id, "--id", value())?,
+                "--file" if background => set_once(&mut background_file, "--file", value())?,
+                "--reset" if background => set_once(&mut reset, "--reset", Some(()))?,
                 "--item" if deciding => set_once(&mut item, "--item", value())?,
                 "--default" if deciding => set_once(&mut as_default, "--default", Some(()))?,
                 "--skip" if deciding => set_once(&mut decision.skip, "--skip", Some(()))?,
@@ -184,6 +211,27 @@ impl Invocation {
             command: match command.as_str() {
                 "build" => Command::Build,
                 "commit" => Command::Commit,
+                "background" => {
+                    let problem = |problem: String| UsageError::Decision { problem };
+                    Command::Background {
+                        id: BackgroundId::new(background_id.ok_or_else(|| {
+                            problem("background requires --id <background>".to_string())
+                        })?)
+                        .map_err(problem)?,
+                        file: match (background_file, reset) {
+                            (Some(file), None) => {
+                                Some(BackgroundAssetPath::new(file).map_err(problem)?)
+                            }
+                            (None, Some(())) => None,
+                            _ => {
+                                return Err(problem(
+                                    "background requires exactly one of --file <image> or --reset"
+                                        .to_string(),
+                                ));
+                            }
+                        },
+                    }
+                }
                 _ => Command::Decide {
                     item: item.ok_or(UsageError::MissingItem)?,
                     choice: decision.into_choice()?,
@@ -354,6 +402,17 @@ pub enum Outcome {
         /// Whether it is now the default for its question.
         as_default: bool,
     },
+    /// A background's image for this plan is recorded.
+    BackgroundSet {
+        /// Plan identity.
+        plan_id: String,
+        /// Configured background identity.
+        id: BackgroundId,
+        /// Image now used for it in this plan, or `None` for the configured one.
+        file: Option<BackgroundAssetPath>,
+        /// File it was recorded in.
+        decisions_file: PathBuf,
+    },
     /// The verified build is installed.
     Committed {
         /// Plan identity.
@@ -369,7 +428,10 @@ impl Outcome {
     pub const fn exit_code(&self) -> u8 {
         match self {
             Self::NeedsDecisions { .. } => 2,
-            Self::Built { .. } | Self::Decided { .. } | Self::Committed { .. } => 0,
+            Self::Built { .. }
+            | Self::Decided { .. }
+            | Self::BackgroundSet { .. }
+            | Self::Committed { .. } => 0,
         }
     }
 
@@ -425,6 +487,12 @@ pub async fn run(
             decisions_file: workstation.decide(&plan_id, item, choice.clone(), *as_default)?,
             item: item.clone(),
             as_default: *as_default,
+            plan_id,
+        }),
+        Command::Background { id, file } => Ok(Outcome::BackgroundSet {
+            decisions_file: workstation.use_background_file(&plan_id, id.clone(), file.clone())?,
+            id: id.clone(),
+            file: file.clone(),
             plan_id,
         }),
         Command::Build => Outcome::from_build(
@@ -533,6 +601,51 @@ fn write_warnings(formatter: &mut fmt::Formatter<'_>, warnings: &[String]) -> fm
         .try_for_each(|warning| writeln!(formatter, "  - {warning}"))
 }
 
+/// List every open decision with the command for each of its choices.
+fn write_open_decisions(
+    formatter: &mut fmt::Formatter<'_>,
+    plan_id: &str,
+    playlist_name: &str,
+    decisions: &[OpenDecision],
+    decisions_file: &std::path::Path,
+) -> fmt::Result {
+    writeln!(
+        formatter,
+        "Plan {plan_id} \"{playlist_name}\" needs {} decision(s) before it can be built.\n",
+        decisions.len()
+    )?;
+    for decision in decisions {
+        writeln!(formatter, "  {}  {}", decision.item, decision.title)?;
+        writeln!(formatter, "      {}", decision.question)?;
+        for option in &decision.options {
+            match option.remembered {
+                Some(Remembered { times, last }) => writeln!(
+                    formatter,
+                    "      - {} (chosen {times}x, last {}):",
+                    option.summary,
+                    last.format("%Y-%m-%d")
+                )?,
+                None => writeln!(formatter, "      - {}:", option.summary)?,
+            }
+            writeln!(
+                formatter,
+                "          {}",
+                DecideCommand {
+                    plan_id,
+                    item: &decision.item,
+                    choice: &option.choice
+                }
+            )?;
+        }
+        writeln!(formatter)?;
+    }
+    writeln!(
+        formatter,
+        "Run one command for each item, then build again. Add --default to a command to\nhave that choice made for the same question in later plans. `proflow decide`\ntakes other decisions too (see docs/review-decisions.md); all of them are\nrecorded in {}",
+        decisions_file.display()
+    )
+}
+
 impl fmt::Display for Outcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -544,41 +657,7 @@ impl fmt::Display for Outcome {
                 defaults,
             } => {
                 write!(formatter, "{defaults}")?;
-                writeln!(
-                    formatter,
-                    "Plan {plan_id} \"{playlist_name}\" needs {} decision(s) before it can be built.\n",
-                    decisions.len()
-                )?;
-                for decision in decisions {
-                    writeln!(formatter, "  {}  {}", decision.item, decision.title)?;
-                    writeln!(formatter, "      {}", decision.question)?;
-                    for option in &decision.options {
-                        match option.remembered {
-                            Some(Remembered { times, last }) => writeln!(
-                                formatter,
-                                "      - {} (chosen {times}x, last {}):",
-                                option.summary,
-                                last.format("%Y-%m-%d")
-                            )?,
-                            None => writeln!(formatter, "      - {}:", option.summary)?,
-                        }
-                        writeln!(
-                            formatter,
-                            "          {}",
-                            DecideCommand {
-                                plan_id,
-                                item: &decision.item,
-                                choice: &option.choice
-                            }
-                        )?;
-                    }
-                    writeln!(formatter)?;
-                }
-                writeln!(
-                    formatter,
-                    "Run one command for each item, then build again. Add --default to a command to\nhave that choice made for the same question in later plans. `proflow decide`\ntakes other decisions too (see docs/review-decisions.md); all of them are\nrecorded in {}",
-                    decisions_file.display()
-                )
+                write_open_decisions(formatter, plan_id, playlist_name, decisions, decisions_file)
             }
             Self::Decided {
                 plan_id,
@@ -599,6 +678,25 @@ impl fmt::Display for Outcome {
                 }
                 writeln!(formatter, "When every item is decided:\n")?;
                 writeln!(formatter, "  proflow build --plan {plan_id}")
+            }
+            Self::BackgroundSet {
+                plan_id,
+                id,
+                file,
+                decisions_file,
+            } => {
+                match file {
+                    Some(file) => writeln!(
+                        formatter,
+                        "Plan {plan_id} uses {} for background '{id}'.",
+                        file.as_path().display()
+                    )?,
+                    None => writeln!(
+                        formatter,
+                        "Plan {plan_id} uses the configured image for background '{id}'."
+                    )?,
+                }
+                writeln!(formatter, "Recorded in {}.", decisions_file.display())
             }
             Self::Built {
                 plan_id,

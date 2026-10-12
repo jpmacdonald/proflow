@@ -4,6 +4,7 @@
 //! the directory name, one file each. `classified/` holds the effective plan
 //! those inputs produce.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::planning_center::PlanSnapshot;
+use crate::project_config::{BackgroundAssetPath, BackgroundId};
 use crate::workflow::build_dir::{
     hex, BuildDir, BuildDirError, BuildInputs, BuildPlanId, Classified, Committed, Opened,
     Rendered, Resumed, Snapshotted, Verified,
@@ -43,6 +45,8 @@ struct Decisions<'a> {
     media_assets: Vec<MediaAsset<'a>>,
     skip_output_keys: Vec<&'a str>,
     overrides: Vec<&'a EntryOverride>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    background_files: &'a BTreeMap<BackgroundId, BackgroundAssetPath>,
 }
 
 #[derive(Serialize)]
@@ -249,6 +253,7 @@ fn canonical_decisions<'a>(decisions: &ReviewedDecisions<'a>) -> Decisions<'a> {
             .collect(),
         skip_output_keys,
         overrides,
+        background_files: &decisions.request.background_files,
     }
 }
 

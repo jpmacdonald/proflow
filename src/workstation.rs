@@ -18,7 +18,7 @@ use crate::bible::{BibleCorpusError, BibleCorpusSnapshot};
 use crate::config::Config;
 use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
 use crate::planning_center::PlanningCenterClient;
-use crate::project_config::load_project_config;
+use crate::project_config::{load_project_config, BackgroundAssetPath, BackgroundId};
 use crate::workflow::decision_memory::{DecisionMemory, OpenQuestions};
 use crate::workflow::execute::{
     BuildRequest, BuildReview, BuildServiceError, DecidedBy, DecisionChoice, OpenDecision,
@@ -366,6 +366,25 @@ impl Workstation {
             memory.write(&memory_file)?;
         }
         Ok(file)
+    }
+
+    /// Use `file` for the configured background `id` in this plan only, or
+    /// go back to the configured file with `None`. Returns the decisions
+    /// file.
+    pub fn use_background_file(
+        &self,
+        plan_id: &str,
+        id: BackgroundId,
+        file: Option<BackgroundAssetPath>,
+    ) -> Result<PathBuf, BuildServiceError> {
+        let decisions_file = self.executor().review_decisions_path(plan_id)?;
+        let mut decisions = ReviewDecisions::read(&decisions_file)?;
+        match file {
+            Some(file) => decisions.backgrounds.insert(id, file),
+            None => decisions.backgrounds.remove(&id),
+        };
+        self.record_decisions(plan_id, &decisions)?;
+        Ok(decisions_file)
     }
 
     /// Remember every decision in `decisions` that answers a question the

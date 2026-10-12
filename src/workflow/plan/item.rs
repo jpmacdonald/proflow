@@ -1,5 +1,6 @@
 //! Scripture sources and executable service-item decisions.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,7 @@ use serde::Serialize;
 
 use super::{ExistingTransform, RenderStyle, ResolvedBackground};
 use crate::bible::BibleVersion;
-use crate::project_config::PresentationTypeKey;
+use crate::project_config::{BackgroundAssetPath, BackgroundId, PresentationTypeKey};
 use crate::workflow::description_parser::ParsedContent;
 use proflow_propresenter::SlideType;
 
@@ -469,6 +470,30 @@ impl ReadyAction {
         }
     }
 
+    /// Use `file` for this action's background, keeping the background's
+    /// identity. Does nothing for an action that has no background.
+    fn use_background_file(&mut self, files: &BTreeMap<BackgroundId, BackgroundAssetPath>) {
+        let Some(replacement) = self.background().and_then(|background| {
+            let file = files.get(background.id())?;
+            (file != background.file())
+                .then(|| ResolvedBackground::new(background.id().clone(), file.clone()))
+        }) else {
+            return;
+        };
+        match self {
+            Self::RestyleExisting { transform, .. } => {
+                *transform = transform.clone().with_replacement_background(replacement);
+            }
+            Self::EditDescription { style, .. }
+            | Self::GenerateDescription { style, .. }
+            | Self::GenerateScripture { style, .. }
+            | Self::GenerateTitle { style, .. } => {
+                *style = style.clone().with_background(replacement);
+            }
+            Self::UseExisting { .. } => {}
+        }
+    }
+
     /// Return the native arrangement selected by a read-only action.
     pub fn arrangement(&self) -> Option<&str> {
         match self {
@@ -584,6 +609,17 @@ impl ReviewContext {
     /// Return the complete proposed action, when classification found one.
     pub const fn proposed_action(&self) -> Option<&ReadyAction> {
         match &self.proposal {
+            Some(
+                ReviewProposal::Resolved(action)
+                | ReviewProposal::SongCandidate(action)
+                | ReviewProposal::SongArrangement(action),
+            ) => Some(action),
+            None => None,
+        }
+    }
+
+    const fn proposed_action_mut(&mut self) -> Option<&mut ReadyAction> {
+        match &mut self.proposal {
             Some(
                 ReviewProposal::Resolved(action)
                 | ReviewProposal::SongCandidate(action)
@@ -917,6 +953,22 @@ impl ResolvedItemPlan {
         slide_type: SlideType,
     ) -> Result<(), PlanSemanticsError> {
         self.output.set_slide_type(slide_type)
+    }
+
+    /// Use the given image files for this plan's background in this build,
+    /// whether the plan is ready or still a proposal under review.
+    pub(crate) fn use_background_files(
+        &mut self,
+        files: &BTreeMap<BackgroundId, BackgroundAssetPath>,
+    ) {
+        let action = match &mut self.output.disposition {
+            PlanDisposition::Ready(action) => Some(action),
+            PlanDisposition::NeedsReview(context) => context.proposed_action_mut(),
+            PlanDisposition::Skip => None,
+        };
+        if let Some(action) = action {
+            action.use_background_file(files);
+        }
     }
 
     /// Replace this plan with one complete executable action.

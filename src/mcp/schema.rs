@@ -44,6 +44,16 @@ pub struct PreviewPlaylistArgs {
     /// Extra media files to bind to an `export_portable` preview/build.
     #[schemars(description = "Extra media files to bind to an export_portable build")]
     pub media_assets: Option<Vec<PlaylistMediaAssetArg>>,
+    /// Image files to use for configured backgrounds in this plan only.
+    #[schemars(
+        description = "Image files for this plan only, by configured background id: every item whose background is that id uses the given file instead. Paths are relative to the data root (jpg, png or tiff)."
+    )]
+    pub background_files: Option<
+        std::collections::BTreeMap<
+            crate::project_config::BackgroundId,
+            crate::project_config::BackgroundAssetPath,
+        >,
+    >,
 }
 
 /// Arguments for the `fetch_plan` tool.

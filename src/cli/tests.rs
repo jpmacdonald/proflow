@@ -51,10 +51,10 @@ fn a_command_line_names_a_step_a_plan_and_optional_assertions() {
 #[test]
 fn a_malformed_command_line_says_what_is_wrong() {
     for (line, problem) in [
-        ("", "expected `build`, `decide` or `commit`"),
+        ("", "expected `build`, `decide`, `background` or `commit`"),
         (
             "review --plan 1",
-            "expected `build`, `decide` or `commit`, found 'review'",
+            "expected `build`, `decide`, `background` or `commit`, found 'review'",
         ),
         ("build --plan 1 --skip", "unexpected argument '--skip'"),
         ("build --plan 1 --item a", "unexpected argument '--item'"),
@@ -280,6 +280,78 @@ have that choice made for the same question in later plans. `proflow decide`
 takes other decisions too (see docs/review-decisions.md); all of them are
 recorded in /data/builds/12345/review.toml
 "
+    );
+}
+
+#[test]
+fn a_background_image_for_one_plan_is_set_or_reset() {
+    let id = || BackgroundId::new("sermon").expect("background id");
+    let file = || BackgroundAssetPath::new("backgrounds/oct-18.png").expect("path");
+    assert_eq!(
+        parse("background --plan 1 --id sermon --file backgrounds/oct-18.png")
+            .expect("set")
+            .command,
+        Command::Background {
+            id: id(),
+            file: Some(file()),
+        }
+    );
+    assert_eq!(
+        parse("background --plan 1 --id sermon --reset")
+            .expect("reset")
+            .command,
+        Command::Background {
+            id: id(),
+            file: None
+        }
+    );
+    for (line, problem) in [
+        (
+            "background --plan 1 --file a.png",
+            "background requires --id <background>",
+        ),
+        (
+            "background --plan 1 --id sermon",
+            "background requires exactly one of --file <image> or --reset",
+        ),
+        (
+            "background --plan 1 --id sermon --file a.png --reset",
+            "background requires exactly one of --file <image> or --reset",
+        ),
+        (
+            "background --plan 1 --id sermon --file /abs/a.png",
+            "background path must contain only normal relative path components",
+        ),
+        ("build --plan 1 --id sermon", "unexpected argument '--id'"),
+        (
+            "decide --plan 1 --item a --file a.png",
+            "unexpected argument '--file'",
+        ),
+        ("build --plan 1 --reset", "unexpected argument '--reset'"),
+    ] {
+        assert_eq!(parse(line).expect_err(line).to_string(), problem, "{line}");
+    }
+
+    let set = Outcome::BackgroundSet {
+        plan_id: "12345".to_string(),
+        id: id(),
+        file: Some(file()),
+        decisions_file: PathBuf::from("/data/builds/12345/review.toml"),
+    };
+    assert_eq!(set.exit_code(), 0);
+    assert_eq!(
+        set.to_string(),
+        "Plan 12345 uses backgrounds/oct-18.png for background 'sermon'.\nRecorded in /data/builds/12345/review.toml.\n"
+    );
+    let reset = Outcome::BackgroundSet {
+        plan_id: "12345".to_string(),
+        id: id(),
+        file: None,
+        decisions_file: PathBuf::from("/data/builds/12345/review.toml"),
+    };
+    assert_eq!(
+        reset.to_string(),
+        "Plan 12345 uses the configured image for background 'sermon'.\nRecorded in /data/builds/12345/review.toml.\n"
     );
 }
 
@@ -615,6 +687,20 @@ mod handlers {
             unasked,
             Err(BuildServiceError::NoOpenQuestion { item }) if item == ITEM
         ));
+        assert!(!station.decisions_file().exists(), "nothing is recorded");
+    }
+
+    #[tokio::test]
+    async fn a_background_image_is_recorded_for_the_plan_only_if_the_background_is_configured() {
+        let station = TestWorkstation::new();
+
+        let unknown = run_line(
+            &station,
+            "background --plan plan-1 --id sermon --file backgrounds/a.png",
+        )
+        .await;
+
+        assert!(matches!(unknown, Err(BuildServiceError::Decisions(_))));
         assert!(!station.decisions_file().exists(), "nothing is recorded");
     }
 }

@@ -208,6 +208,13 @@ Dates are the day the work landed on `main`.
   `--background`). MCP `preview_playlist` returns the same options inside
   `open_decisions`. An item with no proposal and no candidate file still
   offers only leaving it out; choosing a file for it is `--use <file>`.
+- An image for a configured background, for one plan. `proflow background
+  --plan <id> --id <background> --file <image>` (or `--reset`) records a
+  `[backgrounds]` entry in the plan's `review.toml`; every item whose
+  background is that id uses the file in that plan only. The mapping is part
+  of the decisions that name the build directory, applies to proposals still
+  under review, and is refused for an id the configuration does not define.
+  MCP `preview_playlist` takes it as `background_files`.
 - Remembered choices and defaults (`src/workflow/decision_memory.rs`,
   `<data root>/decision-memory.toml`). A question is an item title and a
   `DecisionKind` (`which_file`, `which_arrangement`, `confirm_proposal`,
@@ -293,6 +300,13 @@ Dates are the day the work landed on `main`.
   directory name, which catches accidents and stale builds, not someone who
   can write the data root and reseal a stage. The MCP revision narrows that:
   it must match the rendered stage.
+- Bible translations are a fixed list in the source (NRSVue, NRSV, NIV, KJV,
+  NKJV, NLT, NASB). A corpus for one of them is a file in `bibles/`; any
+  other translation needs a code change. Making translations data is
+  planned, not started.
+- The mutation pass over the decision, memory and background code was
+  stopped unfinished on 2026-10-12 and not rerun; the owner judged broad
+  mutation runs not worth their time. These slices are gated on `just ci`.
 - Defaults have no helper yet. Nothing lists them, clears them, or reviews
   whether one still deserves to be a default (how often it is overridden or
   refused); `decision-memory.toml` is edited by hand. Remembered answers are

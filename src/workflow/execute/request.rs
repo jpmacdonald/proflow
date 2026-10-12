@@ -1,8 +1,10 @@
 //! Build-request state transitions and identity resolution.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::planning_center::PlanSnapshot;
+use crate::project_config::{BackgroundAssetPath, BackgroundId};
 use proflow_propresenter::playlist::PlaylistExportIntent;
 
 use super::overrides::{validate_request_edits, EntryOverride};
@@ -181,6 +183,8 @@ pub struct BuildRequest {
     pub overrides: Vec<EntryOverride>,
     /// Complete linked-library or portable-import intent.
     pub playlist_export: PlaylistExportIntent,
+    /// Image files to use for configured backgrounds in this build only.
+    pub background_files: BTreeMap<BackgroundId, BackgroundAssetPath>,
 }
 
 /// Fully resolved request identity accepted by the review phase.
@@ -190,6 +194,7 @@ pub(super) struct BoundBuildRequest {
     pub(super) service_name: String,
     pub(super) playlist_name: String,
     pub(super) playlist_export: PlaylistExportIntent,
+    pub(super) background_files: BTreeMap<BackgroundId, BackgroundAssetPath>,
 }
 
 impl TryFrom<BuildRequest> for BoundBuildRequest {
@@ -233,6 +238,7 @@ impl TryFrom<BuildRequest> for BoundBuildRequest {
             service_name,
             playlist_name,
             playlist_export,
+            background_files: request.background_files,
         })
     }
 }

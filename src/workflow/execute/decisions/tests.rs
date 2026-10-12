@@ -196,3 +196,36 @@ fn a_skipped_item_may_carry_no_change_of_any_kind() {
         );
     }
 }
+
+#[test]
+fn a_plan_names_images_for_configured_backgrounds_only() {
+    let text = "[backgrounds]\nsermon = \"backgrounds/2026-10-18.png\"\n";
+    let parsed = decisions(text).expect("parse");
+    assert_eq!(
+        decisions(&parsed.to_toml().expect("serialize")).expect("again"),
+        parsed
+    );
+
+    let request = parsed.into_request("plan-1", &config()).expect("request");
+    assert_eq!(
+        request
+            .background_files
+            .iter()
+            .map(|(id, file)| (id.as_str(), file.as_path()))
+            .collect::<Vec<_>>(),
+        [("sermon", Path::new("backgrounds/2026-10-18.png"))]
+    );
+
+    assert!(matches!(
+        decisions("[backgrounds]\ncommunion = \"backgrounds/c.png\"\n")
+            .expect("parse")
+            .into_request("plan-1", &config()),
+        Err(DecisionError::UnknownBackground { id, .. }) if id.as_str() == "communion"
+    ));
+    let Err(DecisionError::Parse { message, .. }) =
+        decisions("[backgrounds]\nsermon = \"/etc/passwd\"\n")
+    else {
+        panic!("a background file must stay inside the data root");
+    };
+    assert!(message.contains("background path"), "{message}");
+}

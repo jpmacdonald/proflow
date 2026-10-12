@@ -27,13 +27,13 @@
 //! `question`, `options`, `decided_by` and `at` describe a decision for a
 //! reader; they do not change what is built.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::paths::expand_user_path;
-use crate::project_config::{BackgroundId, ProjectConfig};
+use crate::project_config::{BackgroundAssetPath, BackgroundId, ProjectConfig};
 use crate::workflow::plan::ResolvedBackground;
 use proflow_propresenter::playlist::{
     PlaylistExportIntent, PlaylistExportMode, PlaylistMediaAsset,
@@ -90,6 +90,10 @@ pub struct ReviewDecisions {
     /// Linked-library or portable package.
     #[serde(default)]
     pub package_mode: PlaylistExportMode,
+    /// Image files to use for configured backgrounds in this plan only, by
+    /// background id. Paths are relative to the data root.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub backgrounds: BTreeMap<BackgroundId, BackgroundAssetPath>,
     /// Extra media files to carry in a portable package.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub media: Vec<MediaDecision>,
@@ -448,7 +452,15 @@ impl ReviewDecisions {
                 skip_output_keys.push(decision.item);
             }
         }
+        if let Some(unknown) = self
+            .backgrounds
+            .keys()
+            .find(|id| !config.backgrounds().contains_key(*id))
+        {
+            return Err(unknown_background(config, unknown.clone()));
+        }
         Ok(BuildRequest {
+            background_files: self.backgrounds,
             plan_id: plan_id.to_string(),
             service_name: None,
             playlist_name: self.playlist_name,
@@ -548,15 +560,19 @@ fn resolve_background(
 ) -> Result<ResolvedBackground, DecisionError> {
     match config.backgrounds().get(&id).cloned() {
         Some(file) => Ok(ResolvedBackground::new(id, file)),
-        None => Err(DecisionError::UnknownBackground {
-            id,
-            available: config
-                .backgrounds()
-                .keys()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", "),
-        }),
+        None => Err(unknown_background(config, id)),
+    }
+}
+
+fn unknown_background(config: &ProjectConfig, id: BackgroundId) -> DecisionError {
+    DecisionError::UnknownBackground {
+        id,
+        available: config
+            .backgrounds()
+            .keys()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }
 
