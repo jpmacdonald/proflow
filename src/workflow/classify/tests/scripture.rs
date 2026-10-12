@@ -562,3 +562,44 @@ fn shorthand_selection_preserves_explicit_translation_and_rejects_conflict() {
     assert!(plans[0].needs_review());
     assert!(plans[0].preview_action().is_none());
 }
+
+#[test]
+fn a_corpus_installed_beside_the_config_makes_its_translation_usable() {
+    let root = tempfile::tempdir().expect("temporary data root");
+    let config_file = root.path().join("proflow.config.json");
+    std::fs::write(
+        &config_file,
+        serde_json::to_vec(&scripture_config().into_raw()).expect("serialize config"),
+    )
+    .expect("write config");
+    let item = || Item {
+        id: "esv".to_string(),
+        position: 1,
+        title: "Scripture: John 3:16 ESV".to_string(),
+        description: None,
+        category: Category::Text,
+        note: None,
+        song: None,
+        scripture: None,
+    };
+
+    let without = crate::project_config::load_project_config(&config_file).expect("load");
+    let plans = build_plan(&[item()], &without, None, None);
+    assert_eq!(plans[0].reason, "Unsupported Bible version 'ESV'");
+
+    std::fs::create_dir(root.path().join("bibles")).expect("bibles directory");
+    std::fs::write(root.path().join("bibles/ESV.json"), b"{}").expect("install corpus");
+    let with = crate::project_config::load_project_config(&config_file).expect("load");
+    let plans = build_plan(&[item()], &with, None, None);
+
+    assert!(
+        !plans[0].reason.contains("Unsupported Bible version"),
+        "{}",
+        plans[0].reason
+    );
+    let esv = BibleVersion::new("ESV").expect("code");
+    assert!(matches!(
+        plans[0].scripture_content().map(|content| content.request()),
+        Some(ScriptureRequest::Single { bible_version, .. }) if bible_version == esv
+    ));
+}

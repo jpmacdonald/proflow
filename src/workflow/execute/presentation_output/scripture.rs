@@ -381,9 +381,9 @@ fn native_bible_reference(
             start: first_verse,
             end: last_verse,
         }),
-        translation_name: translation_name.to_string(),
+        translation_name,
         translation_display_abbreviation: String::new(),
-        translation_internal_abbreviation: translation_abbreviation.to_string(),
+        translation_internal_abbreviation: translation_abbreviation,
         book_key: String::new(),
     })
 }
@@ -392,16 +392,25 @@ fn native_range_value(value: u32, field: &'static str) -> Result<i32, BuildServi
     i32::try_from(value).map_err(|_| BuildServiceError::NativeBibleRangeOverflow { field, value })
 }
 
-const fn native_translation(version: BibleVersion) -> (&'static str, &'static str) {
-    match version {
-        BibleVersion::NRSVue => ("New Revised Standard Version Updated Edition", "NRSVue"),
-        BibleVersion::NRSV => ("New Revised Standard Version", "NRSV"),
-        BibleVersion::NIV => ("New International Version", "NIV"),
-        BibleVersion::NKJV => ("New King James Version", "NKJV"),
-        BibleVersion::NLT => ("New Living Translation", "NLT"),
-        BibleVersion::NASB => ("New American Standard Bible", "NASB"),
-        BibleVersion::KJV => ("King James Version", "KJV"),
-    }
+/// The full name and abbreviation `ProPresenter` records for a translation.
+/// A translation with no known full name is recorded under its code.
+fn native_translation(version: BibleVersion) -> (String, String) {
+    let full_name = [
+        (
+            BibleVersion::NRSVue,
+            "New Revised Standard Version Updated Edition",
+        ),
+        (BibleVersion::NRSV, "New Revised Standard Version"),
+        (BibleVersion::NIV, "New International Version"),
+        (BibleVersion::NKJV, "New King James Version"),
+        (BibleVersion::NLT, "New Living Translation"),
+        (BibleVersion::NASB, "New American Standard Bible"),
+        (BibleVersion::KJV, "King James Version"),
+    ]
+    .into_iter()
+    .find_map(|(known, name)| (known == version).then_some(name))
+    .unwrap_or_else(|| version.name());
+    (full_name.to_string(), version.name().to_string())
 }
 
 #[cfg(test)]

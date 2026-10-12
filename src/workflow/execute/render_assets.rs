@@ -174,7 +174,7 @@ pub enum RenderAssetIssue {
     #[error("default Bible version '{version}' has no corpus at {}", path.display())]
     MissingBibleCorpus {
         /// Configured translation.
-        version: &'static str,
+        version: crate::bible::BibleVersion,
         /// Expected project-data path.
         path: PathBuf,
     },

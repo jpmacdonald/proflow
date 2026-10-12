@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::bible::BibleVersion;
+use crate::bible::{BibleTranslations, BibleVersion};
 
 /// One fully parsed scripture reference and its resolved Bible version.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +71,7 @@ pub(super) fn parse_scripture_refs(
     title: &str,
     configured_default: Option<BibleVersion>,
     known_speaker: Option<&str>,
+    translations: &BibleTranslations,
 ) -> Result<Vec<ParsedScriptureRef>, ScriptureRefsError> {
     let stripped = strip_scripture_heading(title, known_speaker);
     let mut parts: Vec<String> = stripped
@@ -79,14 +80,14 @@ pub(super) fn parse_scripture_refs(
         .filter(|part| !part.is_empty())
         .map(ToOwned::to_owned)
         .collect();
-    combine_implicit_same_chapter_range(&mut parts, known_speaker)?;
+    combine_implicit_same_chapter_range(&mut parts, known_speaker, translations)?;
     if parts.is_empty() {
         return Err(ScriptureRefsError::Missing);
     }
 
     let declarations = parts
         .iter()
-        .map(|part| reference_and_version(part, known_speaker))
+        .map(|part| reference_and_version(part, known_speaker, translations))
         .collect::<Result<Vec<_>, _>>()?;
     let distinct_versions: HashSet<BibleVersion> = declarations
         .iter()
@@ -125,15 +126,18 @@ pub(super) fn parse_scripture_refs(
 fn combine_implicit_same_chapter_range(
     parts: &mut Vec<String>,
     known_speaker: Option<&str>,
+    translations: &BibleTranslations,
 ) -> Result<(), ScriptureRefsError> {
     if parts.len() != 2 {
         return Ok(());
     }
-    let (selection, selection_version) = reference_and_version(&parts[1], known_speaker)?;
+    let (selection, selection_version) =
+        reference_and_version(&parts[1], known_speaker, translations)?;
     if !is_verse_selection(selection) {
         return Ok(());
     }
-    let (reference, reference_version) = reference_and_version(&parts[0], known_speaker)?;
+    let (reference, reference_version) =
+        reference_and_version(&parts[0], known_speaker, translations)?;
     if crate::bible::parse_scripture_ref(reference).is_none() {
         return Ok(());
     }
@@ -167,6 +171,7 @@ pub(super) fn parse_prefix_scripture_ref(
     title: &str,
     configured_default: Option<BibleVersion>,
     known_speaker: Option<&str>,
+    translations: &BibleTranslations,
 ) -> Result<ParsedPrefixScriptureRef, ScriptureRefsError> {
     let stripped = strip_scripture_heading(title, known_speaker);
     let parts = stripped
@@ -177,7 +182,7 @@ pub(super) fn parse_prefix_scripture_ref(
     let [part] = parts.as_slice() else {
         return Err(ScriptureRefsError::PartialVerse(stripped.to_string()));
     };
-    let (partial_reference, explicit) = reference_and_version(part, known_speaker)?;
+    let (partial_reference, explicit) = reference_and_version(part, known_speaker, translations)?;
     let version = explicit
         .or(configured_default)
         .ok_or(ScriptureRefsError::MissingVersion)?;
@@ -238,6 +243,7 @@ pub(super) fn has_scripture_ref(title: &str) -> bool {
 fn reference_and_version<'a>(
     text: &'a str,
     known_speaker: Option<&str>,
+    translations: &BibleTranslations,
 ) -> Result<(&'a str, Option<BibleVersion>), ScriptureRefsError> {
     let mut reference = text.trim();
     let mut version = None;
@@ -247,7 +253,7 @@ fn reference_and_version<'a>(
                 return Err(ScriptureRefsError::Invalid(text.to_string()));
             };
             let annotation = annotation.trim();
-            if BibleVersion::from_name(annotation).is_none()
+            if translations.named(annotation).is_none()
                 && (known_speaker.is_some_and(|speaker| annotation.eq_ignore_ascii_case(speaker))
                     || annotation.eq_ignore_ascii_case("selected vv")
                     || annotation.eq_ignore_ascii_case("selected verses"))
@@ -258,7 +264,7 @@ fn reference_and_version<'a>(
             (before, annotation)
         } else if let Some((before, word)) = reference.rsplit_once(char::is_whitespace) {
             if !word.starts_with(char::is_alphabetic)
-                || (BibleVersion::from_name(word).is_none()
+                || (translations.named(word).is_none()
                     && !before.chars().any(|character| character.is_ascii_digit()))
             {
                 break;
@@ -267,7 +273,8 @@ fn reference_and_version<'a>(
         } else {
             break;
         };
-        let explicit = BibleVersion::from_name(declaration)
+        let explicit = translations
+            .named(declaration)
             .ok_or_else(|| ScriptureRefsError::UnsupportedVersion(declaration.to_string()))?;
         if let Some(previous) = version {
             if previous != explicit {
@@ -301,9 +308,10 @@ pub(super) fn validate_translation_declarations(
     title: &str,
     version: BibleVersion,
     known_speaker: Option<&str>,
+    translations: &BibleTranslations,
 ) -> Result<(), ScriptureRefsError> {
     for part in strip_scripture_heading(title, known_speaker).split(';') {
-        if let Some(explicit) = reference_and_version(part, known_speaker)?.1 {
+        if let Some(explicit) = reference_and_version(part, known_speaker, translations)?.1 {
             if explicit != version {
                 return Err(ScriptureRefsError::ConflictingVersions {
                     first: version,
@@ -347,13 +355,18 @@ fn strip_heading_suffix<'a>(rest: &'a str, known_speaker: Option<&str>) -> &'a s
 mod tests {
     use super::*;
 
+    fn all() -> Vec<BibleVersion> {
+        BibleTranslations::standard().iter().collect()
+    }
+
     #[test]
     fn scripture_refs_handle_speaker_prefix() {
         assert_eq!(
             parse_scripture_refs(
                 "Scripture (Adrian) - Luke 8:26-39 NRSVue",
                 None,
-                Some("Adrian")
+                Some("Adrian"),
+                &BibleTranslations::standard()
             ),
             Ok(vec![ParsedScriptureRef {
                 reference: "Luke 8:26-39".to_string(),
@@ -368,7 +381,8 @@ mod tests {
             parse_scripture_refs(
                 "Scripture - Luke 8:26-39; not a reference NRSVue",
                 None,
-                None
+                None,
+                &BibleTranslations::standard()
             ),
             Err(ScriptureRefsError::Invalid(
                 "not a reference NRSVue".to_string()
@@ -383,6 +397,7 @@ mod tests {
                 "Scripture: Acts 28:1-2; 11-15 (Robert)",
                 Some(crate::bible::BibleVersion::NRSVue),
                 Some("Robert"),
+                &BibleTranslations::standard()
             ),
             Ok(vec![ParsedScriptureRef {
                 reference: "Acts 28:1-2, 11-15".to_string(),
@@ -398,6 +413,7 @@ mod tests {
                 "Scripture (Robert) - Exodus 16:1-4a",
                 Some(crate::bible::BibleVersion::NRSVue),
                 Some("Robert"),
+                &BibleTranslations::standard()
             ),
             Err(ScriptureRefsError::PartialVerse(
                 "Exodus 16:1-4a".to_string()
@@ -412,6 +428,7 @@ mod tests {
                 "Scripture (Robert) - Exodus 16:1-4a",
                 Some(crate::bible::BibleVersion::NRSVue),
                 Some("Robert"),
+                &BibleTranslations::standard(),
             ),
             Ok(ParsedPrefixScriptureRef {
                 reference: "Exodus 16:1-4".to_string(),
@@ -428,6 +445,7 @@ mod tests {
                 "Scripture - Exodus 16:1-4b",
                 Some(crate::bible::BibleVersion::NRSVue),
                 Some("Robert"),
+                &BibleTranslations::standard(),
             ),
             Err(ScriptureRefsError::PartialVerse(
                 "Exodus 16:1-4b".to_string()
@@ -438,7 +456,12 @@ mod tests {
     #[test]
     fn preserves_explicit_mixed_versions() {
         assert_eq!(
-            parse_scripture_refs("Scripture - Psalm 23:1-6 NIV; John 3:16 NRSVue", None, None),
+            parse_scripture_refs(
+                "Scripture - Psalm 23:1-6 NIV; John 3:16 NRSVue",
+                None,
+                None,
+                &BibleTranslations::standard()
+            ),
             Ok(vec![
                 ParsedScriptureRef {
                     reference: "Psalm 23:1-6".to_string(),
@@ -459,6 +482,7 @@ mod tests {
                 "Scripture - Psalm 23:1 NIV; John 3:16; Luke 2:1 NRSVue",
                 None,
                 None,
+                &BibleTranslations::standard()
             ),
             Err(ScriptureRefsError::MixedVersionsWithImplicit)
         );
@@ -467,7 +491,12 @@ mod tests {
     #[test]
     fn implicit_version_requires_an_explicit_project_default() {
         assert_eq!(
-            parse_scripture_refs("Scripture - John 3:16", None, None),
+            parse_scripture_refs(
+                "Scripture - John 3:16",
+                None,
+                None,
+                &BibleTranslations::standard()
+            ),
             Err(ScriptureRefsError::MissingVersion)
         );
         assert_eq!(
@@ -475,6 +504,7 @@ mod tests {
                 "Scripture - John 3:16",
                 Some(crate::bible::BibleVersion::NIV),
                 None,
+                &BibleTranslations::standard()
             ),
             Ok(vec![ParsedScriptureRef {
                 reference: "John 3:16".to_string(),
@@ -486,15 +516,15 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn property_explicit_translation_is_independent_of_project_default(
-            explicit_index in 0..BibleVersion::all().len(),
-            default_index in 0..=BibleVersion::all().len(),
+            explicit_index in 0..all().len(),
+            default_index in 0..=all().len(),
             parenthesized in proptest::bool::ANY,
         ) {
-            let explicit = BibleVersion::all()[explicit_index];
-            let default = BibleVersion::all().get(default_index).copied();
+            let explicit = all()[explicit_index];
+            let default = all().get(default_index).copied();
             let declaration = if parenthesized { format!("({})", explicit.name()) } else { explicit.name().to_string() };
             let title = format!("Scripture - John 3:16 {declaration} (Robert)");
-            let actual = parse_scripture_refs(&title, default, Some("Robert"));
+            let actual = parse_scripture_refs(&title, default, Some("Robert"), &BibleTranslations::standard());
             proptest::prop_assert_eq!(actual, Ok(vec![ParsedScriptureRef {
                 reference: "John 3:16".to_string(),
                 version: explicit,
@@ -504,15 +534,15 @@ mod tests {
         #[test]
         fn property_unsupported_translation_never_activates_a_default(
             declaration in "[A-Z]{3,10}",
-            default_index in 0..=BibleVersion::all().len(),
+            default_index in 0..=all().len(),
             parenthesized in proptest::bool::ANY,
         ) {
-            proptest::prop_assume!(BibleVersion::from_name(&declaration).is_none());
-            let default = BibleVersion::all().get(default_index).copied();
+            proptest::prop_assume!(BibleTranslations::standard().named(&declaration).is_none());
+            let default = all().get(default_index).copied();
             let suffix = if parenthesized { format!("({declaration})") } else { declaration.clone() };
             let title = format!("Scripture - John 3:16 {suffix} (Robert)");
             proptest::prop_assert_eq!(
-                parse_scripture_refs(&title, default, Some("Robert")),
+                parse_scripture_refs(&title, default, Some("Robert"), &BibleTranslations::standard()),
                 Err(ScriptureRefsError::UnsupportedVersion(declaration))
             );
         }

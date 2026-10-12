@@ -1,6 +1,6 @@
 //! Classification for generated scripture presentation types.
 
-use crate::bible::BibleVersion;
+use crate::bible::{BibleTranslations, BibleVersion};
 use crate::planning_center::types::Item;
 use crate::project_config::PresentationTypeKey;
 use crate::project_config::ProjectConfig;
@@ -32,9 +32,11 @@ pub(super) fn build_scripture_plan(
     });
     let known_speaker = speaker.as_deref();
     let configured_default = config.defaults().bible_version;
-    let parsed_refs = match scripture_source(item, configured_default, known_speaker)
-        .and_then(|(source, default)| parse_scripture_refs(source, default, known_speaker))
-    {
+    let translations = config.translations();
+    let parsed_refs = match scripture_source(item, configured_default, known_speaker, translations)
+        .and_then(|(source, default)| {
+            parse_scripture_refs(source, default, known_speaker, translations)
+        }) {
         Ok(references) => references,
         Err(error) => {
             if matches!(error, ScriptureRefsError::PartialVerse(_)) {
@@ -45,6 +47,7 @@ pub(super) fn build_scripture_plan(
                     style,
                     configured_default,
                     known_speaker,
+                    translations,
                 ) {
                     return plan;
                 }
@@ -246,9 +249,11 @@ fn build_prefix_excerpt_plan(
     style: RenderStyle,
     configured_default: Option<BibleVersion>,
     known_speaker: Option<&str>,
+    translations: &BibleTranslations,
 ) -> Option<ResolvedItemPlan> {
-    let (source, default) = scripture_source(item, configured_default, known_speaker).ok()?;
-    let parsed = parse_prefix_scripture_ref(source, default, known_speaker).ok()?;
+    let (source, default) =
+        scripture_source(item, configured_default, known_speaker, translations).ok()?;
+    let parsed = parse_prefix_scripture_ref(source, default, known_speaker, translations).ok()?;
     let excerpt_text = item
         .scripture
         .as_ref()
@@ -284,6 +289,7 @@ fn scripture_source<'a>(
     item: &'a Item,
     configured_default: Option<BibleVersion>,
     known_speaker: Option<&str>,
+    translations: &BibleTranslations,
 ) -> Result<(&'a str, Option<BibleVersion>), ScriptureRefsError> {
     let Some(structured) = item.scripture.as_ref() else {
         return Ok((&item.title, configured_default));
@@ -292,13 +298,14 @@ fn scripture_source<'a>(
         return Ok((&item.title, configured_default));
     };
     let translation = translation.trim();
-    let version = BibleVersion::from_name(translation)
+    let version = translations
+        .named(translation)
         .ok_or_else(|| ScriptureRefsError::UnsupportedVersion(translation.to_string()))?;
-    validate_translation_declarations(&item.title, version, known_speaker)?;
+    validate_translation_declarations(&item.title, version, known_speaker, translations)?;
     let reference = structured.reference.trim();
     if reference.is_empty() {
         return Err(ScriptureRefsError::Missing);
     }
-    validate_translation_declarations(reference, version, known_speaker)?;
+    validate_translation_declarations(reference, version, known_speaker, translations)?;
     Ok((reference, Some(version)))
 }

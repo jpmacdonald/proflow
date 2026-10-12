@@ -31,7 +31,12 @@ pub enum ProjectConfigLoadError {
 /// Load project config from a file path.
 pub fn load_project_config(path: &Path) -> Result<ProjectConfig, ProjectConfigLoadError> {
     let text = std::fs::read_to_string(path)?;
-    parse_project_config_str(&text)
+    let bibles = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("bibles");
+    Ok(parse_project_config_str(&text)?
+        .with_translations(crate::bible::BibleTranslations::with_installed(&bibles)?))
 }
 
 /// Parse project config from a JSON value.

@@ -208,6 +208,17 @@ Dates are the day the work landed on `main`.
   `--background`). MCP `preview_playlist` returns the same options inside
   `open_decisions`. An item with no proposal and no candidate file still
   offers only leaving it out; choosing a file for it is `--use <file>`.
+- Bible translations are data. `BibleVersion` is a translation code (2 to 16
+  ASCII letters and digits, case-insensitive), not a fixed list, and its
+  corpus is `<data root>/bibles/<CODE>.json`. Installing `ESV.json` makes
+  `ESV` a translation a plan may name; a name with no installed corpus that
+  is not one of the standard seven still goes to review as an unsupported
+  version. The recognized set (`BibleTranslations`: the standard seven plus
+  every installed corpus) is read when the configuration is loaded and
+  carried by `ProjectConfig`. `NRSVue` keeps its spelling and its
+  `NRSVUE.json` file name. `defaults.bible_version` in the config schema is
+  now a string, not a seven-value enum. `BibleVersion::from_text` and
+  `BibleVersion::all` are gone.
 - An image for a configured background, for one plan. `proflow background
   --plan <id> --id <background> --file <image>` (or `--reset`) records a
   `[backgrounds]` entry in the plan's `review.toml`; every item whose
@@ -300,10 +311,14 @@ Dates are the day the work landed on `main`.
   directory name, which catches accidents and stale builds, not someone who
   can write the data root and reseal a stage. The MCP revision narrows that:
   it must match the rendered stage.
-- Bible translations are a fixed list in the source (NRSVue, NRSV, NIV, KJV,
-  NKJV, NLT, NASB). A corpus for one of them is a file in `bibles/`; any
-  other translation needs a code change. Making translations data is
-  planned, not started.
+- Unverified against the real data root: corpus loading now reads every
+  `bibles/<CODE>.json`, not only the seven standard names. A JSON file there
+  whose name is a valid code but whose content is not a corpus now stops the
+  workstation from loading. Check `data/bibles/` on the Mac.
+- A translation outside the standard seven is recorded in ProPresenter under
+  its code as both full name and abbreviation; there is nowhere to give it a
+  full name. Nothing converts a Bible from another format into the corpus
+  JSON.
 - The mutation pass over the decision, memory and background code was
   stopped unfinished on 2026-10-12 and not rerun; the owner judged broad
   mutation runs not worth their time. These slices are gated on `just ci`.

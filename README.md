@@ -131,6 +131,11 @@ ignored.
 
 ### Assets
 
+A Bible translation is a corpus file, `bibles/<CODE>.json`, named by its code
+(`NIV.json`, `ESV.json`, `NRSVUE.json`). Installing the file is what makes the
+translation usable; a plan that names a translation with no corpus goes to
+review.
+
 Backgrounds use stable configuration IDs and project-relative paths. Themes,
 macros, cue groups, and presentation-library files use exact installed names.
 ProFlow validates referenced assets before a build can be approved.

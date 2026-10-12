@@ -3,6 +3,7 @@
 //! This module owns the config contract for headless runtime behavior.
 //! Only the v4 schema is supported.
 
+use crate::bible::BibleTranslations;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -54,9 +55,23 @@ pub struct ProjectConfig {
     presentation_policies: BTreeMap<PresentationTypeKey, std::sync::Arc<PresentationPolicy>>,
     classifications: Vec<CompiledClassification>,
     required_playlist_items: Vec<CompiledRequiredPlaylistItem>,
+    translations: BibleTranslations,
 }
 
 impl ProjectConfig {
+    /// The Bible translations a plan may name: the standard ones and every
+    /// corpus installed in the data root this configuration was loaded from.
+    #[must_use]
+    pub const fn translations(&self) -> &BibleTranslations {
+        &self.translations
+    }
+
+    /// Recognize the corpora installed beside the configuration file.
+    pub(crate) fn with_translations(mut self, translations: BibleTranslations) -> Self {
+        self.translations = translations;
+        self
+    }
+
     /// Return the validated raw config for serialization or read-only tooling.
     #[must_use]
     pub const fn as_raw(&self) -> &RawProjectConfig {
@@ -246,6 +261,7 @@ impl TryFrom<RawProjectConfig> for ProjectConfig {
             presentation_policies,
             classifications,
             required_playlist_items,
+            translations: BibleTranslations::standard(),
         })
     }
 }

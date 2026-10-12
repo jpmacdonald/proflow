@@ -1,6 +1,5 @@
 //! One deterministic validation pass over configured native render bindings.
 
-use crate::bible::BibleVersion;
 use crate::paths::BuildLocations;
 use crate::project_config::ProjectConfig;
 use proflow_propresenter::background::resolve_background_image;
@@ -44,10 +43,7 @@ pub(super) fn validate_bindings(
     if let Some(version) = config.defaults().bible_version {
         let path = bible_root.join(version.file_name());
         if !path.is_file() {
-            issues.push(RenderAssetIssue::MissingBibleCorpus {
-                version: BibleVersion::name(version),
-                path,
-            });
+            issues.push(RenderAssetIssue::MissingBibleCorpus { version, path });
         }
     }
 

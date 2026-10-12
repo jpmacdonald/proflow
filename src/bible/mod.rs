@@ -5,127 +5,17 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 mod excerpt;
+mod version;
+
+pub use version::{BibleTranslations, BibleVersion};
 
 pub use excerpt::{
     reconcile_prefix_excerpt, reconcile_selected_excerpt, ScriptureExcerptError,
     SelectedScriptureExcerptError,
 };
-
-/// Supported Bible versions
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[allow(clippy::upper_case_acronyms)] // NRSV, NIV, KJV are standard Bible version abbreviations
-pub enum BibleVersion {
-    /// New Revised Standard Version Updated Edition
-    #[default]
-    #[serde(rename = "NRSVue", alias = "NRSVUE")]
-    NRSVue,
-    /// New Revised Standard Version
-    #[serde(rename = "NRSV")]
-    NRSV,
-    /// New International Version
-    #[serde(rename = "NIV")]
-    NIV,
-    /// King James Version
-    #[serde(rename = "KJV")]
-    KJV,
-    /// New King James Version
-    #[serde(rename = "NKJV")]
-    NKJV,
-    /// New Living Translation
-    #[serde(rename = "NLT")]
-    NLT,
-    /// New American Standard Bible
-    #[serde(rename = "NASB")]
-    NASB,
-}
-
-impl BibleVersion {
-    /// Returns all available Bible versions.
-    pub const fn all() -> &'static [Self] {
-        &[
-            Self::NRSVue,
-            Self::NRSV,
-            Self::NIV,
-            Self::KJV,
-            Self::NKJV,
-            Self::NLT,
-            Self::NASB,
-        ]
-    }
-
-    /// Returns the human-readable name of this version.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::NRSVue => "NRSVue",
-            Self::NRSV => "NRSV",
-            Self::NIV => "NIV",
-            Self::KJV => "KJV",
-            Self::NKJV => "NKJV",
-            Self::NLT => "NLT",
-            Self::NASB => "NASB",
-        }
-    }
-
-    /// Returns the JSON data filename for this version.
-    pub const fn file_name(self) -> &'static str {
-        match self {
-            Self::NRSVue => "NRSVUE.json",
-            Self::NRSV => "NRSV.json",
-            Self::NIV => "NIV.json",
-            Self::KJV => "KJV.json",
-            Self::NKJV => "NKJV.json",
-            Self::NLT => "NLT.json",
-            Self::NASB => "NASB.json",
-        }
-    }
-
-    /// Parse one exact supported translation identifier.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.trim().to_ascii_uppercase().as_str() {
-            "NRSVUE" => Some(Self::NRSVue),
-            "NRSV" => Some(Self::NRSV),
-            "NIV" => Some(Self::NIV),
-            "KJV" => Some(Self::KJV),
-            "NKJV" => Some(Self::NKJV),
-            "NLT" => Some(Self::NLT),
-            "NASB" => Some(Self::NASB),
-            _ => None,
-        }
-    }
-
-    /// Try to detect version from text like "(NRSV)" or "`NRSVue`".
-    pub fn from_text(text: &str) -> Option<Self> {
-        let upper = text.to_uppercase();
-        if upper.contains("NRSVUE") {
-            return Some(Self::NRSVue);
-        }
-        if upper.contains("NRSV") {
-            return Some(Self::NRSV);
-        }
-        if upper.contains("NKJV") {
-            return Some(Self::NKJV);
-        }
-        if upper.contains("NIV") {
-            return Some(Self::NIV);
-        }
-        if upper.contains("NASB") {
-            return Some(Self::NASB);
-        }
-        if upper.contains("NLT") {
-            return Some(Self::NLT);
-        }
-        if upper.contains("KJV") {
-            return Some(Self::KJV);
-        }
-        None
-    }
-}
 
 /// Verse selection within one scripture chapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,7 +192,7 @@ pub enum BibleCorpusError {
     #[error("failed to read {version} corpus at {}: {source}", path.display())]
     Read {
         /// Translation assigned to the file.
-        version: &'static str,
+        version: BibleVersion,
         /// Exact corpus path.
         path: PathBuf,
         /// Filesystem failure.
@@ -312,19 +202,35 @@ pub enum BibleCorpusError {
     #[error("invalid {version} corpus at {}: {source}", path.display())]
     Parse {
         /// Translation assigned to the file.
-        version: &'static str,
+        version: BibleVersion,
         /// Exact corpus path.
         path: PathBuf,
         /// JSON failure.
         source: serde_json::Error,
     },
+    /// The corpus directory could not be listed.
+    #[error("failed to list Bible corpora in {}: {source}", path.display())]
+    List {
+        /// Corpus directory.
+        path: PathBuf,
+        /// Filesystem failure.
+        source: std::io::Error,
+    },
+    /// Two files name the same translation in different letter case.
+    #[error("more than one corpus file names {version}; {} is the second", path.display())]
+    DuplicateFile {
+        /// Translation named twice.
+        version: BibleVersion,
+        /// The later of the two files.
+        path: PathBuf,
+    },
     /// Two translation labels point at identical source text.
     #[error("Bible corpora for {first} and {second} are byte-identical; translation identity is ambiguous")]
     DuplicateTranslation {
         /// First translation using the bytes.
-        first: &'static str,
+        first: BibleVersion,
         /// Conflicting translation using the same bytes.
-        second: &'static str,
+        second: BibleVersion,
     },
     /// Corpus bytes no longer match the immutable runtime snapshot.
     #[error(
@@ -333,7 +239,7 @@ pub enum BibleCorpusError {
     )]
     Changed {
         /// Translation assigned to the file.
-        version: &'static str,
+        version: BibleVersion,
         /// Exact corpus path.
         path: PathBuf,
         /// Hash captured by the immutable snapshot.
@@ -695,7 +601,7 @@ fn parse_verse_range(text: &str) -> Option<VerseRange> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BibleCorpusFingerprint {
     root: PathBuf,
-    sources: BTreeMap<&'static str, [u8; 32]>,
+    sources: BTreeMap<String, [u8; 32]>,
 }
 
 impl BibleCorpusFingerprint {
@@ -706,7 +612,7 @@ impl BibleCorpusFingerprint {
             "sources": self
                 .sources
                 .iter()
-                .map(|(version, sha256)| (*version, digest_hex(sha256)))
+                .map(|(version, sha256)| (version.as_str(), digest_hex(sha256)))
                 .collect::<BTreeMap<_, _>>(),
         })
     }
@@ -728,29 +634,34 @@ impl BibleCorpusSnapshot {
     ///
     /// Missing translations are allowed until a plan requests one.
     pub fn capture(root: PathBuf) -> Result<Self, BibleCorpusError> {
-        let mut hashes = BTreeMap::<[u8; 32], &'static str>::new();
+        let mut hashes = BTreeMap::<[u8; 32], BibleVersion>::new();
         let mut corpora = HashMap::new();
-        for version in BibleVersion::all() {
-            let path = root.join(version.file_name());
-            if !path.exists() {
+        for path in corpus_files(&root)? {
+            // A file whose name is not a translation code is not a corpus.
+            let Some(version) = version::corpus_version(&path) else {
                 continue;
-            }
-            let bytes = read_corpus(*version, &path)?;
+            };
+            let bytes = read_corpus(version, &path)?;
             let source_sha256: [u8; 32] = Sha256::digest(&bytes).into();
-            if let Some(first) = hashes.insert(source_sha256, version.name()) {
+            if let Some(first) = hashes.insert(source_sha256, version) {
                 return Err(BibleCorpusError::DuplicateTranslation {
                     first,
-                    second: version.name(),
+                    second: version,
                 });
             }
-            let data = parse_corpus(*version, &path, &bytes)?;
-            corpora.insert(
-                *version,
-                CachedBibleData {
-                    source_sha256,
-                    data,
-                },
-            );
+            let data = parse_corpus(version, &path, &bytes)?;
+            if corpora
+                .insert(
+                    version,
+                    CachedBibleData {
+                        source_sha256,
+                        data,
+                    },
+                )
+                .is_some()
+            {
+                return Err(BibleCorpusError::DuplicateFile { version, path });
+            }
         }
         Ok(Self { root, corpora })
     }
@@ -763,7 +674,7 @@ impl BibleCorpusSnapshot {
             sources: self
                 .corpora
                 .iter()
-                .map(|(version, corpus)| (version.name(), corpus.source_sha256))
+                .map(|(version, corpus)| (version.name().to_string(), corpus.source_sha256))
                 .collect(),
         }
     }
@@ -896,7 +807,7 @@ impl BibleCorpusSnapshot {
             return Ok(());
         }
         Err(BibleCorpusError::Changed {
-            version: version.name(),
+            version,
             path: path.to_path_buf(),
             expected: digest_hex(&corpus.source_sha256),
             actual: digest_hex(&actual),
@@ -904,9 +815,35 @@ impl BibleCorpusSnapshot {
     }
 }
 
+/// Every `.json` file directly in `root`, in name order. A data root with no
+/// `bibles` directory has no corpora.
+fn corpus_files(root: &std::path::Path) -> Result<Vec<PathBuf>, BibleCorpusError> {
+    let unreadable = |source| BibleCorpusError::List {
+        path: root.to_path_buf(),
+        source,
+    };
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(unreadable(error)),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(unreadable)?.path();
+        let is_json = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        if is_json && path.is_file() {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 fn read_corpus(version: BibleVersion, path: &std::path::Path) -> Result<Vec<u8>, BibleCorpusError> {
     std::fs::read(path).map_err(|source| BibleCorpusError::Read {
-        version: version.name(),
+        version,
         path: path.to_path_buf(),
         source,
     })
@@ -918,7 +855,7 @@ fn parse_corpus(
     bytes: &[u8],
 ) -> Result<BibleData, BibleCorpusError> {
     serde_json::from_slice(bytes).map_err(|source| BibleCorpusError::Parse {
-        version: version.name(),
+        version,
         path: path.to_path_buf(),
         source,
     })
@@ -1097,27 +1034,6 @@ mod tests {
     }
 
     #[test]
-    fn test_version_detection() {
-        assert_eq!(BibleVersion::from_text("(NRSV)"), Some(BibleVersion::NRSV));
-        assert_eq!(
-            BibleVersion::from_text("NRSVue"),
-            Some(BibleVersion::NRSVue)
-        );
-        assert_eq!(BibleVersion::from_text("KJV"), Some(BibleVersion::KJV));
-        assert_eq!(BibleVersion::from_text("NIV"), Some(BibleVersion::NIV));
-    }
-
-    #[test]
-    fn exact_version_names_reject_ambiguous_text() {
-        assert_eq!(
-            BibleVersion::from_name("nrsvue"),
-            Some(BibleVersion::NRSVue)
-        );
-        assert_eq!(BibleVersion::from_name("NIV commentary"), None);
-        assert_eq!(BibleVersion::from_name("ESV"), None);
-    }
-
-    #[test]
     fn reviewed_source_bytes_must_match_the_immutable_snapshot() {
         let root = tempfile::tempdir().expect("temporary Bible root");
         let path = root.path().join(BibleVersion::NRSVue.file_name());
@@ -1186,6 +1102,33 @@ mod tests {
     }
 
     #[test]
+    fn any_corpus_file_named_by_a_translation_code_is_loaded() {
+        let root = tempfile::tempdir().expect("temporary Bible root");
+        std::fs::write(
+            root.path().join("ESV.json"),
+            bible_source("For God so loved"),
+        )
+        .expect("write corpus");
+        std::fs::write(root.path().join("reading plan.json"), b"not a corpus")
+            .expect("write unrelated file");
+        std::fs::write(root.path().join("NOTES.txt"), b"not a corpus").expect("write notes");
+        let esv = BibleVersion::new("esv").expect("code");
+
+        let snapshot = BibleCorpusSnapshot::capture(root.path().to_path_buf())
+            .expect("a file that is not named by a code is not a corpus");
+
+        let (header, verses) = snapshot.lookup_verses(&john_3_16(), esv).expect("lookup");
+        assert_eq!(header.version, esv);
+        assert_eq!(verses[0].text, "For God so loved");
+        assert!(matches!(
+            snapshot.lookup_verses(&john_3_16(), BibleVersion::NIV),
+            Err(ScriptureLookupError::CorpusNotInstalled { version, .. })
+                if version == BibleVersion::NIV
+        ));
+        assert!(snapshot.fingerprint().to_json()["sources"]["ESV"].is_string());
+    }
+
+    #[test]
     fn corpus_validation_rejects_duplicate_translation_labels() {
         let root = tempfile::tempdir().expect("temporary Bible root");
         let bytes = bible_source("same mislabeled text");
@@ -1200,8 +1143,8 @@ mod tests {
         assert!(matches!(
             error,
             BibleCorpusError::DuplicateTranslation {
-                first: "NRSVue",
-                second: "NRSV"
+                first: BibleVersion::NRSV,
+                second: BibleVersion::NRSVue
             }
         ));
     }
@@ -1218,7 +1161,7 @@ mod tests {
         assert!(matches!(
             validate_bible_corpora(root.path()),
             Err(BibleCorpusError::Parse {
-                version: "NRSVue",
+                version: BibleVersion::NRSVue,
                 ..
             })
         ));
