@@ -68,6 +68,23 @@ Dates are the day the work landed on `main`.
   confined to the playlist output directory and ProPresenter root). New
   dev-dependency in the format crate: `jsonschema`.
 
+- Build directories (`src/workflow/build_dir.rs`), phase 0 of the
+  file-shaped pipeline. A build lives at
+  `<builds root>/<plan id>/<input hash>/`; `InputHash` covers the plan
+  snapshot, the config, the Bible corpus fingerprints and the review
+  decisions, each bound to its name and length. Stages (`snapshot`,
+  `classified`, `rendered`, `verified`, `committed`) are subdirectories
+  written once through a temporary directory and a rename, and sealed with a
+  `stage.json` of per-file SHA-256; a stage whose files differ from its seal
+  is refused on resume. `BuildDir<S>` carries the stage in its type, so a
+  stage can only be written from the one before it. Nothing calls it yet:
+  the executor still holds prepared state in memory until phase 1.
+  `review.toml` lives beside the hashed directories
+  (`<builds root>/<plan id>/review.toml`), because its bytes are a hash
+  input and it cannot sit inside the directory it names. Mutation run on the
+  module: 34 mutants, 2 missed, both the `fsync` helpers, whose effect a
+  test cannot observe.
+
 ### Changed
 
 - The build executor is synchronous and has no Planning Center client. It

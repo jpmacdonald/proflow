@@ -5,6 +5,7 @@
 //! internal tooling without depending on TUI-era application state.
 
 mod approval;
+pub mod build_dir;
 pub mod classify;
 mod classify_matching;
 mod classify_preview;
