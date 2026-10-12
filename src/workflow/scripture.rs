@@ -81,6 +81,7 @@ pub(super) fn parse_scripture_refs(
         .map(ToOwned::to_owned)
         .collect();
     combine_implicit_same_chapter_range(&mut parts, known_speaker, translations)?;
+    inherit_book_from_previous_reference(&mut parts, known_speaker, translations)?;
     if parts.is_empty() {
         return Err(ScriptureRefsError::Missing);
     }
@@ -154,6 +155,37 @@ fn combine_implicit_same_chapter_range(
     parts.truncate(1);
     parts[0] = combined;
     Ok(())
+}
+
+/// Give a `chapter:verses` reference the book of the reference before it:
+/// in "2 Corinthians 8:1-9; 9:6-11" the second passage is 2 Corinthians 9.
+fn inherit_book_from_previous_reference(
+    parts: &mut [String],
+    known_speaker: Option<&str>,
+    translations: &BibleTranslations,
+) -> Result<(), ScriptureRefsError> {
+    for index in 1..parts.len() {
+        let (reference, _) = reference_and_version(&parts[index], known_speaker, translations)?;
+        if !is_chapter_and_verses(reference) {
+            continue;
+        }
+        let (previous, _) = reference_and_version(&parts[index - 1], known_speaker, translations)?;
+        let Some(book) = crate::bible::parse_scripture_ref(previous).map(|parsed| parsed.book)
+        else {
+            continue;
+        };
+        parts[index] = format!("{book} {}", parts[index]);
+    }
+    Ok(())
+}
+
+/// Whether `text` is a chapter and a verse selection with no book: "9:6-11".
+fn is_chapter_and_verses(text: &str) -> bool {
+    text.split_once(':').is_some_and(|(chapter, verses)| {
+        !chapter.is_empty()
+            && chapter.chars().all(|character| character.is_ascii_digit())
+            && is_verse_selection(verses.trim())
+    })
 }
 
 fn is_verse_selection(text: &str) -> bool {
@@ -357,6 +389,40 @@ mod tests {
 
     fn all() -> Vec<BibleVersion> {
         BibleTranslations::standard().iter().collect()
+    }
+
+    #[test]
+    fn a_chapter_and_verses_after_a_reference_is_in_the_same_book() {
+        let parsed = |title: &str| {
+            parse_scripture_refs(
+                title,
+                Some(BibleVersion::NRSVue),
+                Some("Robert"),
+                &BibleTranslations::standard(),
+            )
+        };
+        let reference = |reference: &str, version| ParsedScriptureRef {
+            reference: reference.to_string(),
+            version,
+        };
+
+        assert_eq!(
+            parsed("Scripture: 2 Corinthians 8:1-9; 9:6-11 (Robert)"),
+            Ok(vec![
+                reference("2 Corinthians 8:1-9", BibleVersion::NRSVue),
+                reference("2 Corinthians 9:6-11", BibleVersion::NRSVue),
+            ])
+        );
+        assert_eq!(
+            parsed("Scripture - John 1:1-5; 3:16; Romans 8:1 NIV"),
+            Ok(vec![
+                reference("John 1:1-5", BibleVersion::NIV),
+                reference("John 3:16", BibleVersion::NIV),
+                reference("Romans 8:1", BibleVersion::NIV),
+            ])
+        );
+        // With no reference before it there is no book to take.
+        assert!(parsed("Scripture - 9:6-11").is_err());
     }
 
     #[test]

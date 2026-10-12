@@ -251,6 +251,13 @@ Dates are the day the work landed on `main`.
 
 ### Fixed
 
+- A scripture title that continues in the same book, such as "2 Corinthians
+  8:1-9; 9:6-11", is two passages of that book; the second part was rejected
+  as an invalid reference. Found by the first real build on macOS.
+- A possible song match is offered as a choice when the song's policy
+  restyles the file; it was listed in the question but not among the
+  choices. Found by the same build.
+- `just live-data` failed on macOS (bash 3.2) when its skip list was empty.
 - A preview whose decisions are refused (for example media with a
   linked-library package) no longer overwrites the plan's `review.toml`
   before failing. Decisions are checked before they are recorded.

@@ -269,3 +269,42 @@ fn a_linked_library_package_without_media_is_a_valid_intent() {
         .expect("library links carry no media");
     assert_eq!(intent.mode(), PlaylistExportMode::LibraryLinks);
 }
+
+#[test]
+fn a_possible_song_match_is_offered_as_the_file_to_use_even_when_the_plan_restyles_it() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let candidate = runtime
+        .locations()
+        .presentation_library()
+        .join("[Anthem] Amazing Grace.pro");
+    write_song_with_arrangements(&candidate, &[]);
+    let proposals = [
+        ReadyAction::UseExisting {
+            file_path: candidate.clone(),
+            arrangement: None,
+        },
+        ReadyAction::RestyleExisting {
+            file_path: candidate.clone(),
+            arrangement: None,
+            transform: test_transform(),
+        },
+    ];
+
+    for proposal in proposals {
+        let plan = test_plan(
+            "pco:item:a",
+            PlanDisposition::NeedsReview(ReviewContext::song_candidate(proposal)),
+        );
+        let decision = offered(&runtime, plan);
+
+        assert_eq!(decision.kind, DecisionKind::WhichFile);
+        assert_eq!(
+            summaries(&decision),
+            [
+                format!("use {}", candidate.display()).as_str(),
+                "leave it out of the playlist"
+            ]
+        );
+    }
+}

@@ -62,7 +62,13 @@ fn options_for(
         (DecisionKind::WhichArrangement, complete.collect())
     } else if plan.requires_song_selection() {
         // A possible match is a file to confirm, like any other candidate.
-        let candidate = plan.preview_action().and_then(as_proposed).map(action);
+        // Choosing a file keeps a restyle the plan proposed for it.
+        let candidate = plan.preview_action().and_then(|proposed| {
+            Some(action(EntryOverrideAction::UseExisting {
+                file_path: existing_file(proposed)?.display().to_string(),
+                arrangement: proposed.arrangement().map(ToString::to_string),
+            }))
+        });
         (DecisionKind::WhichFile, candidate.into_iter().collect())
     } else {
         plan.preview_action().and_then(as_proposed).map_or_else(
