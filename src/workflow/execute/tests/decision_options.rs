@@ -216,7 +216,10 @@ fn each_kind_of_question_is_named() {
         other_root.path(),
         &[(
             "Amazing Grace.pro",
-            &[("Short", Some("11111111-1111-4111-8111-111111111111"))],
+            &[
+                ("Short", Some("11111111-1111-4111-8111-111111111111")),
+                ("Full", Some("22222222-2222-4222-8222-222222222222")),
+            ],
         )],
     );
     let review = review_song(&arranged, reviewed_request("Decided"), Some("Evening"));

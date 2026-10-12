@@ -129,6 +129,14 @@ Dates are the day the work landed on `main`.
 - Protobuf schema fixes against ProPresenter 20.0.1: `RenderLayer` field
   numbers, `Slide.Element.DataLink` key-value and zone members, `Timer`
   style enum name.
+- Songs: a Planning Center arrangement name the file does not have no
+  longer needs a decision when the file defines exactly one arrangement;
+  that arrangement is used and the plan's reason says so (owner decision,
+  2026-10-13, after the first real build asked this for every song whose
+  Planning Center arrangement is named after an artist). A file with several
+  arrangements still asks. A configured arrangement name is never replaced,
+  and an omitted request still does not select a sole arrangement with
+  another name. `docs/semantic-resolution.md` is updated.
 - Scripture: `BibleVersion` is typed end to end; unsupported or conflicting
   explicit translations require review; Planning Center selected-verse
   excerpts are reconciled against local text.

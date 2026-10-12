@@ -354,21 +354,51 @@ fn default_arrangement_alias_requires_one_complete_native_default() {
 }
 
 #[test]
-fn default_arrangement_alias_does_not_select_an_unrelated_sole_arrangement() {
+fn a_planning_center_arrangement_the_file_lacks_uses_the_files_only_arrangement() {
     let config = song_config(None, None);
     let (_directory, index) =
-        song_index(&[("Youth", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+        song_index(&[("Default", Some("550e8400-e29b-41d4-a716-446655440001"))]);
 
-    let plans = build_plan(
-        &[song_item(Some("Default Arrangement"))],
-        &config,
-        Some(&index),
-        None,
-    );
+    for requested in ["Elevation Worship", "Default Arrangement"] {
+        let (_other_directory, other_index) =
+            song_index(&[("Youth", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+        let index = if requested == "Default Arrangement" {
+            &other_index
+        } else {
+            &index
+        };
+        let only = if requested == "Default Arrangement" {
+            "Youth"
+        } else {
+            "Default"
+        };
+
+        let plans = build_plan(&[song_item(Some(requested))], &config, Some(index), None);
+
+        assert!(!plans[0].needs_review(), "{requested}: {}", plans[0].reason);
+        assert_eq!(plans[0].arrangement(), Some(only));
+        assert!(
+            plans[0].reason.contains(&format!(
+                "Planning Center arrangement '{requested}' is not in the file, using its only arrangement '{only}'"
+            )),
+            "{}",
+            plans[0].reason
+        );
+    }
+}
+
+#[test]
+fn a_configured_arrangement_the_file_lacks_is_never_replaced_by_its_only_arrangement() {
+    let config = song_config(Some("Configured Order"), None);
+    let (_directory, index) =
+        song_index(&[("Default", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+
+    let plans = build_plan(&[song_item(None)], &config, Some(&index), None);
 
     assert!(plans[0].needs_review());
-    assert_eq!(plans[0].arrangement(), Some("Default Arrangement"));
-    assert!(plans[0].reason.contains("is unavailable"));
+    assert!(plans[0]
+        .reason
+        .contains("'Configured Order' is unavailable"));
 }
 
 #[test]
@@ -804,8 +834,11 @@ fn configured_review_preserves_arrangement_intent_and_its_unresolved_obligation(
         "presentation_types": {"song": {"kind": "song", "content_source": "song", "output_strategy": "needs_review"}},
         "item_rules": [{"id": "song", "match": {"category": "song"}, "use_type": "song"}]
     }"#).expect("song review config");
-    let (_directory, index) =
-        song_index(&[("Youth", Some("550e8400-e29b-41d4-a716-446655440001"))]);
+    // Two arrangements, so a name the file lacks is still a real choice.
+    let (_directory, index) = song_index(&[
+        ("Youth", Some("550e8400-e29b-41d4-a716-446655440001")),
+        ("Seasonal", Some("550e8400-e29b-41d4-a716-446655440002")),
+    ]);
     for (requested, unresolved) in [
         (Some("Youth"), false),
         (Some("Missing"), true),

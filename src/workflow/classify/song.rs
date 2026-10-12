@@ -191,6 +191,13 @@ fn resolved_song_action(
                 (SongArrangementResolution::PlanningCenterDefaultAlias(name), _) => {
                     format!("{}; Planning Center 'Default Arrangement' alias using native arrangement '{name}'", action_reason(restyle, "Library match"))
                 }
+                (SongArrangementResolution::OnlyArrangement(name), requested) => {
+                    format!(
+                        "{}; Planning Center arrangement '{}' is not in the file, using its only arrangement '{name}'",
+                        action_reason(restyle, "Library match"),
+                        requested.name().unwrap_or_default()
+                    )
+                }
                 (SongArrangementResolution::NativeDefault(name), _) => {
                     format!(
                         "{}; using native arrangement '{name}'",
@@ -256,6 +263,8 @@ enum SongArrangementResolution {
     Exact(String),
     PlanningCenterDefaultAlias(String),
     NativeDefault(String),
+    /// The file's one arrangement, used for a Planning Center name it lacks.
+    OnlyArrangement(String),
     Unarranged,
 }
 
@@ -264,7 +273,8 @@ impl SongArrangementResolution {
         match self {
             Self::Exact(name)
             | Self::PlanningCenterDefaultAlias(name)
-            | Self::NativeDefault(name) => Some(name),
+            | Self::NativeDefault(name)
+            | Self::OnlyArrangement(name) => Some(name),
             Self::Unarranged => None,
         }
     }
@@ -326,7 +336,7 @@ fn resolve_song_arrangement(
         _ => return Err(ArrangementIssue::Ambiguous),
     }
 
-    match requested {
+    let resolution = match requested {
         RequestedArrangement::Absent if arrangements.is_empty() => {
             Ok(SongArrangementResolution::Unarranged)
         }
@@ -354,6 +364,18 @@ fn resolve_song_arrangement(
             }
         }
         _ => Err(ArrangementIssue::Unavailable),
+    };
+    // Planning Center names its own arrangements, often after an artist. When
+    // the file defines exactly one arrangement there is nothing to choose
+    // between, so that one is used and the plan says so. A configured name is
+    // a project decision and is never substituted.
+    match (resolution, requested, arrangements) {
+        (
+            Err(ArrangementIssue::Unavailable),
+            RequestedArrangement::PlanningCenter(_),
+            [LibraryArrangement::Complete { name }],
+        ) => Ok(SongArrangementResolution::OnlyArrangement(name.clone())),
+        (resolution, _, _) => resolution,
     }
 }
 
@@ -382,7 +404,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn property_unavailable_explicit_arrangement_never_selects_default_or_sole_name(
+        fn property_unavailable_arrangement_selects_only_a_planning_center_sole_arrangement(
             name in "Requested [A-Za-z]{1,32}",
             configured in any::<bool>(),
             include_default in any::<bool>(),
@@ -396,7 +418,15 @@ mod tests {
             } else {
                 RequestedArrangement::PlanningCenter(name)
             };
-            prop_assert_eq!(resolve_song_arrangement(&arrangements, &requested), Err(ArrangementIssue::Unavailable));
+            // Only a Planning Center name, and only when the file has nothing
+            // else to choose, falls back; never a configured name, and never
+            // to `Default` when another arrangement exists.
+            let expected = if configured || include_default {
+                Err(ArrangementIssue::Unavailable)
+            } else {
+                Ok(SongArrangementResolution::OnlyArrangement("Youth".to_string()))
+            };
+            prop_assert_eq!(resolve_song_arrangement(&arrangements, &requested), expected);
         }
     }
 }

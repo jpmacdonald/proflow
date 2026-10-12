@@ -89,6 +89,7 @@ Reordering those overrides cannot select a different arrangement.
 | An explicit name | Missing, ambiguous, or incomplete match | Require review. |
 | Planning Center `Default Arrangement` | No exact match, one complete `Default` | Apply the documented alias. |
 | Planning Center `Default Arrangement` | No native arrangements | Preserve the unarranged presentation. |
+| Any Planning Center name | No match, exactly one complete native arrangement | Use that arrangement and say so in the plan's reason. |
 | No request | One complete `Default` | Select `Default`. |
 | No request | No native arrangements | Preserve the unarranged presentation. |
 | No request | Other native arrangements | Require review. |
@@ -96,7 +97,10 @@ Reordering those overrides cannot select a different arrangement.
 Name comparison ignores letter case and retains the canonical native spelling.
 An exact `Default Arrangement` match precedes the alias.
 The alias does not apply to configured or operator-supplied names.
-A sole arrangement with another name does not become a default.
+Planning Center names its own arrangements, often after an artist, so a name
+the file lacks is not a choice when the file defines one arrangement.
+A configured or operator-supplied name is never replaced, and an omitted
+request does not select a sole arrangement with another name.
 An unresolved arrangement retains a typed review obligation.
 A background change or a later review check cannot discharge that obligation.
 An explicit arrangement or source selection is required.
