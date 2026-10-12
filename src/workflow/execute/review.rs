@@ -10,6 +10,7 @@ use proflow_propresenter::playlist::{
 use proflow_propresenter::PresentationSize;
 
 use super::build_stages::ReviewedDecisions;
+use super::decisions::DecisionOption;
 use super::overrides::resolve_requested_plans;
 use super::receipt::receipt_path_for_playlist;
 use super::request::{BoundBuildRequest, BuildRequest, RequestError};
@@ -48,6 +49,9 @@ pub struct OpenDecision {
     pub title: String,
     /// Why the item could not be resolved.
     pub question: String,
+    /// Choices that are valid for this item as the plan and library stand.
+    /// Leaving the item out is always the last one.
+    pub options: Vec<DecisionOption>,
 }
 
 /// A non-executable review retained only for operator-facing diagnostics.
@@ -55,6 +59,8 @@ pub struct OpenDecision {
 pub struct NeedsReviewBuildRequest {
     request: ReviewedRequest,
     plans: Vec<ResolvedItemPlan>,
+    /// Choices for each plan that needs review, in plan order.
+    options: Vec<Vec<DecisionOption>>,
 }
 
 /// One fully resolved review whose native artifacts are verified on disk.
@@ -224,10 +230,12 @@ impl BuildReview {
                 .plans
                 .iter()
                 .filter(|plan| plan.needs_review())
-                .map(|plan| OpenDecision {
+                .zip(&review.options)
+                .map(|(plan, options)| OpenDecision {
                     item: plan.output_key.to_string(),
                     title: plan.pco_title.clone(),
                     question: plan.reason.clone(),
+                    options: options.clone(),
                 })
                 .collect(),
         }
@@ -372,6 +380,7 @@ impl ServiceBuildExecutor<'_> {
             return Ok(BuildReview::NeedsReview(Box::new(
                 NeedsReviewBuildRequest {
                     request: ReviewedRequest::new(request, planning_center)?,
+                    options: self.decision_options(&plans)?,
                     plans,
                 },
             )));

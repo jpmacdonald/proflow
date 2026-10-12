@@ -15,6 +15,43 @@ An item the review cannot resolve is an open decision. The build lists every
 open decision, exits with status 2, and renders nothing until each one has an
 entry here.
 
+## Recording a decision
+
+Under each open decision the build prints the choices it can offer and the
+command that records each one:
+
+```text
+  pco:101:main  Amazing Grace
+      Configured existing song target is ambiguous: Amazing Grace.pro
+      - use /Library/Amazing Grace.pro:
+          proflow decide --plan 12345 --item pco:101:main --use '/Library/Amazing Grace.pro'
+      - use /Library/Archive/Amazing Grace.pro:
+          proflow decide --plan 12345 --item pco:101:main --use '/Library/Archive/Amazing Grace.pro'
+      - leave it out of the playlist:
+          proflow decide --plan 12345 --item pco:101:main --skip
+```
+
+The choices come from what the review found: the library files it could not
+choose between, the arrangements the chosen file defines, or the action it
+proposed. Leaving the item out is always offered. Each one is checked against
+the plan before it is printed.
+
+`proflow decide` writes the entry described below, replacing any earlier
+decision for the same item. It takes every kind of decision, not only the
+ones a build offers:
+
+| Decision | Options |
+|---|---|
+| Leave the item out | `--skip` |
+| Use a library presentation | `--use <file.pro> [--arrangement <name>]` |
+| Keep the proposed presentation, select an arrangement | `--arrangement <name>` |
+| Render the item as a new presentation | `--generate [--background <id>]` |
+| Render the description into a presentation | `--edit <file.pro> [--background <id>]` |
+| Keep the proposed render, change its background | `--background <id>` |
+
+`decide` does not fetch the plan. An item the plan does not have is reported
+by the next build.
+
 ## The file
 
 ```toml

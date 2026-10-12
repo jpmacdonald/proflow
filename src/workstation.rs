@@ -20,8 +20,8 @@ use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
 use crate::planning_center::PlanningCenterClient;
 use crate::project_config::load_project_config;
 use crate::workflow::execute::{
-    BuildRequest, BuildReview, BuildServiceError, RenderAssetSnapshot, RequestError,
-    ReviewDecisions, ServiceBuildExecutor,
+    BuildRequest, BuildReview, BuildServiceError, DecisionChoice, RenderAssetSnapshot,
+    RequestError, ReviewDecisions, ServiceBuildExecutor,
 };
 use crate::workflow::report::BuildServiceResult;
 
@@ -228,6 +228,24 @@ impl Workstation {
             .clone()
             .into_request(plan_id, self.render_assets.config())?;
         Ok(decisions.write(&self.executor().review_decisions_path(plan_id)?)?)
+    }
+
+    /// Record one decision for `item` in the plan's `review.toml`, replacing
+    /// any earlier decision for that item, and return the file.
+    ///
+    /// The plan is not fetched: an item the plan does not have is reported by
+    /// the next build.
+    pub fn decide(
+        &self,
+        plan_id: &str,
+        item: &str,
+        choice: DecisionChoice,
+    ) -> Result<PathBuf, BuildServiceError> {
+        let file = self.executor().review_decisions_path(plan_id)?;
+        let mut decisions = ReviewDecisions::read(&file)?;
+        decisions.decide(item, None, choice);
+        self.record_decisions(plan_id, &decisions)?;
+        Ok(file)
     }
 
     /// The upcoming plan that is scheduled soonest, optionally among plans of

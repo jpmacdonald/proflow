@@ -336,6 +336,10 @@ fn answering_an_open_decision_in_the_decisions_file_lets_the_next_review_proceed
             item: "pco:item:a".to_string(),
             title: "Test item".to_string(),
             question: "two library presentations match".to_string(),
+            options: vec![DecisionOption {
+                summary: "leave it out of the playlist".to_string(),
+                choice: DecisionChoice::Skip,
+            }],
         }]
     );
     let error = blocked.into_prepared().expect_err("unanswered");

@@ -179,14 +179,16 @@ The same two steps without an MCP client:
 
 ```bash
 proflow build  --plan <plan id | next> [--service <service type>]
+proflow decide --plan <plan id | next> --item <item> <decision>
 proflow commit --plan <plan id | next> [--service <service type>]
 ```
 
 `build` reviews the plan with the decisions recorded in its `review.toml`
 ([docs/review-decisions.md](docs/review-decisions.md)) and renders and
-verifies it. If an item needs a decision, it lists every one and exits with
-status 2. `commit` installs the verified build. Neither prompts; status 0
-means the step was done and 1 means an error.
+verifies it. If an item needs a decision, it lists every one with the choices
+it can offer and exits with status 2. Each choice is printed as the `decide`
+command that records it. `commit` installs the verified build. None of them
+prompts; status 0 means the step was done and 1 means an error.
 
 Portable packages embed reviewed presentations and available local media.
 Library-local packages reference presentations already installed in the

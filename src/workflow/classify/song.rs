@@ -85,7 +85,7 @@ pub(super) fn build_song_plan(
         target_library_file.map(|name| (name, resolve_exact_library_file(file_index, name)));
     let song_match = match &explicit_target_match {
         Some((_, ExactLibraryFileMatch::Unique(path))) => SongLibraryMatch::Resolved(path.clone()),
-        Some((_, ExactLibraryFileMatch::Missing | ExactLibraryFileMatch::Ambiguous)) => {
+        Some((_, ExactLibraryFileMatch::Missing | ExactLibraryFileMatch::Ambiguous(_))) => {
             SongLibraryMatch::Missing
         }
         None => {
@@ -104,8 +104,8 @@ pub(super) fn build_song_plan(
     let playlist_name = match &song_match {
         SongLibraryMatch::Resolved(path) | SongLibraryMatch::Candidate(path) => file_stem(path),
         SongLibraryMatch::Missing
-        | SongLibraryMatch::Ambiguous
-        | SongLibraryMatch::ConflictingTitles => song_title.to_string(),
+        | SongLibraryMatch::Ambiguous(_)
+        | SongLibraryMatch::ConflictingTitles(_) => song_title.to_string(),
     };
 
     let mut plan = ResolvedItemPlan::new(
@@ -132,9 +132,9 @@ fn use_existing_song_action(
     file_index: Option<&LibraryCatalog>,
     target_library_file: Option<&str>,
 ) -> (PlanDisposition, String) {
-    if let Some((target, ExactLibraryFileMatch::Ambiguous)) = explicit_target_match {
+    if let Some((target, ExactLibraryFileMatch::Ambiguous(paths))) = explicit_target_match {
         return (
-            PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            PlanDisposition::NeedsReview(ReviewContext::file_choices(paths)),
             format!("Configured existing song target is ambiguous: {target}"),
         );
     }
@@ -149,12 +149,12 @@ fn use_existing_song_action(
             ))),
             format!("Possible library match requires an explicit file selection: {path}"),
         ),
-        SongLibraryMatch::Ambiguous => (
-            PlanDisposition::NeedsReview(ReviewContext::new(None)),
+        SongLibraryMatch::Ambiguous(paths) => (
+            PlanDisposition::NeedsReview(ReviewContext::file_choices(paths)),
             "Song title matches multiple library files; select the intended file explicitly".to_string(),
         ),
-        SongLibraryMatch::ConflictingTitles => (
-            PlanDisposition::NeedsReview(ReviewContext::new(None)),
+        SongLibraryMatch::ConflictingTitles(paths) => (
+            PlanDisposition::NeedsReview(ReviewContext::file_choices(paths)),
             "Planning Center song and item titles identify different library files; select the intended file explicitly".to_string(),
         ),
         SongLibraryMatch::Missing => (

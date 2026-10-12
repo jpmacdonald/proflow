@@ -195,6 +195,19 @@ Dates are the day the work landed on `main`.
   derive `Deserialize` so a committed result can be read back from
   `rendered/result.json`.
 
+- Answerable decisions. Every open decision now carries `options`: the
+  library files the review could not choose between (an ambiguous song title,
+  conflicting titles, or an ambiguous configured or required file), the
+  arrangements the proposed file defines when the requested one is
+  unavailable, or the review's own proposal, and always leaving the item out.
+  An option is offered only if applying it to the plan is accepted
+  (`src/workflow/execute/decision_options.rs`). `proflow build` prints each
+  option as the command that records it, and `proflow decide --plan <id>
+  --item <item> <decision>` writes that decision to the plan's `review.toml`
+  (`--skip`, `--use`, `--arrangement`, `--generate`, `--edit`,
+  `--background`). MCP `preview_playlist` returns the same options inside
+  `open_decisions`. An item with no proposal and no candidate file still
+  offers only leaving it out; choosing a file for it is `--use <file>`.
 - Handler-level tests for `proflow build` / `commit` and for the MCP
   `preview_playlist`, `build_service` and `read_playlist` tools. They run a
   whole `Workstation` over a temporary directory against a local stand-in
@@ -253,7 +266,8 @@ Dates are the day the work landed on `main`.
   directory holding the result; they are in `classified/plans.json`.
   Phase 2 has no separate `proflow review`: a review of a fully decided plan
   already renders, so `build` is the one command, and it prints the open
-  decisions instead of writing them into `review.toml`. There are no golden
+  decisions, with a `decide` command for each choice, instead of writing
+  them into `review.toml`. There are no golden
   files; the three outputs are asserted verbatim in `src/cli/tests.rs`.
 - Build directories are never pruned. Every committed build keeps its
   artifacts and the bytes they replaced under `<data root>/builds/`, in

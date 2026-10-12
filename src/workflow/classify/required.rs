@@ -95,8 +95,8 @@ fn build_required_playlist_item(
             ),
             file_stem(required.library_file()),
         ),
-        ExactLibraryFileMatch::Ambiguous => (
-            PlanDisposition::NeedsReview(ReviewContext::new(None)),
+        ExactLibraryFileMatch::Ambiguous(paths) => (
+            PlanDisposition::NeedsReview(ReviewContext::file_choices(paths)),
             format!(
                 "Required playlist file is ambiguous: {}",
                 required.library_file()

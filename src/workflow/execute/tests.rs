@@ -23,6 +23,7 @@ mod support;
 use support::*;
 
 mod build_stages;
+mod decision_options;
 mod invariants;
 mod library_freshness;
 mod native_fidelity;

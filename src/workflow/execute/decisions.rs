@@ -170,6 +170,43 @@ impl ItemDecision {
     }
 }
 
+/// What an operator decides for one plan item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionChoice {
+    /// Leave the item out of the playlist.
+    Skip,
+    /// Do this for the item.
+    Action(EntryOverrideAction),
+}
+
+/// One choice a review offers for an open decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DecisionOption {
+    /// What choosing it does, in a few words.
+    pub summary: String,
+    /// The decision it records.
+    pub choice: DecisionChoice,
+}
+
+impl ReviewDecisions {
+    /// Record `choice` as the decision for `item`, replacing any earlier
+    /// decision for it. `question` is kept for whoever reads the file.
+    pub fn decide(&mut self, item: &str, question: Option<String>, choice: DecisionChoice) {
+        self.decisions.retain(|decision| decision.item != item);
+        let mut decision = ItemDecision {
+            question,
+            at: Some(chrono::Utc::now()),
+            ..ItemDecision::for_item(item.to_string())
+        };
+        match choice {
+            DecisionChoice::Skip => decision.skip = true,
+            DecisionChoice::Action(action) => decision.action = Some(action),
+        }
+        self.decisions.push(decision);
+    }
+}
+
 /// Why recorded decisions could not become a build request.
 #[derive(Debug, thiserror::Error)]
 pub enum DecisionError {
@@ -357,6 +394,25 @@ pub fn resolve_override_action(
     config: &ProjectConfig,
     action: EntryOverrideAction,
 ) -> Result<OverrideAction, DecisionError> {
+    resolve_action(action, |id| resolve_background(config, id))
+}
+
+/// Resolve an action that names no background.
+pub(super) fn resolve_without_background(
+    action: EntryOverrideAction,
+) -> Result<OverrideAction, DecisionError> {
+    resolve_action(action, |id| {
+        Err(DecisionError::UnknownBackground {
+            id,
+            available: String::new(),
+        })
+    })
+}
+
+fn resolve_action(
+    action: EntryOverrideAction,
+    background_for: impl Fn(BackgroundId) -> Result<ResolvedBackground, DecisionError>,
+) -> Result<OverrideAction, DecisionError> {
     Ok(match action {
         EntryOverrideAction::UseExisting {
             file_path,
@@ -368,21 +424,17 @@ pub fn resolve_override_action(
                 .transpose()?,
         },
         EntryOverrideAction::GenerateNew { background } => OverrideAction::GenerateNew {
-            background: background
-                .map(|id| resolve_background(config, id))
-                .transpose()?,
+            background: background.map(&background_for).transpose()?,
         },
         EntryOverrideAction::EditDescription {
             file_path,
             background,
         } => OverrideAction::EditDescription {
             file_path: operator_path(file_path)?,
-            background: background
-                .map(|id| resolve_background(config, id))
-                .transpose()?,
+            background: background.map(&background_for).transpose()?,
         },
         EntryOverrideAction::SetBackground { background } => OverrideAction::SetBackground {
-            background: resolve_background(config, background)?,
+            background: background_for(background)?,
         },
         EntryOverrideAction::SelectArrangement { arrangement } => {
             OverrideAction::SelectArrangement {

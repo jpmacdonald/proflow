@@ -230,6 +230,7 @@ fn unresolved_preview_serializes_without_an_executable_revision() {
             item: "pco:1:main".to_string(),
             title: "Welcome".to_string(),
             question: "no rule matches".to_string(),
+            options: Vec::new(),
         }],
         playlist_name: "Needs decisions".to_string(),
         package_mode: PlaylistExportMode::LibraryLinks,

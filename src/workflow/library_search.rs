@@ -15,7 +15,8 @@ use proflow_propresenter::library::{normalize_name, LibraryCatalog, LibraryEntry
 pub(super) enum ExactLibraryFileMatch {
     Unique(String),
     Missing,
-    Ambiguous,
+    /// Every library file with the requested name.
+    Ambiguous(Vec<String>),
 }
 
 /// Resolve a configured library filename exactly and uniquely.
@@ -34,14 +35,12 @@ pub(super) fn resolve_exact_library_file(
         .entries()
         .iter()
         .filter(|entry| exact_filename_key(entry.file_name()).as_ref() == Some(&requested_key))
-        .map(|entry| entry.full_path().to_string_lossy().to_string());
-    let Some(path) = paths.next() else {
-        return ExactLibraryFileMatch::Missing;
-    };
-    if paths.next().is_some() {
-        ExactLibraryFileMatch::Ambiguous
-    } else {
-        ExactLibraryFileMatch::Unique(path)
+        .map(|entry| entry.full_path().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    match paths.len() {
+        0 => ExactLibraryFileMatch::Missing,
+        1 => ExactLibraryFileMatch::Unique(paths.remove(0)),
+        _ => ExactLibraryFileMatch::Ambiguous(paths),
     }
 }
 
@@ -120,8 +119,10 @@ const SONG_BRACKET_PREFIXES: &[&str] = &[
 pub(super) enum SongLibraryMatch {
     Resolved(String),
     Candidate(String),
-    Ambiguous,
-    ConflictingTitles,
+    /// More than one library file carries the song's exact title.
+    Ambiguous(Vec<String>),
+    /// The song title and the item title each name a different library file.
+    ConflictingTitles(Vec<String>),
     Missing,
 }
 
@@ -139,11 +140,15 @@ pub(super) fn resolve_song_library_match(
     let exact_item_paths = exact_song_title_paths(index, item_title);
     match exact_song_paths.as_slice() {
         [path] if exact_item_paths.iter().any(|item_path| item_path != path) => {
-            return SongLibraryMatch::ConflictingTitles;
+            let mut paths = vec![path.clone()];
+            for item_path in exact_item_paths {
+                push_unique_path(&mut paths, item_path);
+            }
+            return SongLibraryMatch::ConflictingTitles(paths);
         }
         [path] => return SongLibraryMatch::Resolved(path.clone()),
         [] => {}
-        _ => return SongLibraryMatch::Ambiguous,
+        _ => return SongLibraryMatch::Ambiguous(exact_song_paths),
     }
 
     let candidates = song_search_queries(song_title, stripped_title, bare_title);
@@ -642,10 +647,10 @@ mod tests {
         write_presentation(&nested.join("announcements.pro"));
         let index = LibraryCatalog::build(dir.path()).expect("index fixture library");
 
-        assert_eq!(
+        assert!(matches!(
             resolve_exact_library_file(Some(&index), "Announcements.pro"),
-            ExactLibraryFileMatch::Ambiguous
-        );
+            ExactLibraryFileMatch::Ambiguous(paths) if paths.len() == 2
+        ));
     }
 
     #[test]
@@ -815,7 +820,7 @@ mod tests {
             "Amazing Grace",
         );
 
-        assert_eq!(resolved, SongLibraryMatch::ConflictingTitles);
+        assert!(matches!(resolved, SongLibraryMatch::ConflictingTitles(paths) if paths.len() == 2));
     }
 
     #[test]
@@ -870,16 +875,18 @@ mod tests {
         write_presentation(&dir.path().join("Amazing Grace.pro"));
         write_presentation(&nested.join("amazing grace.pro"));
         let index = LibraryCatalog::build(dir.path()).expect("fixture library");
-        assert_eq!(
-            resolve_song_library_match(
-                Some(&index),
-                "Amazing Grace",
-                "Amazing Grace",
-                "Amazing Grace",
-                "Amazing Grace"
-            ),
-            SongLibraryMatch::Ambiguous,
+        let resolved = resolve_song_library_match(
+            Some(&index),
+            "Amazing Grace",
+            "Amazing Grace",
+            "Amazing Grace",
+            "Amazing Grace",
         );
+        assert!(matches!(
+            resolved,
+            SongLibraryMatch::Ambiguous(paths)
+                if paths.len() == 2 && paths.iter().all(|path| path.to_lowercase().ends_with("amazing grace.pro"))
+        ));
     }
 
     #[test]

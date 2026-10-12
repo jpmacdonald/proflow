@@ -35,6 +35,7 @@ use proflow_propresenter::serialize::SerializeError;
 use proflow_propresenter::text_fit::FontProgramFreshnessError;
 
 mod build_stages;
+mod decision_options;
 mod decisions;
 mod overrides;
 mod plan_rendering;
@@ -51,8 +52,8 @@ mod review;
 mod run;
 
 pub use decisions::{
-    playlist_export_intent, resolve_override_action, DecidedBy, DecisionError, EntryOverrideAction,
-    ItemDecision, MediaDecision, ReviewDecisions,
+    playlist_export_intent, resolve_override_action, DecidedBy, DecisionChoice, DecisionError,
+    DecisionOption, EntryOverrideAction, ItemDecision, MediaDecision, ReviewDecisions,
 };
 pub use overrides::{EntryOverride, OverrideAction, OverrideSlideType};
 pub use presentation_contract::PresentationContractError;

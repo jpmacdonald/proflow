@@ -2,29 +2,48 @@
 //!
 //! ```text
 //! proflow build  --plan <id|next> [--service <service type>]
+//! proflow decide --plan <id|next> --item <item> <decision>
 //! proflow commit --plan <id|next> [--service <service type>]
 //! ```
 //!
 //! `build` reviews the plan with the decisions recorded in its `review.toml`,
-//! and renders and verifies it when none is missing. `commit` installs that
-//! verified build. Neither prompts. The exit status is 0 when the command did
+//! and renders and verifies it when none is missing. For each open decision it
+//! prints the choices it can offer, each as the `decide` command that records
+//! it. `commit` installs the verified build. None of them prompts. The exit status is 0 when the command did
 //! what it names, 2 when the plan needs decisions first, and 1 on any error.
 
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::workflow::execute::{BuildReview, BuildServiceError, OpenDecision};
+use crate::project_config::BackgroundId;
+use crate::workflow::execute::{
+    BuildReview, BuildServiceError, DecisionChoice, EntryOverrideAction, OpenDecision,
+};
 use crate::workflow::report::BuildServiceResult;
 use crate::workstation::{WorkspaceDiscovery, Workstation};
 
 /// How to call the command.
 pub const USAGE: &str = "\
 usage: proflow build  --plan <id|next> [--service <service type>]
+       proflow decide --plan <id|next> --item <item> <decision>
        proflow commit --plan <id|next> [--service <service type>]
 
   build    review the plan with the decisions in its review.toml, then render
            and verify it; exits 2 and lists the open decisions if any remain
+  decide   record one decision in the plan's review.toml
   commit   install the verified build of the plan as it stands now
+
+  <decision> is one of:
+    --skip                               leave the item out
+    --use <file.pro> [--arrangement <name>]
+                                         use this library presentation
+    --arrangement <name>                 keep the proposed presentation,
+                                         select this arrangement
+    --generate [--background <id>]       render the item as a new presentation
+    --edit <file.pro> [--background <id>]
+                                         render the description into this file
+    --background <id>                    keep the proposed render, change its
+                                         background
 
   --plan next             the soonest upcoming plan
   --service <name>        the plan's service type; required with `next` when
@@ -33,10 +52,17 @@ usage: proflow build  --plan <id|next> [--service <service type>]
                           consulting the active show (isolated QA only)";
 
 /// Which step to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// Review, render and verify.
     Build,
+    /// Record one decision.
+    Decide {
+        /// Output key of the plan item.
+        item: String,
+        /// What is decided for it.
+        choice: DecisionChoice,
+    },
     /// Install the verified build.
     Commit,
 }
@@ -67,14 +93,23 @@ pub struct Invocation {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UsageError {
     /// The first argument is not a command.
-    #[error("expected `build` or `commit`, found '{found}'")]
+    #[error("expected `build`, `decide` or `commit`, found '{found}'")]
     UnknownCommand {
         /// What was given.
         found: String,
     },
     /// No command was given.
-    #[error("expected `build` or `commit`")]
+    #[error("expected `build`, `decide` or `commit`")]
     MissingCommand,
+    /// `decide` was given without `--item`.
+    #[error("decide requires --item <item>")]
+    MissingItem,
+    /// The decision options do not name exactly one decision.
+    #[error("{problem}")]
+    Decision {
+        /// What is wrong with them.
+        problem: String,
+    },
     /// `--plan` was not given.
     #[error("--plan <id|next> is required")]
     MissingPlan,
@@ -102,33 +137,52 @@ impl Invocation {
     /// Parse the arguments after the program name.
     pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, UsageError> {
         let mut arguments = arguments.into_iter();
-        let command = match arguments.next().as_deref() {
-            Some("build") => Command::Build,
-            Some("commit") => Command::Commit,
-            Some(found) => {
-                return Err(UsageError::UnknownCommand {
-                    found: found.to_string(),
-                });
-            }
+        let command = match arguments.next() {
+            Some(command) if matches!(command.as_str(), "build" | "decide" | "commit") => command,
+            Some(found) => return Err(UsageError::UnknownCommand { found }),
             None => return Err(UsageError::MissingCommand),
         };
+        let deciding = command == "decide";
         let mut plan = None;
         let mut service = None;
         let mut workspace = None;
+        let mut item = None;
+        let mut decision = DecisionFlags::default();
         while let Some(argument) = arguments.next() {
+            let mut value = || arguments.next();
             match argument.as_str() {
-                "--plan" => set_once(&mut plan, "--plan", arguments.next())?,
-                "--service" => set_once(&mut service, "--service", arguments.next())?,
+                "--plan" => set_once(&mut plan, "--plan", value())?,
+                "--service" => set_once(&mut service, "--service", value())?,
                 "--configured-workspace" => set_once(
                     &mut workspace,
                     "--configured-workspace",
                     Some(WorkspaceDiscovery::ConfiguredOnly),
                 )?,
+                "--item" if deciding => set_once(&mut item, "--item", value())?,
+                "--skip" if deciding => set_once(&mut decision.skip, "--skip", Some(()))?,
+                "--generate" if deciding => {
+                    set_once(&mut decision.generate, "--generate", Some(()))?;
+                }
+                "--use" if deciding => set_once(&mut decision.use_file, "--use", value())?,
+                "--edit" if deciding => set_once(&mut decision.edit_file, "--edit", value())?,
+                "--arrangement" if deciding => {
+                    set_once(&mut decision.arrangement, "--arrangement", value())?;
+                }
+                "--background" if deciding => {
+                    set_once(&mut decision.background, "--background", value())?;
+                }
                 _ => return Err(UsageError::Unexpected { argument }),
             }
         }
         Ok(Self {
-            command,
+            command: match command.as_str() {
+                "build" => Command::Build,
+                "commit" => Command::Commit,
+                _ => Command::Decide {
+                    item: item.ok_or(UsageError::MissingItem)?,
+                    choice: decision.into_choice()?,
+                },
+            },
             plan: match plan.ok_or(UsageError::MissingPlan)? {
                 plan if plan == "next" => PlanSelector::Next,
                 plan => PlanSelector::Id(plan),
@@ -136,6 +190,73 @@ impl Invocation {
             service,
             workspace: workspace.unwrap_or(WorkspaceDiscovery::ActiveShow),
         })
+    }
+}
+
+/// The decision options of one `decide` command line.
+#[derive(Default)]
+struct DecisionFlags {
+    skip: Option<()>,
+    generate: Option<()>,
+    use_file: Option<String>,
+    edit_file: Option<String>,
+    arrangement: Option<String>,
+    background: Option<String>,
+}
+
+impl DecisionFlags {
+    /// The one decision these options name.
+    fn into_choice(self) -> Result<DecisionChoice, UsageError> {
+        let problem = |problem: &str| UsageError::Decision {
+            problem: problem.to_string(),
+        };
+        let background = self
+            .background
+            .map(BackgroundId::new)
+            .transpose()
+            .map_err(|error| problem(&error))?;
+        let action = match (
+            self.skip,
+            self.use_file,
+            self.edit_file,
+            self.generate,
+            self.arrangement,
+            background,
+        ) {
+            (Some(()), None, None, None, None, None) => return Ok(DecisionChoice::Skip),
+            (None, Some(file_path), None, None, arrangement, None) => {
+                EntryOverrideAction::UseExisting {
+                    file_path,
+                    arrangement,
+                }
+            }
+            (None, None, Some(file_path), None, None, background) => {
+                EntryOverrideAction::EditDescription {
+                    file_path,
+                    background,
+                }
+            }
+            (None, None, None, Some(()), None, background) => {
+                EntryOverrideAction::GenerateNew { background }
+            }
+            (None, None, None, None, Some(arrangement), None) => {
+                EntryOverrideAction::SelectArrangement { arrangement }
+            }
+            (None, None, None, None, None, Some(background)) => {
+                EntryOverrideAction::SetBackground { background }
+            }
+            (None, None, None, None, None, None) => {
+                return Err(problem(
+                    "decide requires a decision: --skip, --use, --arrangement, --generate, --edit or --background",
+                ));
+            }
+            _ => {
+                return Err(problem(
+                    "these options do not name one decision; see the usage below",
+                ));
+            }
+        };
+        Ok(DecisionChoice::Action(action))
     }
 }
 
@@ -176,6 +297,15 @@ pub enum Outcome {
         /// Directory holding the build.
         build_directory: PathBuf,
     },
+    /// One decision is recorded.
+    Decided {
+        /// Plan identity.
+        plan_id: String,
+        /// Item the decision is for.
+        item: String,
+        /// File it was recorded in.
+        decisions_file: PathBuf,
+    },
     /// The verified build is installed.
     Committed {
         /// Plan identity.
@@ -191,7 +321,7 @@ impl Outcome {
     pub const fn exit_code(&self) -> u8 {
         match self {
             Self::NeedsDecisions { .. } => 2,
-            Self::Built { .. } | Self::Committed { .. } => 0,
+            Self::Built { .. } | Self::Decided { .. } | Self::Committed { .. } => 0,
         }
     }
 
@@ -230,7 +360,12 @@ pub async fn run(
         PlanSelector::Id(plan_id) => plan_id.clone(),
         PlanSelector::Next => workstation.next_plan_id(service).await?,
     };
-    match invocation.command {
+    match &invocation.command {
+        Command::Decide { item, choice } => Ok(Outcome::Decided {
+            decisions_file: workstation.decide(&plan_id, item, choice.clone())?,
+            item: item.clone(),
+            plan_id,
+        }),
         Command::Build => Outcome::from_review(
             workstation.build_recorded(&plan_id, service).await?,
             workstation.executor().review_decisions_path(&plan_id)?,
@@ -239,6 +374,78 @@ pub async fn run(
             result: Box::new(workstation.commit_recorded(&plan_id, service, None).await?),
             plan_id,
         }),
+    }
+}
+
+/// The command line that records one choice.
+struct DecideCommand<'a> {
+    plan_id: &'a str,
+    item: &'a str,
+    choice: &'a DecisionChoice,
+}
+
+impl fmt::Display for DecideCommand<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "proflow decide --plan {} --item {}",
+            quoted(self.plan_id),
+            quoted(self.item)
+        )?;
+        match self.choice {
+            DecisionChoice::Skip => write!(formatter, " --skip"),
+            DecisionChoice::Action(EntryOverrideAction::UseExisting {
+                file_path,
+                arrangement,
+            }) => {
+                option(formatter, "--use", Some(file_path))?;
+                option(formatter, "--arrangement", arrangement.as_deref())
+            }
+            DecisionChoice::Action(EntryOverrideAction::EditDescription {
+                file_path,
+                background,
+            }) => {
+                option(formatter, "--edit", Some(file_path))?;
+                option(
+                    formatter,
+                    "--background",
+                    background.as_ref().map(BackgroundId::as_str),
+                )
+            }
+            DecisionChoice::Action(EntryOverrideAction::GenerateNew { background }) => {
+                write!(formatter, " --generate")?;
+                option(
+                    formatter,
+                    "--background",
+                    background.as_ref().map(BackgroundId::as_str),
+                )
+            }
+            DecisionChoice::Action(EntryOverrideAction::SelectArrangement { arrangement }) => {
+                option(formatter, "--arrangement", Some(arrangement))
+            }
+            DecisionChoice::Action(EntryOverrideAction::SetBackground { background }) => {
+                option(formatter, "--background", Some(background.as_str()))
+            }
+        }
+    }
+}
+
+fn option(formatter: &mut fmt::Formatter<'_>, name: &str, value: Option<&str>) -> fmt::Result {
+    value.map_or(Ok(()), |value| {
+        write!(formatter, " {name} {}", quoted(value))
+    })
+}
+
+/// `value` as one shell word.
+fn quoted(value: &str) -> String {
+    let plain = !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./:@+,".contains(&byte));
+    if plain {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
 
@@ -282,21 +489,38 @@ impl fmt::Display for Outcome {
                 for decision in decisions {
                     writeln!(formatter, "  {}  {}", decision.item, decision.title)?;
                     writeln!(formatter, "      {}", decision.question)?;
+                    for option in &decision.options {
+                        writeln!(formatter, "      - {}:", option.summary)?;
+                        writeln!(
+                            formatter,
+                            "          {}",
+                            DecideCommand {
+                                plan_id,
+                                item: &decision.item,
+                                choice: &option.choice
+                            }
+                        )?;
+                    }
+                    writeln!(formatter)?;
                 }
                 writeln!(
                     formatter,
-                    "\nRecord each one in {} and build again. To leave an item out:\n",
+                    "Run one command for each item, then build again. `proflow decide` takes other\ndecisions too (see docs/review-decisions.md); all of them are recorded in\n{}",
+                    decisions_file.display()
+                )
+            }
+            Self::Decided {
+                plan_id,
+                item,
+                decisions_file,
+            } => {
+                writeln!(
+                    formatter,
+                    "Recorded the decision for {item} in {}.",
                     decisions_file.display()
                 )?;
-                if let Some(first) = decisions.first() {
-                    writeln!(formatter, "  [[decision]]")?;
-                    writeln!(formatter, "  item = \"{}\"", first.item)?;
-                    writeln!(formatter, "  skip = true\n")?;
-                }
-                writeln!(
-                    formatter,
-                    "Every other kind of decision is described in docs/review-decisions.md."
-                )
+                writeln!(formatter, "When every item is decided:\n")?;
+                writeln!(formatter, "  proflow build --plan {plan_id}")
             }
             Self::Built {
                 plan_id,

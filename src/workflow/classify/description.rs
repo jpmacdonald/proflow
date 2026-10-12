@@ -118,7 +118,7 @@ pub(super) fn build_description_plan(
         Some(Err(error)) => (None, Some(error.to_string())),
         None => (None, None),
     };
-    let target_ambiguous = matches!(target_match, Some(ExactLibraryFileMatch::Ambiguous));
+    let target_ambiguous = matches!(target_match, Some(ExactLibraryFileMatch::Ambiguous(_)));
     let (disposition, mut reason) = match policy {
         DescriptionPolicy::Review { render } => {
             configured_review_action(found.clone(), parsed_content, render)
@@ -151,7 +151,7 @@ pub(super) fn build_description_plan(
 fn unique_path(target: Option<&ExactLibraryFileMatch>) -> Option<std::path::PathBuf> {
     match target {
         Some(ExactLibraryFileMatch::Unique(path)) => Some(path.into()),
-        Some(ExactLibraryFileMatch::Missing | ExactLibraryFileMatch::Ambiguous) | None => None,
+        Some(ExactLibraryFileMatch::Missing | ExactLibraryFileMatch::Ambiguous(_)) | None => None,
     }
 }
 
@@ -167,8 +167,10 @@ fn finish_plan(
     disposition: PlanDisposition,
     mut reason: String,
 ) -> ResolvedItemPlan {
-    if let (Some(target), Some(ExactLibraryFileMatch::Missing | ExactLibraryFileMatch::Ambiguous)) =
-        (target_library_file, target_match)
+    if let (
+        Some(target),
+        Some(ExactLibraryFileMatch::Missing | ExactLibraryFileMatch::Ambiguous(_)),
+    ) = (target_library_file, target_match)
     {
         reason = format!("{reason}: {target}");
     }
@@ -222,7 +224,7 @@ fn resolve_existing_action(
     arrangement: Option<String>,
     restyle: Option<ExistingTransform>,
 ) -> (PlanDisposition, String) {
-    if matches!(target_match, Some(ExactLibraryFileMatch::Ambiguous)) {
+    if matches!(target_match, Some(ExactLibraryFileMatch::Ambiguous(_))) {
         (
             PlanDisposition::NeedsReview(ReviewContext::new(None)),
             "Configured existing file is ambiguous".to_string(),

@@ -528,6 +528,9 @@ impl ReadyAction {
 pub struct ReviewContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     proposal: Option<ReviewProposal>,
+    /// Library files the review found and could not choose between.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    candidates: Vec<PathBuf>,
 }
 
 /// Song source and arrangement decisions require their own explicit resolution.
@@ -545,13 +548,28 @@ impl ReviewContext {
     pub fn new(proposed_action: Option<ReadyAction>) -> Self {
         Self {
             proposal: proposed_action.map(ReviewProposal::Resolved),
+            candidates: Vec::new(),
         }
+    }
+
+    /// Review state for an item that several library files could be.
+    pub(crate) fn file_choices(paths: &[String]) -> Self {
+        Self {
+            proposal: None,
+            candidates: paths.iter().map(PathBuf::from).collect(),
+        }
+    }
+
+    /// Library files the review could not choose between.
+    pub fn candidates(&self) -> &[PathBuf] {
+        &self.candidates
     }
 
     /// Retain a song suggestion whose identity needs an explicit file selection.
     pub(crate) const fn song_candidate(action: ReadyAction) -> Self {
         Self {
             proposal: Some(ReviewProposal::SongCandidate(action)),
+            candidates: Vec::new(),
         }
     }
 
@@ -559,6 +577,7 @@ impl ReviewContext {
     pub(crate) const fn song_arrangement(action: ReadyAction) -> Self {
         Self {
             proposal: Some(ReviewProposal::SongArrangement(action)),
+            candidates: Vec::new(),
         }
     }
 
@@ -840,6 +859,14 @@ impl ResolvedItemPlan {
     /// Return whether this plan still requires an explicit human decision.
     pub const fn needs_review(&self) -> bool {
         matches!(self.output.disposition, PlanDisposition::NeedsReview(_))
+    }
+
+    /// Library files a review found and could not choose between.
+    pub fn review_candidates(&self) -> &[PathBuf] {
+        match &self.output.disposition {
+            PlanDisposition::NeedsReview(context) => context.candidates(),
+            PlanDisposition::Ready(_) | PlanDisposition::Skip => &[],
+        }
     }
 
     /// Whether a suggested song still needs an explicit source-file decision.
