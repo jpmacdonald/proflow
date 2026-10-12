@@ -10,16 +10,17 @@ use std::path::Path;
 use crate::workflow::plan::{ReadyAction, ResolvedItemPlan};
 use proflow_propresenter::library::{LibraryArrangement, LibraryCatalog};
 
-use super::decisions::{DecisionChoice, DecisionOption, EntryOverrideAction};
+use super::decisions::{DecisionChoice, DecisionKind, DecisionOption, EntryOverrideAction};
 use super::overrides::{apply_override, EntryOverride};
 use super::{BuildServiceError, ServiceBuildExecutor};
 
 impl ServiceBuildExecutor<'_> {
-    /// Options for every plan that needs review, in plan order.
+    /// The kind of question and the options for every plan that needs
+    /// review, in plan order.
     pub(super) fn decision_options(
         &self,
         plans: &[ResolvedItemPlan],
-    ) -> Result<Vec<Vec<DecisionOption>>, BuildServiceError> {
+    ) -> Result<Vec<(DecisionKind, Vec<DecisionOption>)>, BuildServiceError> {
         let catalog = self.lock_library()?;
         Ok(plans
             .iter()
@@ -29,84 +30,81 @@ impl ServiceBuildExecutor<'_> {
     }
 }
 
-fn options_for(plan: &ResolvedItemPlan, catalog: &LibraryCatalog) -> Vec<DecisionOption> {
-    let mut offered = Vec::new();
-    for candidate in plan.review_candidates() {
-        offered.push(use_file(candidate, None));
-    }
-    if plan.requires_song_arrangement() {
-        if let Some(file) = plan.preview_action().and_then(existing_file) {
-            let arrangements = catalog
-                .entry_at(file)
-                .map_or(&[][..], |entry| entry.arrangements());
-            for arrangement in arrangements {
-                if let LibraryArrangement::Complete { name } = arrangement {
-                    offered.push(DecisionOption {
-                        summary: format!("use arrangement '{name}'"),
-                        choice: DecisionChoice::Action(EntryOverrideAction::SelectArrangement {
-                            arrangement: name.clone(),
-                        }),
-                    });
+fn options_for(
+    plan: &ResolvedItemPlan,
+    catalog: &LibraryCatalog,
+) -> (DecisionKind, Vec<DecisionOption>) {
+    let action = |action| DecisionOption::new(DecisionChoice::Action(action));
+    let (kind, mut offered) = if !plan.review_candidates().is_empty() {
+        let files = plan.review_candidates().iter().map(|file| {
+            action(EntryOverrideAction::UseExisting {
+                file_path: file.display().to_string(),
+                arrangement: None,
+            })
+        });
+        (DecisionKind::WhichFile, files.collect())
+    } else if plan.requires_song_arrangement() {
+        let arrangements = plan
+            .preview_action()
+            .and_then(existing_file)
+            .and_then(|file| catalog.entry_at(file))
+            .map_or(&[][..], |entry| entry.arrangements());
+        let complete = arrangements
+            .iter()
+            .filter_map(|arrangement| match arrangement {
+                LibraryArrangement::Complete { name } => {
+                    Some(action(EntryOverrideAction::SelectArrangement {
+                        arrangement: name.clone(),
+                    }))
                 }
-            }
-        }
-    } else if let Some(proposed) = plan.preview_action().and_then(as_proposed) {
-        offered.push(proposed);
-    }
+                LibraryArrangement::Incomplete { .. } => None,
+            });
+        (DecisionKind::WhichArrangement, complete.collect())
+    } else if plan.requires_song_selection() {
+        // A possible match is a file to confirm, like any other candidate.
+        let candidate = plan.preview_action().and_then(as_proposed).map(action);
+        (DecisionKind::WhichFile, candidate.into_iter().collect())
+    } else {
+        plan.preview_action().and_then(as_proposed).map_or_else(
+            || (DecisionKind::Unresolved, Vec::new()),
+            |proposed| (DecisionKind::ConfirmProposal, vec![action(proposed)]),
+        )
+    };
     offered.retain(|option| is_accepted(plan, option));
-    offered.push(DecisionOption {
-        summary: "leave it out of the playlist".to_string(),
-        choice: DecisionChoice::Skip,
-    });
-    offered
+    offered.push(DecisionOption::new(DecisionChoice::Skip));
+    (kind, offered)
 }
 
 /// The decision that takes the review's own proposal as it stands.
-fn as_proposed(action: &ReadyAction) -> Option<DecisionOption> {
+fn as_proposed(action: &ReadyAction) -> Option<EntryOverrideAction> {
     match action {
         ReadyAction::UseExisting {
             file_path,
             arrangement,
-        } => Some(use_file(file_path, arrangement.as_deref())),
-        ReadyAction::RestyleExisting {
-            file_path,
-            arrangement,
-            ..
-        } => arrangement.as_ref().map(|arrangement| DecisionOption {
-            summary: format!(
-                "restyle {} with arrangement '{arrangement}'",
-                file_name(file_path)
-            ),
-            choice: DecisionChoice::Action(EntryOverrideAction::SelectArrangement {
-                arrangement: arrangement.clone(),
-            }),
+        } => Some(EntryOverrideAction::UseExisting {
+            file_path: file_path.display().to_string(),
+            arrangement: arrangement.clone(),
         }),
-        ReadyAction::EditDescription { file_path, .. } => Some(DecisionOption {
-            summary: format!("render the description into {}", file_name(file_path)),
-            choice: DecisionChoice::Action(EntryOverrideAction::EditDescription {
+        // Selecting the proposed arrangement keeps the restyle; a restyle
+        // with no arrangement has no decision that restates it.
+        ReadyAction::RestyleExisting { arrangement, .. } => {
+            arrangement
+                .as_ref()
+                .map(|arrangement| EntryOverrideAction::SelectArrangement {
+                    arrangement: arrangement.clone(),
+                })
+        }
+        ReadyAction::EditDescription { file_path, .. } => {
+            Some(EntryOverrideAction::EditDescription {
                 file_path: file_path.display().to_string(),
                 background: None,
-            }),
-        }),
+            })
+        }
         ReadyAction::GenerateDescription { .. }
         | ReadyAction::GenerateScripture { .. }
-        | ReadyAction::GenerateTitle { .. } => Some(DecisionOption {
-            summary: "generate a new presentation as proposed".to_string(),
-            choice: DecisionChoice::Action(EntryOverrideAction::GenerateNew { background: None }),
-        }),
-    }
-}
-
-fn use_file(file: &Path, arrangement: Option<&str>) -> DecisionOption {
-    DecisionOption {
-        summary: arrangement.map_or_else(
-            || format!("use {}", file.display()),
-            |arrangement| format!("use {} with arrangement '{arrangement}'", file.display()),
-        ),
-        choice: DecisionChoice::Action(EntryOverrideAction::UseExisting {
-            file_path: file.display().to_string(),
-            arrangement: arrangement.map(ToString::to_string),
-        }),
+        | ReadyAction::GenerateTitle { .. } => {
+            Some(EntryOverrideAction::GenerateNew { background: None })
+        }
     }
 }
 
@@ -119,13 +117,6 @@ fn existing_file(action: &ReadyAction) -> Option<&Path> {
         | ReadyAction::GenerateScripture { .. }
         | ReadyAction::GenerateTitle { .. } => None,
     }
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name().map_or_else(
-        || path.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    )
 }
 
 /// Whether the plan takes this option as a decision.

@@ -29,6 +29,7 @@ use super::schema::{
     ScriptureResponse, SearchLibraryArgs, SongResponse, WriteProjectConfigArgs,
 };
 use super::{build_err, mcp_err, ProFlowServer};
+use crate::workstation::RecordedBuild;
 
 impl ProFlowServer {
     fn library_catalog(&self) -> Result<MutexGuard<'_, LibraryCatalog>, rmcp::ErrorData> {
@@ -256,7 +257,7 @@ impl ProFlowServer {
 
     /// Preview the proposed playlist for a service plan.
     #[tool(
-        description = "Resolve a plan's title, date, and service type from Planning Center, record the given playlist name, skip, entry override, package-mode, and media choices as the plan's decisions (replacing any recorded earlier), then return the exact effective playlist for review. Fully resolved previews render and verify every native artifact and return a preview_revision. Previews with uncertain items return open_decisions and no revision, and cannot be built until re-previewed with decisions."
+        description = "Resolve a plan's title, date, and service type from Planning Center, record the given playlist name, skip, entry override, package-mode, and media choices as the plan's decisions (replacing any recorded earlier), then return the exact effective playlist for review. Fully resolved previews render and verify every native artifact and return a preview_revision. Previews with uncertain items return open_decisions and no revision, and cannot be built until re-previewed with decisions. Each open decision lists options, ranked by what was chosen for the same question before. A question the operator set a default for is answered with it and reported in applied_defaults."
     )]
     async fn preview_playlist(
         &self,
@@ -264,10 +265,19 @@ impl ProFlowServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let plan_id = args.plan_id.clone();
         let service_name = args.service_name.clone();
+        let decisions = recorded_decisions(args);
         self.workstation
-            .record_decisions(&plan_id, &recorded_decisions(args))
+            .record_decisions(&plan_id, &decisions)
             .map_err(build_err)?;
-        let reviewed = self
+        self.workstation
+            .remember_decisions(&plan_id, &decisions)
+            .map_err(build_err)?;
+        let RecordedBuild {
+            review: reviewed,
+            open_decisions,
+            applied_defaults,
+            refused_defaults,
+        } = self
             .workstation
             .build_recorded(&plan_id, service_name.as_deref())
             .await
@@ -296,7 +306,6 @@ impl ProFlowServer {
             summary,
         };
 
-        let open_decisions = reviewed.open_decisions();
         let preview_revision = match reviewed {
             crate::workflow::execute::BuildReview::Prepared(prepared) => Some(prepared.revision()),
             crate::workflow::execute::BuildReview::NeedsReview(_) => None,
@@ -305,6 +314,8 @@ impl ProFlowServer {
         json_result(&ReviewedPreviewResponse {
             preview_revision,
             open_decisions,
+            applied_defaults,
+            refused_defaults,
             playlist_name,
             package_mode,
             media_assets,

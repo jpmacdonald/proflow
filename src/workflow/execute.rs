@@ -53,7 +53,8 @@ mod run;
 
 pub use decisions::{
     playlist_export_intent, resolve_override_action, DecidedBy, DecisionChoice, DecisionError,
-    DecisionOption, EntryOverrideAction, ItemDecision, MediaDecision, ReviewDecisions,
+    DecisionKind, DecisionOption, EntryOverrideAction, ItemDecision, MediaDecision, Remembered,
+    ReviewDecisions,
 };
 pub use overrides::{EntryOverride, OverrideAction, OverrideSlideType};
 pub use presentation_contract::PresentationContractError;
@@ -140,6 +141,17 @@ pub enum BuildServiceError {
     /// A review state claimed to be blocked but contained no unresolved plan.
     #[error("non-executable review contains no unresolved plan")]
     ReviewStateInvariant,
+    /// The remembered decisions could not be read or written.
+    #[error(transparent)]
+    DecisionMemory(#[from] crate::workflow::decision_memory::DecisionMemoryError),
+    /// A default was requested for an item the latest build did not ask about.
+    #[error(
+        "item '{item}' was not an open decision of the latest build, so there is no question to set a default for; build first"
+    )]
+    NoOpenQuestion {
+        /// Item named by the decision.
+        item: String,
+    },
     /// The plan's recorded decisions could not be read or applied.
     #[error(transparent)]
     Decisions(#[from] DecisionError),

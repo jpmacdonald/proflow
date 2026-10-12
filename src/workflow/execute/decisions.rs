@@ -118,6 +118,8 @@ pub enum DecidedBy {
     Operator,
     /// A configured rule, recorded for the reader.
     Rule,
+    /// A default the operator set for this question, applied by a build.
+    Default,
 }
 
 /// The decision for one plan item.
@@ -171,13 +173,81 @@ impl ItemDecision {
 }
 
 /// What an operator decides for one plan item.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionChoice {
     /// Leave the item out of the playlist.
     Skip,
     /// Do this for the item.
     Action(EntryOverrideAction),
+}
+
+impl std::fmt::Display for DecisionChoice {
+    /// What the choice does, in a few words.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let with_background = |background: &Option<BackgroundId>| {
+            background
+                .as_ref()
+                .map_or_else(String::new, |id| format!(" with background '{id}'"))
+        };
+        match self {
+            Self::Skip => formatter.write_str("leave it out of the playlist"),
+            Self::Action(EntryOverrideAction::UseExisting {
+                file_path,
+                arrangement: None,
+            }) => write!(formatter, "use {file_path}"),
+            Self::Action(EntryOverrideAction::UseExisting {
+                file_path,
+                arrangement: Some(arrangement),
+            }) => write!(
+                formatter,
+                "use {file_path} with arrangement '{arrangement}'"
+            ),
+            Self::Action(EntryOverrideAction::SelectArrangement { arrangement }) => {
+                write!(formatter, "use arrangement '{arrangement}'")
+            }
+            Self::Action(EntryOverrideAction::GenerateNew { background }) => write!(
+                formatter,
+                "generate a new presentation{}",
+                with_background(background)
+            ),
+            Self::Action(EntryOverrideAction::EditDescription {
+                file_path,
+                background,
+            }) => write!(
+                formatter,
+                "render the description into {file_path}{}",
+                with_background(background)
+            ),
+            Self::Action(EntryOverrideAction::SetBackground { background }) => {
+                write!(formatter, "use background '{background}'")
+            }
+        }
+    }
+}
+
+/// What kind of question an open decision is. With the item's title it
+/// identifies the same question when it comes up for another plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionKind {
+    /// Several library files could be the item.
+    WhichFile,
+    /// The item's file is known; its arrangement is not.
+    WhichArrangement,
+    /// The review has a complete proposal that policy does not let it take.
+    ConfirmProposal,
+    /// The review found nothing to propose.
+    Unresolved,
+}
+
+/// How often and how recently a choice was made for the same question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Remembered {
+    /// How many times it was chosen.
+    pub times: u32,
+    /// When it was last chosen.
+    pub last: chrono::DateTime<chrono::Utc>,
 }
 
 /// One choice a review offers for an open decision.
@@ -187,16 +257,39 @@ pub struct DecisionOption {
     pub summary: String,
     /// The decision it records.
     pub choice: DecisionChoice,
+    /// Earlier use of this choice for the same question, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remembered: Option<Remembered>,
+}
+
+impl DecisionOption {
+    /// An option with no history yet.
+    #[must_use]
+    pub fn new(choice: DecisionChoice) -> Self {
+        Self {
+            summary: choice.to_string(),
+            choice,
+            remembered: None,
+        }
+    }
 }
 
 impl ReviewDecisions {
     /// Record `choice` as the decision for `item`, replacing any earlier
     /// decision for it. `question` is kept for whoever reads the file.
-    pub fn decide(&mut self, item: &str, question: Option<String>, choice: DecisionChoice) {
+    pub fn decide(
+        &mut self,
+        item: &str,
+        question: Option<String>,
+        choice: DecisionChoice,
+        decided_by: DecidedBy,
+        at: chrono::DateTime<chrono::Utc>,
+    ) {
         self.decisions.retain(|decision| decision.item != item);
         let mut decision = ItemDecision {
             question,
-            at: Some(chrono::Utc::now()),
+            decided_by,
+            at: Some(at),
             ..ItemDecision::for_item(item.to_string())
         };
         match choice {
@@ -287,6 +380,11 @@ impl ReviewDecisions {
             path: path.to_path_buf(),
             message: error.to_string(),
         })
+    }
+
+    /// Remove the decision for `item`, if one is recorded.
+    pub fn forget(&mut self, item: &str) {
+        self.decisions.retain(|decision| decision.item != item);
     }
 
     /// Render these decisions as the text of a decisions file.

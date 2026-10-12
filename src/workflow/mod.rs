@@ -9,6 +9,7 @@ pub mod build_dir;
 pub mod classify;
 mod classify_matching;
 mod classify_preview;
+pub mod decision_memory;
 pub(crate) mod description_parser;
 pub mod execute;
 mod library_search;

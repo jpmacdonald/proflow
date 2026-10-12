@@ -208,6 +208,20 @@ Dates are the day the work landed on `main`.
   `--background`). MCP `preview_playlist` returns the same options inside
   `open_decisions`. An item with no proposal and no candidate file still
   offers only leaving it out; choosing a file for it is `--use <file>`.
+- Remembered choices and defaults (`src/workflow/decision_memory.rs`,
+  `<data root>/decision-memory.toml`). A question is an item title and a
+  `DecisionKind` (`which_file`, `which_arrangement`, `confirm_proposal`,
+  `unresolved`). A decision that answers a question the plan's latest build
+  asked is remembered, by `proflow decide` and by MCP `preview_playlist`
+  alike; later builds list earlier choices first, most recent first, with a
+  count and date, and still ask. `proflow decide --default` also makes the
+  choice the question's default: a later build records it in that plan's
+  `review.toml` as `decided_by = "default"`, reviews again, and reports it
+  (`applied_defaults` in the MCP response). A default the plan refuses is
+  removed from `review.toml` again and reported (`refused_defaults`). The
+  questions a build leaves open are kept in
+  `builds/<plan id>/open-questions.toml` so a later decision can be matched
+  to its question without fetching the plan.
 - Handler-level tests for `proflow build` / `commit` and for the MCP
   `preview_playlist`, `build_service` and `read_playlist` tools. They run a
   whole `Workstation` over a temporary directory against a local stand-in
@@ -279,6 +293,13 @@ Dates are the day the work landed on `main`.
   directory name, which catches accidents and stale builds, not someone who
   can write the data root and reseal a stage. The MCP revision narrows that:
   it must match the rendered stage.
+- Defaults have no helper yet. Nothing lists them, clears them, or reviews
+  whether one still deserves to be a default (how often it is overridden or
+  refused); `decision-memory.toml` is edited by hand. Remembered answers are
+  never pruned. A build with several defaults reviews the plan once more per
+  round of defaults, each a Planning Center fetch.
+- A question is matched across plans by item title and kind only. Two
+  different songs with the same title are one question.
 - `proflow build` and MCP `preview_playlist` share one `review.toml` per
   plan. A preview replaces the file with its arguments, including with no
   decisions when it is given none.

@@ -187,7 +187,8 @@ proflow commit --plan <plan id | next> [--service <service type>]
 ([docs/review-decisions.md](docs/review-decisions.md)) and renders and
 verifies it. If an item needs a decision, it lists every one with the choices
 it can offer and exits with status 2. Each choice is printed as the `decide`
-command that records it. `commit` installs the verified build. None of them
+command that records it. Choices made for the same question in earlier plans
+are listed first, and `decide --default` makes one the standing answer. `commit` installs the verified build. None of them
 prompts; status 0 means the step was done and 1 means an error.
 
 Portable packages embed reviewed presentations and available local media.

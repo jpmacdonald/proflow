@@ -10,7 +10,7 @@ use proflow_propresenter::playlist::{
 use proflow_propresenter::PresentationSize;
 
 use super::build_stages::ReviewedDecisions;
-use super::decisions::DecisionOption;
+use super::decisions::{DecisionKind, DecisionOption};
 use super::overrides::resolve_requested_plans;
 use super::receipt::receipt_path_for_playlist;
 use super::request::{BoundBuildRequest, BuildRequest, RequestError};
@@ -49,6 +49,8 @@ pub struct OpenDecision {
     pub title: String,
     /// Why the item could not be resolved.
     pub question: String,
+    /// What kind of question this is.
+    pub kind: DecisionKind,
     /// Choices that are valid for this item as the plan and library stand.
     /// Leaving the item out is always the last one.
     pub options: Vec<DecisionOption>,
@@ -59,8 +61,8 @@ pub struct OpenDecision {
 pub struct NeedsReviewBuildRequest {
     request: ReviewedRequest,
     plans: Vec<ResolvedItemPlan>,
-    /// Choices for each plan that needs review, in plan order.
-    options: Vec<Vec<DecisionOption>>,
+    /// Kind and choices for each plan that needs review, in plan order.
+    options: Vec<(DecisionKind, Vec<DecisionOption>)>,
 }
 
 /// One fully resolved review whose native artifacts are verified on disk.
@@ -231,10 +233,11 @@ impl BuildReview {
                 .iter()
                 .filter(|plan| plan.needs_review())
                 .zip(&review.options)
-                .map(|(plan, options)| OpenDecision {
+                .map(|(plan, (kind, options))| OpenDecision {
                     item: plan.output_key.to_string(),
                     title: plan.pco_title.clone(),
                     question: plan.reason.clone(),
+                    kind: *kind,
                     options: options.clone(),
                 })
                 .collect(),

@@ -19,11 +19,37 @@ use crate::config::Config;
 use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
 use crate::planning_center::PlanningCenterClient;
 use crate::project_config::load_project_config;
+use crate::workflow::decision_memory::{DecisionMemory, OpenQuestions};
 use crate::workflow::execute::{
-    BuildRequest, BuildReview, BuildServiceError, DecisionChoice, RenderAssetSnapshot,
-    RequestError, ReviewDecisions, ServiceBuildExecutor,
+    BuildRequest, BuildReview, BuildServiceError, DecidedBy, DecisionChoice, OpenDecision,
+    RenderAssetSnapshot, RequestError, ReviewDecisions, ServiceBuildExecutor,
 };
 use crate::workflow::report::BuildServiceResult;
+
+/// A plan reviewed with its recorded decisions and remembered defaults.
+#[derive(Debug)]
+pub struct RecordedBuild {
+    /// The review, prepared when no decision is open.
+    pub review: BuildReview,
+    /// Every decision still open, its choices ranked by earlier use.
+    pub open_decisions: Vec<OpenDecision>,
+    /// Defaults this build recorded as decisions.
+    pub applied_defaults: Vec<AppliedDefault>,
+    /// Defaults the plan did not accept; their questions are open or were
+    /// answered some other way.
+    pub refused_defaults: Vec<AppliedDefault>,
+}
+
+/// A remembered default and the item it was for.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AppliedDefault {
+    /// Output key of the plan item.
+    pub item: String,
+    /// The item's Planning Center title.
+    pub title: String,
+    /// The default choice.
+    pub choice: DecisionChoice,
+}
 
 /// How the `ProPresenter` workspace root is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,14 +209,86 @@ impl Workstation {
     /// The file is the whole request: answering a question there is what
     /// makes the next review resolve it. `service_name`, when given, must be
     /// the plan's service type.
+    ///
+    /// An open question the operator set a default for is answered with that
+    /// default, recorded in `review.toml` as decided by `default`, and the
+    /// plan is reviewed again. A default the plan does not accept is taken
+    /// back and reported. The questions still open are ranked by what was
+    /// chosen for them before.
     pub async fn build_recorded(
         &self,
         plan_id: &str,
         service_name: Option<&str>,
-    ) -> Result<BuildReview, BuildServiceError> {
-        let mut request = self.executor().recorded_request(plan_id)?;
-        request.service_name = service_name.map(ToString::to_string);
-        self.review_service_request(request).await
+    ) -> Result<RecordedBuild, BuildServiceError> {
+        let executor = self.executor();
+        let decisions_file = executor.review_decisions_path(plan_id)?;
+        let memory = DecisionMemory::read(&self.decision_memory_path())?;
+        let mut applied = Vec::new();
+        let mut refused = Vec::new();
+        let mut pending: Vec<AppliedDefault> = Vec::new();
+        loop {
+            let mut request = executor.recorded_request(plan_id)?;
+            request.service_name = service_name.map(ToString::to_string);
+            let review = match self.review_service_request(request).await {
+                Ok(review) => review,
+                Err(error) if pending.is_empty() => return Err(error),
+                Err(_) => {
+                    // The defaults just recorded made the plan unreviewable.
+                    let mut decisions = ReviewDecisions::read(&decisions_file)?;
+                    for default in &pending {
+                        decisions.forget(&default.item);
+                    }
+                    decisions.write(&decisions_file)?;
+                    refused.append(&mut pending);
+                    continue;
+                }
+            };
+            applied.append(&mut pending);
+            let mut open_decisions = review.open_decisions();
+            let untried = |decision: &&OpenDecision| {
+                !applied
+                    .iter()
+                    .chain(&refused)
+                    .any(|default: &AppliedDefault| default.item == decision.item)
+            };
+            let defaults = open_decisions
+                .iter()
+                .filter(untried)
+                .filter_map(|decision| {
+                    Some(AppliedDefault {
+                        item: decision.item.clone(),
+                        title: decision.title.clone(),
+                        choice: memory.default_for(decision)?.clone(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if defaults.is_empty() {
+                for decision in &mut open_decisions {
+                    memory.rank(decision);
+                }
+                OpenQuestions::of(&open_decisions).write(&OpenQuestions::path(&decisions_file))?;
+                return Ok(RecordedBuild {
+                    review,
+                    open_decisions,
+                    applied_defaults: applied,
+                    refused_defaults: refused,
+                });
+            }
+            let mut decisions = ReviewDecisions::read(&decisions_file)?;
+            for default in &defaults {
+                decisions.decide(
+                    &default.item,
+                    None,
+                    default.choice.clone(),
+                    DecidedBy::Default,
+                    chrono::Utc::now(),
+                );
+            }
+            match self.record_decisions(plan_id, &decisions) {
+                Ok(()) => pending = defaults,
+                Err(_) => refused.extend(defaults),
+            }
+        }
     }
 
     /// Fetch the plan again and commit the verified build of exactly what it,
@@ -233,6 +331,10 @@ impl Workstation {
     /// Record one decision for `item` in the plan's `review.toml`, replacing
     /// any earlier decision for that item, and return the file.
     ///
+    /// If the plan's latest build asked about `item`, the choice is
+    /// remembered for that question, and with `as_default` it becomes what
+    /// later builds choose for the question without asking.
+    ///
     /// The plan is not fetched: an item the plan does not have is reported by
     /// the next build.
     pub fn decide(
@@ -240,12 +342,63 @@ impl Workstation {
         plan_id: &str,
         item: &str,
         choice: DecisionChoice,
+        as_default: bool,
     ) -> Result<PathBuf, BuildServiceError> {
         let file = self.executor().review_decisions_path(plan_id)?;
+        let asked = OpenQuestions::read(&OpenQuestions::path(&file))?;
+        let question = asked.asked_by(item);
+        if as_default && question.is_none() {
+            return Err(BuildServiceError::NoOpenQuestion {
+                item: item.to_string(),
+            });
+        }
+        let now = chrono::Utc::now();
         let mut decisions = ReviewDecisions::read(&file)?;
-        decisions.decide(item, None, choice);
+        decisions.decide(item, None, choice.clone(), DecidedBy::Operator, now);
         self.record_decisions(plan_id, &decisions)?;
+        if let Some(question) = question {
+            let memory_file = self.decision_memory_path();
+            let mut memory = DecisionMemory::read(&memory_file)?;
+            memory.remember(&question.title, question.kind, &choice, now);
+            if as_default {
+                memory.set_default(&question.title, question.kind, Some(choice));
+            }
+            memory.write(&memory_file)?;
+        }
         Ok(file)
+    }
+
+    /// Remember every decision in `decisions` that answers a question the
+    /// plan's latest build asked. Decisions for other items are not history.
+    pub fn remember_decisions(
+        &self,
+        plan_id: &str,
+        decisions: &ReviewDecisions,
+    ) -> Result<(), BuildServiceError> {
+        let file = self.executor().review_decisions_path(plan_id)?;
+        let asked = OpenQuestions::read(&OpenQuestions::path(&file))?;
+        let memory_file = self.decision_memory_path();
+        let mut memory = DecisionMemory::read(&memory_file)?;
+        let before = memory.clone();
+        let now = chrono::Utc::now();
+        for decision in &decisions.decisions {
+            let choice = match (&decision.action, decision.skip) {
+                (_, true) => DecisionChoice::Skip,
+                (Some(action), false) => DecisionChoice::Action(action.clone()),
+                (None, false) => continue,
+            };
+            if let Some(question) = asked.asked_by(&decision.item) {
+                memory.remember(&question.title, question.kind, &choice, now);
+            }
+        }
+        if memory != before {
+            memory.write(&memory_file)?;
+        }
+        Ok(())
+    }
+
+    fn decision_memory_path(&self) -> PathBuf {
+        DecisionMemory::path(self.render_assets.locations().project_data_root())
     }
 
     /// The upcoming plan that is scheduled soonest, optionally among plans of

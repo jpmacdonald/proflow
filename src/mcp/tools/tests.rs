@@ -150,3 +150,31 @@ async fn a_malformed_preview_is_the_callers_error_and_records_nothing() {
         "refused decisions leave the recorded ones as they were"
     );
 }
+
+#[tokio::test]
+async fn a_decision_given_to_a_preview_is_remembered_when_it_answers_an_open_question() {
+    let (server, station) = server();
+    server
+        .preview_playlist(arguments(json!({ "plan_id": PLAN_ID })))
+        .await
+        .expect("preview that leaves the item open");
+    server
+        .preview_playlist(arguments(json!({
+            "plan_id": PLAN_ID,
+            "skip_output_keys": [ITEM]
+        })))
+        .await
+        .expect("preview that answers it");
+
+    let asked_again = body(
+        &server
+            .preview_playlist(arguments(json!({ "plan_id": PLAN_ID })))
+            .await
+            .expect("preview with no decisions"),
+    );
+
+    let first = &asked_again["open_decisions"][0]["options"][0];
+    assert_eq!(first["choice"], "skip");
+    assert_eq!(first["remembered"]["times"], 1);
+    assert!(station.memory_file().is_file());
+}

@@ -108,6 +108,11 @@ impl TestSite {
     pub fn installed_playlists(&self) -> usize {
         installed_playlists(self.root.path())
     }
+
+    /// The data root's decision memory.
+    pub fn memory_file(&self) -> PathBuf {
+        self.root.path().join("data/decision-memory.toml")
+    }
 }
 
 fn decisions_file(root: &Path) -> PathBuf {

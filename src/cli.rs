@@ -17,10 +17,10 @@ use std::path::PathBuf;
 
 use crate::project_config::BackgroundId;
 use crate::workflow::execute::{
-    BuildReview, BuildServiceError, DecisionChoice, EntryOverrideAction, OpenDecision,
+    BuildServiceError, DecisionChoice, EntryOverrideAction, OpenDecision, Remembered,
 };
 use crate::workflow::report::BuildServiceResult;
-use crate::workstation::{WorkspaceDiscovery, Workstation};
+use crate::workstation::{AppliedDefault, RecordedBuild, WorkspaceDiscovery, Workstation};
 
 /// How to call the command.
 pub const USAGE: &str = "\
@@ -44,6 +44,8 @@ usage: proflow build  --plan <id|next> [--service <service type>]
                                          render the description into this file
     --background <id>                    keep the proposed render, change its
                                          background
+  --default   also choose this for the same question in later plans, without
+              being asked; the build reports each default it applies
 
   --plan next             the soonest upcoming plan
   --service <name>        the plan's service type; required with `next` when
@@ -62,6 +64,8 @@ pub enum Command {
         item: String,
         /// What is decided for it.
         choice: DecisionChoice,
+        /// Also choose this for the same question from now on.
+        as_default: bool,
     },
     /// Install the verified build.
     Commit,
@@ -148,6 +152,7 @@ impl Invocation {
         let mut workspace = None;
         let mut item = None;
         let mut decision = DecisionFlags::default();
+        let mut as_default = None;
         while let Some(argument) = arguments.next() {
             let mut value = || arguments.next();
             match argument.as_str() {
@@ -159,6 +164,7 @@ impl Invocation {
                     Some(WorkspaceDiscovery::ConfiguredOnly),
                 )?,
                 "--item" if deciding => set_once(&mut item, "--item", value())?,
+                "--default" if deciding => set_once(&mut as_default, "--default", Some(()))?,
                 "--skip" if deciding => set_once(&mut decision.skip, "--skip", Some(()))?,
                 "--generate" if deciding => {
                     set_once(&mut decision.generate, "--generate", Some(()))?;
@@ -181,6 +187,7 @@ impl Invocation {
                 _ => Command::Decide {
                     item: item.ok_or(UsageError::MissingItem)?,
                     choice: decision.into_choice()?,
+                    as_default: as_default.is_some(),
                 },
             },
             plan: match plan.ok_or(UsageError::MissingPlan)? {
@@ -272,6 +279,41 @@ fn set_once<T>(
     Ok(())
 }
 
+/// The remembered defaults one build applied and refused.
+#[derive(Debug, Default)]
+pub struct Defaults {
+    /// Recorded as decisions by this build.
+    pub applied: Vec<AppliedDefault>,
+    /// Not accepted by the plan.
+    pub refused: Vec<AppliedDefault>,
+}
+
+impl fmt::Display for Defaults {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (heading, defaults) in [
+            ("Answered with your default", &self.applied),
+            (
+                "Your default no longer fits and was not used",
+                &self.refused,
+            ),
+        ] {
+            if defaults.is_empty() {
+                continue;
+            }
+            writeln!(formatter, "{heading}:")?;
+            for default in defaults {
+                writeln!(
+                    formatter,
+                    "  {}  {}: {}",
+                    default.item, default.title, default.choice
+                )?;
+            }
+            writeln!(formatter)?;
+        }
+        Ok(())
+    }
+}
+
 /// What a command did.
 #[derive(Debug)]
 pub enum Outcome {
@@ -285,6 +327,8 @@ pub enum Outcome {
         decisions: Vec<OpenDecision>,
         /// File to record them in.
         decisions_file: PathBuf,
+        /// Remembered defaults this build applied and refused.
+        defaults: Defaults,
     },
     /// The plan is rendered and verified; nothing is installed.
     Built {
@@ -296,6 +340,8 @@ pub enum Outcome {
         result: Box<BuildServiceResult>,
         /// Directory holding the build.
         build_directory: PathBuf,
+        /// Remembered defaults this build applied and refused.
+        defaults: Defaults,
     },
     /// One decision is recorded.
     Decided {
@@ -305,6 +351,8 @@ pub enum Outcome {
         item: String,
         /// File it was recorded in.
         decisions_file: PathBuf,
+        /// Whether it is now the default for its question.
+        as_default: bool,
     },
     /// The verified build is installed.
     Committed {
@@ -325,19 +373,26 @@ impl Outcome {
         }
     }
 
-    fn from_review(
-        review: BuildReview,
+    fn from_build(
+        build: RecordedBuild,
         decisions_file: PathBuf,
     ) -> Result<Self, BuildServiceError> {
+        let RecordedBuild {
+            review,
+            open_decisions: decisions,
+            applied_defaults: applied,
+            refused_defaults: refused,
+        } = build;
+        let defaults = Defaults { applied, refused };
         let plan_id = review.plan_id().to_string();
         let playlist_name = review.playlist_name().to_string();
-        let decisions = review.open_decisions();
         if !decisions.is_empty() {
             return Ok(Self::NeedsDecisions {
                 plan_id,
                 playlist_name,
                 decisions,
                 decisions_file,
+                defaults,
             });
         }
         let prepared = review.into_prepared()?;
@@ -346,6 +401,7 @@ impl Outcome {
             playlist_name,
             build_directory: prepared.build_directory().to_path_buf(),
             result: Box::new(prepared.into_result()),
+            defaults,
         })
     }
 }
@@ -361,12 +417,17 @@ pub async fn run(
         PlanSelector::Next => workstation.next_plan_id(service).await?,
     };
     match &invocation.command {
-        Command::Decide { item, choice } => Ok(Outcome::Decided {
-            decisions_file: workstation.decide(&plan_id, item, choice.clone())?,
+        Command::Decide {
+            item,
+            choice,
+            as_default,
+        } => Ok(Outcome::Decided {
+            decisions_file: workstation.decide(&plan_id, item, choice.clone(), *as_default)?,
             item: item.clone(),
+            as_default: *as_default,
             plan_id,
         }),
-        Command::Build => Outcome::from_review(
+        Command::Build => Outcome::from_build(
             workstation.build_recorded(&plan_id, service).await?,
             workstation.executor().review_decisions_path(&plan_id)?,
         ),
@@ -480,7 +541,9 @@ impl fmt::Display for Outcome {
                 playlist_name,
                 decisions,
                 decisions_file,
+                defaults,
             } => {
+                write!(formatter, "{defaults}")?;
                 writeln!(
                     formatter,
                     "Plan {plan_id} \"{playlist_name}\" needs {} decision(s) before it can be built.\n",
@@ -490,7 +553,15 @@ impl fmt::Display for Outcome {
                     writeln!(formatter, "  {}  {}", decision.item, decision.title)?;
                     writeln!(formatter, "      {}", decision.question)?;
                     for option in &decision.options {
-                        writeln!(formatter, "      - {}:", option.summary)?;
+                        match option.remembered {
+                            Some(Remembered { times, last }) => writeln!(
+                                formatter,
+                                "      - {} (chosen {times}x, last {}):",
+                                option.summary,
+                                last.format("%Y-%m-%d")
+                            )?,
+                            None => writeln!(formatter, "      - {}:", option.summary)?,
+                        }
                         writeln!(
                             formatter,
                             "          {}",
@@ -505,7 +576,7 @@ impl fmt::Display for Outcome {
                 }
                 writeln!(
                     formatter,
-                    "Run one command for each item, then build again. `proflow decide` takes other\ndecisions too (see docs/review-decisions.md); all of them are recorded in\n{}",
+                    "Run one command for each item, then build again. Add --default to a command to\nhave that choice made for the same question in later plans. `proflow decide`\ntakes other decisions too (see docs/review-decisions.md); all of them are\nrecorded in {}",
                     decisions_file.display()
                 )
             }
@@ -513,12 +584,19 @@ impl fmt::Display for Outcome {
                 plan_id,
                 item,
                 decisions_file,
+                as_default,
             } => {
                 writeln!(
                     formatter,
                     "Recorded the decision for {item} in {}.",
                     decisions_file.display()
                 )?;
+                if *as_default {
+                    writeln!(
+                        formatter,
+                        "It is now the default for this question in later plans."
+                    )?;
+                }
                 writeln!(formatter, "When every item is decided:\n")?;
                 writeln!(formatter, "  proflow build --plan {plan_id}")
             }
@@ -527,7 +605,9 @@ impl fmt::Display for Outcome {
                 playlist_name,
                 result,
                 build_directory,
+                defaults,
             } => {
+                write!(formatter, "{defaults}")?;
                 writeln!(
                     formatter,
                     "Plan {plan_id} \"{playlist_name}\" is built and verified: {}.",

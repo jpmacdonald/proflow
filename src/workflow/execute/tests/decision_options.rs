@@ -56,6 +56,8 @@ fn decided(
         &decision.item,
         Some(decision.question.clone()),
         choice.clone(),
+        DecidedBy::Operator,
+        chrono::Utc::now(),
     );
     let mut request = decisions
         .into_request("plan-1", runtime.render_assets.config())
@@ -146,4 +148,124 @@ fn an_item_the_review_has_no_proposal_for_offers_only_leaving_it_out() {
         .expect("one open decision");
 
     assert_eq!(summaries(&decision), ["leave it out of the playlist"]);
+}
+
+fn proposing(file: &Path) -> ResolvedItemPlan {
+    let mut plan = use_existing_plan("pco:item:a", file.to_path_buf());
+    plan.require_review("Configured to require review".to_string());
+    plan
+}
+
+fn offered(runtime: &TestRuntime, plan: ResolvedItemPlan) -> OpenDecision {
+    let review = runtime
+        .executor()
+        .review_build_request(
+            reviewed_request("Decided"),
+            &[plan],
+            proflow_propresenter::PresentationSize::FULL_HD,
+        )
+        .expect("review");
+    let [decision] = review
+        .open_decisions()
+        .try_into()
+        .expect("one open decision");
+    decision
+}
+
+#[test]
+fn a_proposal_held_for_review_is_offered_as_it_stands_unless_the_plan_would_refuse_it() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let existing = runtime
+        .locations()
+        .presentation_library()
+        .join("Doxology.pro");
+    write_song_with_arrangements(&existing, &[]);
+
+    let decision = offered(&runtime, proposing(&existing));
+    assert_eq!(decision.kind, DecisionKind::ConfirmProposal);
+    assert_eq!(
+        summaries(&decision),
+        [
+            format!("use {}", existing.display()).as_str(),
+            "leave it out of the playlist"
+        ]
+    );
+
+    // The proposed file is gone, so taking the proposal would be refused.
+    let missing = runtime.locations().presentation_library().join("Gone.pro");
+    let decision = offered(&runtime, proposing(&missing));
+    assert_eq!(summaries(&decision), ["leave it out of the playlist"]);
+}
+
+#[test]
+fn each_kind_of_question_is_named() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let ambiguous = song_runtime(
+        root.path(),
+        &[
+            ("Amazing Grace.pro", &[]),
+            ("Archive/Amazing Grace.pro", &[]),
+        ],
+    );
+    let review = review_song(&ambiguous, reviewed_request("Decided"), None);
+    assert_eq!(review.open_decisions()[0].kind, DecisionKind::WhichFile);
+
+    let other_root = tempfile::tempdir().expect("temporary root");
+    let arranged = song_runtime(
+        other_root.path(),
+        &[(
+            "Amazing Grace.pro",
+            &[("Short", Some("11111111-1111-4111-8111-111111111111"))],
+        )],
+    );
+    let review = review_song(&arranged, reviewed_request("Decided"), Some("Evening"));
+    assert_eq!(
+        review.open_decisions()[0].kind,
+        DecisionKind::WhichArrangement
+    );
+
+    let empty_root = tempfile::tempdir().expect("temporary root");
+    let empty = song_runtime(empty_root.path(), &[]);
+    let review = review_song(&empty, reviewed_request("Decided"), None);
+    assert_eq!(review.open_decisions()[0].kind, DecisionKind::Unresolved);
+}
+
+#[test]
+fn deciding_again_replaces_the_earlier_decision_and_keeps_who_when_and_why() {
+    let at = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(7);
+    let mut decisions = ReviewDecisions::default();
+    decisions.decide("a", None, DecisionChoice::Skip, DecidedBy::Operator, at);
+    decisions.decide("b", None, DecisionChoice::Skip, DecidedBy::Operator, at);
+    decisions.decide(
+        "a",
+        Some("which file?".to_string()),
+        DecisionChoice::Action(EntryOverrideAction::SelectArrangement {
+            arrangement: "Short".to_string(),
+        }),
+        DecidedBy::Default,
+        at,
+    );
+
+    let [b, a] = decisions.decisions.as_slice() else {
+        panic!("one decision per item: {:?}", decisions.decisions);
+    };
+    assert_eq!((b.item.as_str(), b.skip), ("b", true));
+    assert_eq!(a.item, "a");
+    assert!(!a.skip && a.action.is_some());
+    assert_eq!(a.question.as_deref(), Some("which file?"));
+    assert_eq!(a.decided_by, DecidedBy::Default);
+    assert_eq!(a.at, Some(at));
+
+    decisions.forget("b");
+    assert_eq!(decisions.decisions.len(), 1);
+}
+
+#[test]
+fn a_linked_library_package_without_media_is_a_valid_intent() {
+    use proflow_propresenter::playlist::PlaylistExportMode;
+
+    let intent = playlist_export_intent(PlaylistExportMode::LibraryLinks, Vec::new())
+        .expect("library links carry no media");
+    assert_eq!(intent.mode(), PlaylistExportMode::LibraryLinks);
 }

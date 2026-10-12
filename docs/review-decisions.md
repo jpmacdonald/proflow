@@ -52,6 +52,47 @@ ones a build offers:
 `decide` does not fetch the plan. An item the plan does not have is reported
 by the next build.
 
+## Remembered choices and defaults
+
+Some questions come back. A question is an item's title and what is being
+asked about it (which file, which arrangement, whether to take a proposal, or
+what to do with an item nothing matches), so "Amazing Grace, which file?" is
+the same question in next month's plan.
+
+**Remembered.** When you answer a question a build asked, the choice is
+remembered. The next time the question is asked, the choices made before are
+listed first, most recent first, with how often and when:
+
+```text
+      - use /Library/Amazing Grace.pro (chosen 3x, last 2026-10-05):
+```
+
+The question is still asked. Nothing is chosen for you.
+
+**Default.** Add `--default` to a `decide` command to have that choice made
+for the same question from then on:
+
+```bash
+proflow decide --plan 12345 --item pco:101:main --use '/Library/Amazing Grace.pro' --default
+```
+
+A later build that meets the question records the default in that plan's
+`review.toml`, marked `decided_by = "default"`, and reports it:
+
+```text
+Answered with your default:
+  pco:101:main  Amazing Grace: use /Library/Amazing Grace.pro
+```
+
+A default the plan does not accept (the file is gone, for example) is taken
+back out of `review.toml` and reported, and the question is asked as usual.
+To override a default for one plan, run `decide` for that item; a decision
+recorded for the plan always wins.
+
+Both live in `<PROFLOW_DATA>/decision-memory.toml`. A default can only be set
+for a question the plan's latest build asked. There is no command yet to list
+or clear defaults; remove the `default` table of a question in that file.
+
 ## The file
 
 ```toml

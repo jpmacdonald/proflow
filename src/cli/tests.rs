@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used)]
 
 use super::*;
-use crate::workflow::execute::DecisionOption;
+use crate::workflow::execute::{DecisionKind, DecisionOption};
 use proflow_propresenter::playlist::PlaylistExportMode;
 use proflow_propresenter::text_fit::TextFitContractSummary;
 
@@ -57,6 +57,19 @@ fn a_malformed_command_line_says_what_is_wrong() {
             "expected `build`, `decide` or `commit`, found 'review'",
         ),
         ("build --plan 1 --skip", "unexpected argument '--skip'"),
+        ("build --plan 1 --item a", "unexpected argument '--item'"),
+        ("build --plan 1 --generate", "unexpected argument '--generate'"),
+        ("commit --plan 1 --use f.pro", "unexpected argument '--use'"),
+        ("commit --plan 1 --edit f.pro", "unexpected argument '--edit'"),
+        (
+            "build --plan 1 --arrangement Short",
+            "unexpected argument '--arrangement'",
+        ),
+        (
+            "build --plan 1 --background sermon",
+            "unexpected argument '--background'",
+        ),
+        ("build --plan 1 --default", "unexpected argument '--default'"),
         ("decide --plan 1 --skip", "decide requires --item <item>"),
         (
             "decide --plan 1 --item a",
@@ -182,12 +195,16 @@ fn a_printed_command_quotes_what_a_shell_would_split() {
     );
 }
 
+fn use_file(file: &str) -> DecisionChoice {
+    DecisionChoice::Action(EntryOverrideAction::UseExisting {
+        file_path: file.to_string(),
+        arrangement: None,
+    })
+}
+
 #[test]
 fn open_decisions_exit_two_and_print_the_command_for_each_choice() {
-    let skip = || DecisionOption {
-        summary: "leave it out of the playlist".to_string(),
-        choice: DecisionChoice::Skip,
-    };
+    let skip = || DecisionOption::new(DecisionChoice::Skip);
     let outcome = Outcome::NeedsDecisions {
         plan_id: "12345".to_string(),
         playlist_name: "May 24, 2026 - Sunday Morning".to_string(),
@@ -196,14 +213,16 @@ fn open_decisions_exit_two_and_print_the_command_for_each_choice() {
                 item: "pco:101:main".to_string(),
                 title: "Amazing Grace".to_string(),
                 question: "Song title matches multiple library files".to_string(),
+                kind: DecisionKind::WhichFile,
                 options: vec![
                     DecisionOption {
-                        summary: "use /lib/Amazing Grace.pro".to_string(),
-                        choice: DecisionChoice::Action(EntryOverrideAction::UseExisting {
-                            file_path: "/lib/Amazing Grace.pro".to_string(),
-                            arrangement: None,
+                        remembered: Some(Remembered {
+                            times: 3,
+                            last: chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(20_000),
                         }),
+                        ..DecisionOption::new(use_file("/lib/Amazing Grace.pro"))
                     },
+                    DecisionOption::new(use_file("/lib/Archive/Amazing Grace.pro")),
                     skip(),
                 ],
             },
@@ -211,22 +230,43 @@ fn open_decisions_exit_two_and_print_the_command_for_each_choice() {
                 item: "pco:107:main".to_string(),
                 title: "Announcements".to_string(),
                 question: "no rule matches this item".to_string(),
+                kind: DecisionKind::Unresolved,
                 options: vec![skip()],
             },
         ],
         decisions_file: PathBuf::from("/data/builds/12345/review.toml"),
+        defaults: Defaults {
+            applied: vec![AppliedDefault {
+                item: "pco:103:main".to_string(),
+                title: "Doxology".to_string(),
+                choice: use_file("/lib/Doxology.pro"),
+            }],
+            refused: vec![AppliedDefault {
+                item: "pco:104:main".to_string(),
+                title: "Offertory".to_string(),
+                choice: use_file("/lib/Gone.pro"),
+            }],
+        },
     };
 
     assert_eq!(outcome.exit_code(), 2);
     assert_eq!(
         outcome.to_string(),
         "\
+Answered with your default:
+  pco:103:main  Doxology: use /lib/Doxology.pro
+
+Your default no longer fits and was not used:
+  pco:104:main  Offertory: use /lib/Gone.pro
+
 Plan 12345 \"May 24, 2026 - Sunday Morning\" needs 2 decision(s) before it can be built.
 
   pco:101:main  Amazing Grace
       Song title matches multiple library files
-      - use /lib/Amazing Grace.pro:
+      - use /lib/Amazing Grace.pro (chosen 3x, last 2024-10-04):
           proflow decide --plan 12345 --item pco:101:main --use '/lib/Amazing Grace.pro'
+      - use /lib/Archive/Amazing Grace.pro:
+          proflow decide --plan 12345 --item pco:101:main --use '/lib/Archive/Amazing Grace.pro'
       - leave it out of the playlist:
           proflow decide --plan 12345 --item pco:101:main --skip
 
@@ -235,9 +275,10 @@ Plan 12345 \"May 24, 2026 - Sunday Morning\" needs 2 decision(s) before it can b
       - leave it out of the playlist:
           proflow decide --plan 12345 --item pco:107:main --skip
 
-Run one command for each item, then build again. `proflow decide` takes other
-decisions too (see docs/review-decisions.md); all of them are recorded in
-/data/builds/12345/review.toml
+Run one command for each item, then build again. Add --default to a command to
+have that choice made for the same question in later plans. `proflow decide`
+takes other decisions too (see docs/review-decisions.md); all of them are
+recorded in /data/builds/12345/review.toml
 "
     );
 }
@@ -248,6 +289,7 @@ fn a_recorded_decision_exits_zero_and_points_back_at_the_build() {
         plan_id: "12345".to_string(),
         item: "pco:101:main".to_string(),
         decisions_file: PathBuf::from("/data/builds/12345/review.toml"),
+        as_default: true,
     };
 
     assert_eq!(outcome.exit_code(), 0);
@@ -255,6 +297,7 @@ fn a_recorded_decision_exits_zero_and_points_back_at_the_build() {
         outcome.to_string(),
         "\
 Recorded the decision for pco:101:main in /data/builds/12345/review.toml.
+It is now the default for this question in later plans.
 When every item is decided:
 
   proflow build --plan 12345
@@ -269,6 +312,7 @@ fn a_verified_build_exits_zero_and_says_nothing_is_installed() {
         playlist_name: "May 24, 2026 - Sunday Morning".to_string(),
         result: result(&["'Offertory' has no background"]),
         build_directory: PathBuf::from("/data/builds/12345/ab12"),
+        defaults: Defaults::default(),
     };
 
     assert_eq!(outcome.exit_code(), 0);
@@ -309,6 +353,7 @@ Receipt:  /show/Playlists/May 24.proplaylist.proflow-build.json
 mod handlers {
     use super::*;
     use crate::workstation::test_support::{TestWorkstation, ITEM, PLAN_ID, SERVICE};
+    use crate::workstation::AppliedDefault;
 
     async fn run_line(station: &TestWorkstation, line: &str) -> Result<Outcome, BuildServiceError> {
         run(&station.workstation, &parse(line).expect("command line")).await
@@ -436,5 +481,140 @@ mod handlers {
             run_line(&station, "build --plan plan-1 --service Wednesday").await,
             Err(BuildServiceError::PlanningCenter(_) | BuildServiceError::Request(_))
         ));
+    }
+
+    /// Start over on the plan as if it were next week's: no decisions yet.
+    fn forget_this_plans_decisions(station: &TestWorkstation) {
+        std::fs::remove_file(station.decisions_file()).expect("remove decisions");
+    }
+
+    #[tokio::test]
+    async fn an_earlier_choice_is_remembered_and_ranked_first_but_the_question_is_still_asked() {
+        let station = TestWorkstation::new();
+        run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+        run_line(
+            &station,
+            "decide --plan plan-1 --item pco:item-1:main --skip",
+        )
+        .await
+        .expect("decide");
+        forget_this_plans_decisions(&station);
+
+        let asked_again = run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+
+        let Outcome::NeedsDecisions {
+            decisions,
+            defaults,
+            ..
+        } = &asked_again
+        else {
+            panic!("a remembered choice is not a default: {asked_again:?}");
+        };
+        assert!(defaults.applied.is_empty());
+        assert_eq!(decisions[0].options[0].choice, DecisionChoice::Skip);
+        assert_eq!(
+            decisions[0].options[0]
+                .remembered
+                .map(|remembered| remembered.times),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_default_answers_the_same_question_without_asking_and_says_so() {
+        let station = TestWorkstation::new();
+        run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+        let recorded = run_line(
+            &station,
+            "decide --plan plan-1 --item pco:item-1:main --skip --default",
+        )
+        .await
+        .expect("decide");
+        assert!(matches!(
+            recorded,
+            Outcome::Decided {
+                as_default: true,
+                ..
+            }
+        ));
+        forget_this_plans_decisions(&station);
+
+        let built = run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+
+        let Outcome::Built { defaults, .. } = &built else {
+            panic!("the default answers the only open question: {built:?}");
+        };
+        assert_eq!(
+            defaults.applied,
+            [AppliedDefault {
+                item: ITEM.to_string(),
+                title: "Welcome".to_string(),
+                choice: DecisionChoice::Skip,
+            }]
+        );
+        let recorded = std::fs::read_to_string(station.decisions_file()).expect("decisions");
+        assert!(recorded.contains("decided_by = \"default\""), "{recorded}");
+        run_line(&station, "commit --plan plan-1")
+            .await
+            .expect("a build answered by a default commits like any other");
+    }
+
+    #[tokio::test]
+    async fn a_default_the_plan_refuses_is_taken_back_and_the_question_is_asked() {
+        let station = TestWorkstation::new();
+        run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+        run_line(
+            &station,
+            "decide --plan plan-1 --item pco:item-1:main --use /nowhere/Gone.pro --default",
+        )
+        .await
+        .expect("decide");
+        forget_this_plans_decisions(&station);
+
+        let asked = run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+
+        let Outcome::NeedsDecisions {
+            decisions,
+            defaults,
+            ..
+        } = &asked
+        else {
+            panic!("a refused default leaves the question open: {asked:?}");
+        };
+        assert!(defaults.applied.is_empty());
+        assert_eq!(defaults.refused.len(), 1);
+        assert_eq!(decisions[0].item, ITEM);
+        assert!(!std::fs::read_to_string(station.decisions_file())
+            .expect("decisions")
+            .contains("Gone.pro"));
+    }
+
+    #[tokio::test]
+    async fn a_default_needs_a_question_the_latest_build_asked() {
+        let station = TestWorkstation::new();
+
+        let unasked = run_line(
+            &station,
+            "decide --plan plan-1 --item pco:item-1:main --skip --default",
+        )
+        .await;
+
+        assert!(matches!(
+            unasked,
+            Err(BuildServiceError::NoOpenQuestion { item }) if item == ITEM
+        ));
+        assert!(!station.decisions_file().exists(), "nothing is recorded");
     }
 }

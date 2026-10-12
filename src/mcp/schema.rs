@@ -245,6 +245,12 @@ pub(super) struct ReviewedPreviewResponse {
     /// Every item still waiting for a decision.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) open_decisions: Vec<crate::workflow::execute::OpenDecision>,
+    /// Questions this preview answered with the operator's remembered default.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) applied_defaults: Vec<crate::workstation::AppliedDefault>,
+    /// Remembered defaults the plan did not accept.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) refused_defaults: Vec<crate::workstation::AppliedDefault>,
     pub(super) playlist_name: String,
     pub(super) package_mode: PlaylistExportMode,
     pub(super) media_assets: Vec<ReviewedMediaAssetResponse>,
