@@ -69,8 +69,8 @@ name = "proflow_mcp"
 path = "src/bin/proflow_mcp.rs"
 
 [[bin]]
-name = "build_service"
-path = "src/bin/build_service.rs"
+name = "proflow"
+path = "src/bin/proflow.rs"
 
 [[bin]]
 name = "dump_macros"

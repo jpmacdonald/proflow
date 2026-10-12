@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::planning_center::{PlanFreshnessError, PlanSnapshot};
+use crate::planning_center::PlanSnapshot;
 use proflow_propresenter::library::LibraryCandidates;
 use proflow_propresenter::playlist::{
     playlist_output_path, PlaylistExportMode, PlaylistMediaAsset,
@@ -143,10 +143,6 @@ impl ReviewedPlanningCenterSource {
     pub(super) const fn snapshot(&self) -> &PlanSnapshot {
         &self.snapshot
     }
-
-    pub(super) fn verify_current(&self, current: &PlanSnapshot) -> Result<(), PlanFreshnessError> {
-        self.snapshot.verify_current(current)
-    }
 }
 
 impl BuildReview {
@@ -271,16 +267,18 @@ impl PreparedBuildRequest {
 
     /// Hand the build directory to commit, if its rendered stage is still the
     /// one this value was made from.
+    #[cfg(test)]
     pub(super) fn into_verified_build(self) -> Result<BuildDir<Verified>, BuildServiceError> {
         if self.build.verify_stage::<Rendered>()? != self.rendered {
             return Err(BuildServiceError::PreparedBuildSuperseded);
         }
-        self.build.verify_stage::<Verified>()?;
         Ok(self.build)
     }
 
-    pub(super) const fn planning_center_source(&self) -> &ReviewedPlanningCenterSource {
-        &self.request.planning_center
+    /// Identity of the rendered artifacts this review produced. A commit that
+    /// names it installs these artifacts or nothing.
+    pub fn revision(&self) -> String {
+        self.rendered.to_string()
     }
 
     /// The Planning Center snapshot these artifacts were reviewed against.
@@ -323,6 +321,11 @@ impl PreparedBuildRequest {
         self.build.path()
     }
 
+    /// The report of the verified build.
+    pub fn into_result(self) -> BuildServiceResult {
+        self.result
+    }
+
     #[cfg(test)]
     pub(crate) fn prepared_artifact_bytes(
         &self,
@@ -335,68 +338,6 @@ impl PreparedBuildRequest {
     pub(crate) fn has_reviewed_source(&self, source: &Path) -> bool {
         super::rendered_stage::load_prepared(&self.build)
             .is_ok_and(|prepared| prepared.sources.contains(source))
-    }
-
-    /// A verified build with no artifacts, for tests of the bookkeeping
-    /// around prepared builds. It belongs to no runtime and cannot commit.
-    #[cfg(test)]
-    pub(crate) fn offline_test(
-        builds_root: &Path,
-        plan_id: &str,
-        service_name: &str,
-        playlist_name: &str,
-    ) -> Result<Self, BuildServiceError> {
-        use crate::workflow::approval::{OutputManifest, SourceManifest};
-        use crate::workflow::build_dir::{BuildInputs, BuildPlanId, Classified, Snapshotted};
-        use crate::workflow::transaction::BuildFileTransaction;
-        use proflow_propresenter::text_fit::{FontProgramSnapshot, TextFitContractSummary};
-
-        let request = ReviewedRequest::offline(BuildRequest {
-            plan_id: plan_id.to_string(),
-            service_name: Some(service_name.to_string()),
-            playlist_name: Some(playlist_name.to_string()),
-            ..BuildRequest::default()
-        })?;
-        let build: BuildDir<Snapshotted> = BuildDir::open(
-            builds_root,
-            &BuildPlanId::new(plan_id)?,
-            &BuildInputs {
-                plan_snapshot: b"offline",
-                render_assets: b"offline",
-                bible_corpora: b"offline",
-                library: b"offline",
-                review_decisions: playlist_name.as_bytes(),
-            },
-        )?
-        .write(|_| Ok(()))?;
-        let build: BuildDir<Classified> = build.write(|_| Ok(()))?;
-        let result = BuildServiceResult {
-            playlist_path: std::path::PathBuf::new(),
-            receipt_path: std::path::PathBuf::new(),
-            receipt_revision: String::new(),
-            text_fit_contract: TextFitContractSummary::diagnostic(),
-            package_mode: PlaylistExportMode::LibraryLinks,
-            media_asset_count: 0,
-            total_items: 0,
-            entries: Vec::new(),
-            generated_count: 0,
-            library_count: 0,
-            skipped_count: 0,
-            warnings: Vec::new(),
-        };
-        let transaction =
-            BuildFileTransaction::from_reviewed(OutputManifest::capture(std::iter::empty())?)
-                .seal()?;
-        let build = super::rendered_stage::write_prepared(
-            build,
-            &super::rendered_stage::RenderedArtifacts {
-                transaction: &transaction,
-                sources: &SourceManifest::recorded(std::iter::empty()),
-                font_programs: &FontProgramSnapshot::diagnostic(),
-                result: &result,
-            },
-        )?;
-        Self::from_verified_build(request, Vec::new(), result, build)
     }
 }
 

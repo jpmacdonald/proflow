@@ -393,3 +393,156 @@ fn a_review_reports_the_identity_it_bound_and_the_report_it_materialized() {
     );
     assert_eq!(expect_prepared(reviewed).plan_id(), "plan-1");
 }
+
+fn snapshot(description: &str) -> PlanSnapshot {
+    use crate::planning_center::types::{Category, Item};
+
+    PlanSnapshot::offline_with_items(
+        "plan-1",
+        "Sunday Morning",
+        vec![Item {
+            id: "item-1".to_string(),
+            position: 0,
+            title: "Welcome".to_string(),
+            description: Some(description.to_string()),
+            category: Category::Other,
+            note: None,
+            song: None,
+            scripture: None,
+        }],
+    )
+}
+
+/// Review `snapshot` with every item skipped, the way a transport does.
+fn build_from(runtime: &TestRuntime, request: BuildRequest, snapshot: PlanSnapshot) -> String {
+    let executor = runtime.executor();
+    let candidates = executor
+        .lock_library()
+        .expect("library")
+        .scan_candidates()
+        .expect("candidates");
+    let reviewed = executor
+        .review_planned_request(
+            request,
+            &[skipped("pco:item-1:main")],
+            proflow_propresenter::PresentationSize::FULL_HD,
+            super::review::ReviewedPlanningCenterSource::captured(snapshot),
+            candidates,
+        )
+        .expect("review");
+    expect_prepared(reviewed).revision()
+}
+
+#[test]
+fn a_build_is_committed_by_recomputing_its_inputs_and_only_once() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let executor = runtime.executor();
+    let revision = build_from(
+        &runtime,
+        reviewed_request("Reviewed"),
+        snapshot("as reviewed"),
+    );
+
+    let result = executor
+        .commit_recorded(
+            reviewed_request("Reviewed"),
+            &snapshot("as reviewed"),
+            Some(&revision),
+        )
+        .expect("the unchanged plan commits its verified build");
+    assert!(result.playlist_path.is_file());
+
+    let again =
+        executor.commit_recorded(reviewed_request("Reviewed"), &snapshot("as reviewed"), None);
+    assert!(matches!(
+        again,
+        Err(BuildServiceError::BuildAlreadyCommitted { plan_id }) if plan_id == "plan-1"
+    ));
+}
+
+#[test]
+fn a_plan_or_decision_changed_after_the_build_has_no_build_to_commit() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let executor = runtime.executor();
+    build_from(
+        &runtime,
+        reviewed_request("Reviewed"),
+        snapshot("as reviewed"),
+    );
+    let playlist = playlist_output_path(runtime.locations().playlist_output(), "Reviewed");
+
+    let changed_plan = executor.commit_recorded(
+        reviewed_request("Reviewed"),
+        &snapshot("changed after the build"),
+        None,
+    );
+    assert!(matches!(
+        changed_plan,
+        Err(BuildServiceError::NoVerifiedBuild { plan_id }) if plan_id == "plan-1"
+    ));
+
+    let mut changed_decision = reviewed_request("Reviewed");
+    changed_decision.skip_output_keys = vec!["pco:item-1:main".to_string()];
+    assert!(matches!(
+        executor.commit_recorded(changed_decision, &snapshot("as reviewed"), None),
+        Err(BuildServiceError::NoVerifiedBuild { .. })
+    ));
+
+    assert!(matches!(
+        executor.commit_recorded(
+            reviewed_request("Never Built"),
+            &snapshot("as reviewed"),
+            None
+        ),
+        Err(BuildServiceError::NoVerifiedBuild { .. })
+    ));
+    assert!(!playlist.exists(), "a refused commit installs nothing");
+}
+
+#[test]
+fn a_commit_that_names_another_revision_installs_nothing() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let executor = runtime.executor();
+    let revision = build_from(
+        &runtime,
+        reviewed_request("Reviewed"),
+        snapshot("as reviewed"),
+    );
+    let playlist = playlist_output_path(runtime.locations().playlist_output(), "Reviewed");
+
+    let stale = "0".repeat(revision.len());
+    assert!(matches!(
+        executor.commit_recorded(
+            reviewed_request("Reviewed"),
+            &snapshot("as reviewed"),
+            Some(&stale)
+        ),
+        Err(BuildServiceError::PreparedBuildSuperseded)
+    ));
+    assert!(!playlist.exists());
+}
+
+#[test]
+fn a_service_type_assertion_that_disagrees_with_the_plan_refuses_the_commit() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    build_from(
+        &runtime,
+        reviewed_request("Reviewed"),
+        snapshot("as reviewed"),
+    );
+    let mut asserted = reviewed_request("Reviewed");
+    asserted.service_name = Some("Wednesday Night".to_string());
+
+    assert!(matches!(
+        runtime
+            .executor()
+            .commit_recorded(asserted, &snapshot("as reviewed"), None),
+        Err(BuildServiceError::Request(
+            RequestError::ServiceNameMismatch { .. }
+        ))
+    ));
+}

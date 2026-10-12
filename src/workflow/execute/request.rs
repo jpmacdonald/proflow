@@ -37,6 +37,21 @@ pub enum RequestError {
         /// Lookahead window searched for authoritative metadata.
         days_ahead: i64,
     },
+    /// No plan is scheduled in the lookahead window.
+    #[error("no upcoming plan was found in the next {days_ahead} days")]
+    NoUpcomingPlan {
+        /// Lookahead window searched.
+        days_ahead: i64,
+    },
+    /// More than one plan is scheduled at the soonest time.
+    #[error(
+        "more than one plan is next: {}; name the service type or the plan id",
+        candidates.join(", ")
+    )]
+    AmbiguousNextPlan {
+        /// Each candidate as `id (service type)`.
+        candidates: Vec<String>,
+    },
     /// A caller-supplied service type disagreed with Planning Center metadata.
     #[error(
         "service_name mismatch for plan '{plan_id}': caller supplied '{supplied}', Planning Center reports '{actual}'"

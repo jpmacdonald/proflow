@@ -16,15 +16,11 @@ use serde::Serialize;
 use crate::project_config::{parse_project_config_value, RawProjectConfig};
 use crate::setup;
 use crate::workflow::classify;
-use crate::workflow::execute::BuildRequest;
 use proflow_propresenter::theme::ThemeCache;
 
 use super::config::write_config_reviewed;
 use super::playlist::{read_playlist_document, read_playlist_err, PlaylistRequest};
-use super::review::{
-    bounded_days, bounded_usize, consume_reviewed_plan, playlist_export_intent,
-    replace_prepared_snapshot, resolve_entry_override, PreviewRevision,
-};
+use super::review::{bounded_days, bounded_usize, recorded_decisions};
 use super::schema::{
     format_category, BuildServiceArgs, CatalogAssetsArgs, ConfigValidationResponse,
     ConfigWriteResponse, EffectiveConfigResponse, ExplainRuleMatchArgs, ExplainRuleMatchInput,
@@ -260,30 +256,20 @@ impl ProFlowServer {
 
     /// Preview the proposed playlist for a service plan.
     #[tool(
-        description = "Resolve a plan's title, date, and service type from Planning Center, apply any playlist name, skip, entry override, package-mode, and media choices, then return the exact effective playlist for review. Fully resolved previews materialize and seal every native artifact and return a one-time preview_revision. Previews with uncertain items return no revision and cannot be built until re-previewed with decisions."
+        description = "Resolve a plan's title, date, and service type from Planning Center, record the given playlist name, skip, entry override, package-mode, and media choices as the plan's decisions (replacing any recorded earlier), then return the exact effective playlist for review. Fully resolved previews render and verify every native artifact and return a preview_revision. Previews with uncertain items return open_decisions and no revision, and cannot be built until re-previewed with decisions."
     )]
     async fn preview_playlist(
         &self,
         Parameters(args): Parameters<PreviewPlaylistArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let overrides = args
-            .overrides
-            .unwrap_or_default()
-            .into_iter()
-            .map(|entry| resolve_entry_override(self.workstation.render_assets().config(), entry))
-            .collect::<Result<Vec<_>, _>>()?;
-        let playlist_export_mode = args.package_mode.unwrap_or_default();
-        let request = BuildRequest {
-            plan_id: args.plan_id.clone(),
-            service_name: args.service_name,
-            playlist_name: args.playlist_name,
-            skip_output_keys: args.skip_output_keys.unwrap_or_default(),
-            overrides,
-            playlist_export: playlist_export_intent(playlist_export_mode, args.media_assets)?,
-        };
+        let plan_id = args.plan_id.clone();
+        let service_name = args.service_name.clone();
+        self.workstation
+            .record_decisions(&plan_id, &recorded_decisions(args))
+            .map_err(build_err)?;
         let reviewed = self
             .workstation
-            .review_service_request(request)
+            .build_recorded(&plan_id, service_name.as_deref())
             .await
             .map_err(build_err)?;
         let plan_title = reviewed.plan_title().to_string();
@@ -310,18 +296,15 @@ impl ProFlowServer {
             summary,
         };
 
-        let prepared = match reviewed {
-            crate::workflow::execute::BuildReview::Prepared(prepared) => Some(*prepared),
+        let open_decisions = reviewed.open_decisions();
+        let preview_revision = match reviewed {
+            crate::workflow::execute::BuildReview::Prepared(prepared) => Some(prepared.revision()),
             crate::workflow::execute::BuildReview::NeedsReview(_) => None,
-        };
-        let replacement = {
-            let mut snapshots = self.reviewed_plans.lock().await;
-            replace_prepared_snapshot(&mut snapshots, args.plan_id, prepared)
         };
 
         json_result(&ReviewedPreviewResponse {
-            preview_revision: replacement.revision,
-            superseded_preview_revision: replacement.superseded,
+            preview_revision,
+            open_decisions,
             playlist_name,
             package_mode,
             media_assets,
@@ -414,27 +397,19 @@ impl ProFlowServer {
 
     /// Generate all slides and build a playlist for an entire service in one call.
     #[tool(
-        description = "Consume exactly the playlist identity, skips, overrides, package mode, media set, decisions, and source bytes captured by preview_playlist. build_service accepts no new output options. Changed sources require a new preview. A matching preview_revision is atomically consumed before build side effects, so it is one-time even when the build fails; re-preview before retrying."
+        description = "Install the verified build that preview_playlist rendered. build_service accepts no new output options. The plan is fetched again: if the plan, configuration, library, recorded decisions, or any source or target changed since the preview, or preview_revision is not the revision of the build on disk, nothing is installed and a new preview is required. A committed build cannot be committed twice."
     )]
     async fn build_service(
         &self,
         Parameters(args): Parameters<BuildServiceArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let preview_revision = PreviewRevision::parse(&args.preview_revision)
-            .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))?;
-        let reviewed = {
-            let mut reviewed_plans = self.reviewed_plans.lock().await;
-            consume_reviewed_plan(
-                &mut reviewed_plans,
-                &args.plan_id,
-                preview_revision,
-                args.service_name.as_deref(),
-            )
-            .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))?
-        };
         let result = self
             .workstation
-            .build_prepared_request(reviewed.prepared)
+            .commit_recorded(
+                &args.plan_id,
+                args.service_name.as_deref(),
+                Some(&args.preview_revision),
+            )
             .await
             .map_err(build_err)?;
         json_result(&result)

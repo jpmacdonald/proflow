@@ -1,5 +1,4 @@
 use super::*;
-use crate::planning_center::PlanningCenterClient;
 
 pub(super) fn test_background(id: &str) -> ResolvedBackground {
     ResolvedBackground::new(
@@ -177,7 +176,6 @@ pub(super) fn install_fixture_theme(runtime: &mut TestRuntime) {
 }
 
 pub(super) struct TestRuntime {
-    pub(super) pco_client: PlanningCenterClient,
     pub(super) bible_corpora: BibleCorpusSnapshot,
     pub(super) file_index: Mutex<LibraryCatalog>,
     pub(super) render_assets: RenderAssetSnapshot,
@@ -186,27 +184,6 @@ pub(super) struct TestRuntime {
 
 impl TestRuntime {
     pub(super) fn new(root: &Path) -> Self {
-        let pco_client = PlanningCenterClient::new(&crate::config::Config {
-            pco_app_id: "test-app".to_string(),
-            pco_secret: "test-secret".to_string(),
-        })
-        .expect("test Planning Center client settings are valid");
-        Self::with_pco_client(root, pco_client)
-    }
-
-    pub(super) fn new_with_pco_base_url(root: &Path, base_url: String) -> Self {
-        let pco_client = PlanningCenterClient::new_with_base_url(
-            &crate::config::Config {
-                pco_app_id: "test-app".to_string(),
-                pco_secret: "test-secret".to_string(),
-            },
-            base_url,
-        )
-        .expect("test Planning Center client settings are valid");
-        Self::with_pco_client(root, pco_client)
-    }
-
-    fn with_pco_client(root: &Path, pco_client: PlanningCenterClient) -> Self {
         let data = root.join("data");
         let output = root.join("output");
         let propresenter = root.join("ProPresenter");
@@ -229,7 +206,6 @@ impl TestRuntime {
         )
         .expect("load empty test render assets");
         Self {
-            pco_client,
             bible_corpora: BibleCorpusSnapshot::capture(data.join("bibles"))
                 .expect("capture empty test Bible corpora"),
             file_index: Mutex::new(

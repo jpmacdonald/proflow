@@ -157,32 +157,36 @@ The MCP server exposes eight tools:
 A normal build is:
 
 1. Fetch the Planning Center plan.
-2. Preview the classified playlist.
-3. Resolve any review items.
+2. Preview the classified playlist. The preview records the given decisions.
+3. Resolve any open decisions and preview again.
 4. Approve the exact preview revision.
-5. Build that revision once.
+5. Build that revision.
 
-Preview materializes and validates the future output before returning its
-revision. Build revalidates inputs and staged bytes, then commits presentations,
-the build receipt, and finally the playlist. A changed source or destination
-invalidates the revision.
+Preview renders and verifies the future output into a build directory under
+`<PROFLOW_DATA>/builds/` before returning its revision. Build fetches the plan
+again and installs that verified build: presentations, the build receipt, and
+finally the playlist. If the plan, configuration, library, decisions, or any
+source or destination changed since the preview, nothing is installed.
 
 Every successful build writes a deterministic
 `<playlist>.proflow-build.json` receipt beside the playlist. It records the
 normalized plan, decisions, source and artifact digests, render assets,
 presentation structure, media dependencies, and text-fit evidence.
 
-### Diagnostic CLI
+### Command line
 
-The direct build command is available for development and diagnostics:
+The same two steps without an MCP client:
 
 ```bash
-cargo run --bin build_service -- \
-  <plan_id> <service_name> [playlist_name] \
-  [--skip <output_key> ...] \
-  [--decisions decisions.json] \
-  [--portable | --library-local]
+proflow build  --plan <plan id | next> [--service <service type>]
+proflow commit --plan <plan id | next> [--service <service type>]
 ```
+
+`build` reviews the plan with the decisions recorded in its `review.toml`
+([docs/review-decisions.md](docs/review-decisions.md)) and renders and
+verifies it. If an item needs a decision, it lists every one and exits with
+status 2. `commit` installs the verified build. Neither prompts; status 0
+means the step was done and 1 means an error.
 
 Portable packages embed reviewed presentations and available local media.
 Library-local packages reference presentations already installed in the

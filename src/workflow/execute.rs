@@ -14,6 +14,7 @@ use super::approval::{CapturedSources, OutputReviewError, SourceReviewError};
 use super::classify;
 use super::plan::{PlanSemanticsError, ResolvedItemPlan};
 use super::presentation_render::PresentationRenderError;
+#[cfg(test)]
 use super::report::BuildServiceResult;
 use crate::bible::{BibleCorpusError, BibleCorpusSnapshot};
 use crate::planning_center::identity::PlanIdentityError;
@@ -375,6 +376,20 @@ pub enum BuildServiceError {
         "prepared build was committed through a different runtime than it was prepared against"
     )]
     PreparedRuntimeMismatch,
+    /// No verified build exists for the plan's current inputs.
+    #[error(
+        "plan '{plan_id}' has no verified build of its current plan, configuration, library and decisions; build it again"
+    )]
+    NoVerifiedBuild {
+        /// Plan whose build was requested.
+        plan_id: String,
+    },
+    /// The verified build of the plan's current inputs was already committed.
+    #[error("the build of plan '{plan_id}' is already committed; build it again to commit again")]
+    BuildAlreadyCommitted {
+        /// Plan whose build was requested.
+        plan_id: String,
+    },
     /// The rendered stage of the build directory is not the one this prepared
     /// build was made from.
     #[error(
@@ -425,23 +440,12 @@ impl From<PlanCaptureError> for BuildServiceError {
 /// [`Self::plan_lookup`] and consumes the captured [`PlanSnapshot`]. The
 /// boundary that performs those reads lives in [`crate::workstation`].
 ///
-/// The only public way to commit a prepared build is
-/// [`crate::workstation::build_prepared_request`], which refreshes the Planning
-/// Center snapshot first. The raw verify-and-commit step is crate-private, so
-/// an outside caller cannot hand it the original snapshot and skip the refresh:
-///
-/// ```compile_fail
-/// use proflow::planning_center::PlanSnapshot;
-/// use proflow::workflow::execute::{PreparedBuildRequest, ServiceBuildExecutor};
-///
-/// fn skip_the_refresh(
-///     executor: &ServiceBuildExecutor<'_>,
-///     prepared: PreparedBuildRequest,
-/// ) {
-///     let original: PlanSnapshot = prepared.plan_snapshot().clone();
-///     let _ = executor.build_prepared_request(prepared, &original);
-/// }
-/// ```
+/// The only public way to commit is
+/// [`crate::workstation::Workstation::commit_recorded`], which fetches the
+/// plan from Planning Center for that commit. The fetched snapshot is hashed
+/// into the name of the build directory, so a plan that changed after it was
+/// built has no build to commit. The step that takes a snapshot from its
+/// caller is crate-private.
 pub struct ServiceBuildExecutor<'a> {
     bible_corpora: &'a BibleCorpusSnapshot,
     file_index: &'a Mutex<LibraryCatalog>,
@@ -539,21 +543,6 @@ impl<'a> ServiceBuildExecutor<'a> {
             review::ReviewedPlanningCenterSource::captured(planning_center),
             library_candidates,
         )
-    }
-
-    /// Crate-private: callers outside this crate commit through
-    /// [`crate::workstation::build_prepared_request`], which refreshes the
-    /// snapshot. Verify and commit exact native artifacts produced by
-    /// [`BuildReview::Prepared`]. `current` is a Planning Center snapshot
-    /// refreshed after review; any difference from the reviewed snapshot
-    /// rejects the commit.
-    pub(crate) fn build_prepared_request(
-        &self,
-        reviewed: PreparedBuildRequest,
-        current: &PlanSnapshot,
-    ) -> Result<BuildServiceResult, BuildServiceError> {
-        reviewed.planning_center_source().verify_current(current)?;
-        self.commit_prepared_service(reviewed)
     }
 
     /// Commit without a Planning Center freshness check, for tests whose

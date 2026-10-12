@@ -1,19 +1,13 @@
 #![allow(clippy::expect_used)]
 
 use super::config::{backup_config_path, candidate_locations, write_config_reviewed};
-use super::review::{
-    bounded_days, bounded_usize, consume_reviewed_plan, replace_prepared_snapshot,
-    resolve_entry_override, PreviewRevision, ReviewedPlanError,
-};
-use super::{BuildServiceArgs, EntryOverride, EntryOverrideAction, ProFlowServer};
+use super::review::{bounded_days, bounded_usize, recorded_decisions};
+use super::{BuildServiceArgs, EntryOverride, ProFlowServer};
 use crate::paths::{BuildLocationInputs, BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
-use crate::project_config::{
-    BackgroundAssetPath, BackgroundId, LibraryName, ProjectConfig, RawProjectConfig,
-};
+use crate::project_config::{LibraryName, ProjectConfig, RawProjectConfig};
 use crate::workflow::classify::{PreviewResult, PreviewSummary};
-use crate::workflow::execute::{OverrideAction, PreparedBuildRequest};
+use crate::workflow::execute::{DecisionError, OverrideAction};
 use proflow_propresenter::playlist::PlaylistExportMode;
-use std::collections::HashMap;
 use std::path::Path;
 
 fn config_test_locations(root: &Path) -> BuildLocations {
@@ -232,7 +226,11 @@ fn build_tool_rejects_output_options_that_were_not_bound_by_preview() {
 fn unresolved_preview_serializes_without_an_executable_revision() {
     let response = super::schema::ReviewedPreviewResponse {
         preview_revision: None,
-        superseded_preview_revision: None,
+        open_decisions: vec![crate::workflow::execute::OpenDecision {
+            item: "pco:1:main".to_string(),
+            title: "Welcome".to_string(),
+            question: "no rule matches".to_string(),
+        }],
         playlist_name: "Needs decisions".to_string(),
         package_mode: PlaylistExportMode::LibraryLinks,
         media_assets: Vec::new(),
@@ -248,6 +246,7 @@ fn unresolved_preview_serializes_without_an_executable_revision() {
 
     let serialized = serde_json::to_value(response).expect("serialize unresolved preview");
     assert!(serialized.get("preview_revision").is_none());
+    assert_eq!(serialized["open_decisions"][0]["item"], "pco:1:main");
 }
 
 #[test]
@@ -262,201 +261,93 @@ fn preview_entry_override_rejects_misspelled_decisions() {
 }
 
 #[test]
-fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview() {
-    let builds = tempfile::tempdir().expect("temporary builds root");
-    let mut snapshots = HashMap::new();
-    let first = replace_prepared_snapshot(
-        &mut snapshots,
-        "plan-1".to_string(),
-        Some(
-            PreparedBuildRequest::offline_test(
-                builds.path(),
-                "plan-1",
-                "Sunday Morning",
-                "First preview",
-            )
-            .expect("empty reviewed request should capture"),
-        ),
-    );
-    let stale_revision = first.revision.expect("executable preview mints a revision");
-    assert_eq!(first.superseded, None);
+fn preview_arguments_become_the_recorded_decisions_and_then_the_same_request() {
+    let args = serde_json::from_value::<super::PreviewPlaylistArgs>(serde_json::json!({
+        "plan_id": "plan-1",
+        "service_name": "Sunday Morning",
+        "playlist_name": "Reviewed",
+        "skip_output_keys": ["pco:1:main"],
+        "overrides": [{
+            "output_key": "pco:2:main",
+            "playlist_name": "Hymn",
+            "slide_type": "lyrics",
+            "action": {"kind": "select_arrangement", "arrangement": "Short"}
+        }],
+        "media_assets": [{"path": "/media/loop.mp4"}]
+    }))
+    .expect("preview arguments");
 
-    let second = replace_prepared_snapshot(
-        &mut snapshots,
-        "plan-1".to_string(),
-        Some(
-            PreparedBuildRequest::offline_test(
-                builds.path(),
-                "plan-1",
-                "Sunday Morning",
-                "May 24, 2026 - Sunday Morning",
-            )
-            .expect("empty reviewed request should capture"),
-        ),
+    let decisions = recorded_decisions(args);
+    let written = decisions.to_toml().expect("decisions serialize");
+    assert!(
+        !written.contains("Sunday Morning"),
+        "an assertion is not a decision"
     );
-    let current_revision = second
-        .revision
-        .expect("executable preview mints a revision");
-    assert_eq!(second.superseded, Some(stale_revision));
-    assert_ne!(stale_revision, current_revision);
+    let config = ProjectConfig::try_from(RawProjectConfig::default()).expect("config");
+    let request = decisions
+        .into_request("plan-1", &config)
+        .expect("recorded decisions are a request");
 
-    let stale = consume_reviewed_plan(
-        &mut snapshots,
-        "plan-1",
-        stale_revision,
-        Some("Sunday Morning"),
-    );
+    assert_eq!(request.playlist_name.as_deref(), Some("Reviewed"));
+    assert_eq!(request.skip_output_keys, ["pco:1:main"]);
     assert_eq!(
-        stale.err(),
-        Some(ReviewedPlanError::RevisionMismatch {
-            plan_id: "plan-1".to_string(),
-        })
+        request.playlist_export.mode(),
+        PlaylistExportMode::PortableImport
     );
-    assert!(snapshots.contains_key("plan-1"));
-
-    let mismatch = consume_reviewed_plan(
-        &mut snapshots,
-        "plan-1",
-        current_revision,
-        Some("Christmas Eve"),
-    );
-    assert_eq!(
-        mismatch.err(),
-        Some(ReviewedPlanError::ServiceNameMismatch {
-            actual: "Sunday Morning".to_string(),
-        })
-    );
-    assert!(snapshots.contains_key("plan-1"));
-
-    let consumed = consume_reviewed_plan(
-        &mut snapshots,
-        "plan-1",
-        current_revision,
-        Some("Sunday Morning"),
-    )
-    .expect("matching revision should be consumed");
-    assert_eq!(consumed.prepared.service_name(), "Sunday Morning");
-    assert!(!snapshots.contains_key("plan-1"));
-
-    let reused = consume_reviewed_plan(
-        &mut snapshots,
-        "plan-1",
-        current_revision,
-        Some("Sunday Morning"),
-    );
-    assert_eq!(
-        reused.err(),
-        Some(ReviewedPlanError::Missing {
-            plan_id: "plan-1".to_string(),
-        })
-    );
-}
-
-#[test]
-fn malformed_preview_revisions_are_rejected_before_lookup() {
-    let error = PreviewRevision::parse("revision-1").expect_err("not a minted revision");
-    assert_eq!(
-        error,
-        ReviewedPlanError::MalformedRevision {
-            value: "revision-1".to_string(),
-        }
-    );
-}
-
-#[test]
-fn unresolved_repreview_invalidates_an_older_prepared_revision() {
-    let builds = tempfile::tempdir().expect("temporary builds root");
-    let mut snapshots = HashMap::new();
-    let prepared = replace_prepared_snapshot(
-        &mut snapshots,
-        "plan-1".to_string(),
-        Some(
-            PreparedBuildRequest::offline_test(
-                builds.path(),
-                "plan-1",
-                "Sunday Morning",
-                "Old prepared playlist",
-            )
-            .expect("old prepared snapshot"),
-        ),
-    );
-    let stale_revision = prepared
-        .revision
-        .expect("executable preview mints a revision");
-
-    let replacement = replace_prepared_snapshot(&mut snapshots, "plan-1".to_string(), None);
-
-    assert_eq!(replacement.revision, None);
-    assert_eq!(replacement.superseded, Some(stale_revision));
-    assert!(!snapshots.contains_key("plan-1"));
-}
-
-#[test]
-fn build_override_resolves_registered_background_once() {
-    let id = BackgroundId::new("sermon").expect("valid background id");
-    let path = BackgroundAssetPath::new("backgrounds/sermon.png").expect("valid background path");
-    let mut raw = RawProjectConfig::default();
-    raw.backgrounds.insert(id.clone(), path.clone());
-    let config = ProjectConfig::try_from(raw).expect("valid runtime config");
-
-    let resolved = resolve_entry_override(
-        &config,
-        EntryOverride {
-            output_key: "item-1:0".to_string(),
-            playlist_name: None,
-            slide_type: None,
-            action: Some(EntryOverrideAction::SetBackground {
-                background: id.clone(),
-            }),
-        },
-    )
-    .expect("registered background should resolve");
-
-    let background = resolved
-        .action
-        .and_then(|action| match action {
-            OverrideAction::SetBackground { background } => Some(background),
-            _ => None,
-        })
-        .expect("resolved override should carry a background action");
-    assert_eq!(background.id(), &id);
-    assert_eq!(background.file(), &path);
-}
-
-#[test]
-fn build_override_rejects_unknown_background_id() {
-    let result = resolve_entry_override(
-        &ProjectConfig::try_from(RawProjectConfig::default()).expect("valid empty runtime config"),
-        EntryOverride {
-            output_key: "item-1:0".to_string(),
-            playlist_name: None,
-            slide_type: None,
-            action: Some(EntryOverrideAction::SetBackground {
-                background: BackgroundId::new("missing").expect("valid background id"),
-            }),
-        },
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn linked_library_export_rejects_supplied_media_assets() {
-    let media = || {
-        Some(vec![super::schema::PlaylistMediaAssetArg {
-            path: "/media/loop.mp4".to_string(),
-            archive_path: None,
-        }])
+    assert_eq!(request.playlist_export.media_assets().len(), 1);
+    let [changed] = request.overrides.as_slice() else {
+        panic!("one override");
     };
+    assert_eq!(changed.output_key, "pco:2:main");
+    assert_eq!(changed.playlist_name.as_deref(), Some("Hymn"));
+    assert!(changed.slide_type.is_some());
+    assert!(matches!(
+        &changed.action,
+        Some(OverrideAction::SelectArrangement { arrangement }) if arrangement == "Short"
+    ));
+}
 
-    let error = super::review::playlist_export_intent(PlaylistExportMode::LibraryLinks, media())
+#[test]
+fn media_for_a_linked_library_preview_is_the_callers_error() {
+    let args = serde_json::from_value::<super::PreviewPlaylistArgs>(serde_json::json!({
+        "plan_id": "plan-1",
+        "package_mode": "library_local",
+        "media_assets": [{"path": "/media/loop.mp4"}]
+    }))
+    .expect("preview arguments");
+    let config = ProjectConfig::try_from(RawProjectConfig::default()).expect("config");
+
+    let error = recorded_decisions(args)
+        .into_request("plan-1", &config)
         .expect_err("library links cannot carry portable media; it must not be dropped");
-    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
 
-    let portable =
-        super::review::playlist_export_intent(PlaylistExportMode::PortableImport, media())
-            .expect("portable import accepts media assets");
-    assert_eq!(portable.media_assets().len(), 1);
-    super::review::playlist_export_intent(PlaylistExportMode::LibraryLinks, None)
-        .expect("library links without media is valid");
+    assert!(matches!(error, DecisionError::MediaWithoutPortablePackage));
+    assert_eq!(
+        super::build_err(error.into()).code,
+        rmcp::model::ErrorCode::INVALID_PARAMS
+    );
+}
+
+#[test]
+fn a_build_that_is_not_there_to_install_is_the_callers_error() {
+    use crate::workflow::execute::BuildServiceError;
+
+    for stale in [
+        BuildServiceError::NoVerifiedBuild {
+            plan_id: "plan-1".to_string(),
+        },
+        BuildServiceError::BuildAlreadyCommitted {
+            plan_id: "plan-1".to_string(),
+        },
+        BuildServiceError::PreparedBuildSuperseded,
+    ] {
+        assert_eq!(
+            super::build_err(stale).code,
+            rmcp::model::ErrorCode::INVALID_PARAMS
+        );
+    }
+    assert_eq!(
+        super::build_err(BuildServiceError::LibraryCatalogPoisoned).code,
+        rmcp::model::ErrorCode::INTERNAL_ERROR
+    );
 }

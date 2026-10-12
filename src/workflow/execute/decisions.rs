@@ -152,12 +152,38 @@ pub struct ItemDecision {
     pub action: Option<EntryOverrideAction>,
 }
 
+impl ItemDecision {
+    /// A decision for `item` that changes nothing yet.
+    #[must_use]
+    pub const fn for_item(item: String) -> Self {
+        Self {
+            item,
+            question: None,
+            options: Vec::new(),
+            decided_by: DecidedBy::Operator,
+            at: None,
+            skip: false,
+            playlist_name: None,
+            slide_type: None,
+            action: None,
+        }
+    }
+}
+
 /// Why recorded decisions could not become a build request.
 #[derive(Debug, thiserror::Error)]
 pub enum DecisionError {
     /// The decisions file exists but could not be read.
     #[error("failed to read review decisions '{}': {source}", path.display())]
     Read {
+        /// Decisions file.
+        path: PathBuf,
+        /// Underlying filesystem failure.
+        source: std::io::Error,
+    },
+    /// The decisions file could not be written.
+    #[error("failed to write review decisions '{}': {source}", path.display())]
+    Write {
         /// Decisions file.
         path: PathBuf,
         /// Underlying filesystem failure.
@@ -229,6 +255,26 @@ impl ReviewDecisions {
     /// Render these decisions as the text of a decisions file.
     pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
         toml::to_string(self)
+    }
+
+    /// Replace a plan's decisions file with these decisions.
+    ///
+    /// The file is written beside its destination and renamed over it, so a
+    /// reader sees the old decisions or the new ones.
+    pub fn write(&self, path: &Path) -> Result<(), DecisionError> {
+        let failed = |source| DecisionError::Write {
+            path: path.to_path_buf(),
+            source,
+        };
+        let text = self
+            .to_toml()
+            .map_err(|error| failed(std::io::Error::other(error)))?;
+        let temporary = path.with_extension("toml.tmp");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(failed)?;
+        }
+        std::fs::write(&temporary, text).map_err(failed)?;
+        std::fs::rename(&temporary, path).map_err(failed)
     }
 
     /// Turn the recorded decisions into the request a review consumes.

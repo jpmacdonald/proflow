@@ -1,0 +1,74 @@
+# Review decisions
+
+A plan's decisions are one file:
+
+```text
+<PROFLOW_DATA>/builds/<plan id>/review.toml
+```
+
+It holds everything an operator chooses for that plan. `proflow build` and the
+MCP `preview_playlist` tool both review the plan with exactly what this file
+says; `preview_playlist` writes it from its arguments, replacing what was
+there. A plan with no file has no decisions.
+
+An item the review cannot resolve is an open decision. The build lists every
+open decision, exits with status 2, and renders nothing until each one has an
+entry here.
+
+## The file
+
+```toml
+playlist_name = "May 24, 2026 - Sunday Morning"   # default: the plan's date and service type
+package_mode = "export_portable"                  # default; or "library_local"
+
+[[media]]                                         # extra files for a portable package
+path = "/Users/me/Media/welcome.mp4"
+
+[[decision]]
+item = "pco:101:main"
+skip = true
+
+[[decision]]
+item = "pco:102:main"
+playlist_name = "Hymn of Response"
+slide_type = "lyrics"
+
+[decision.action]
+kind = "use_existing"
+file_path = "~/Documents/ProPresenter/Libraries/Default/Amazing Grace.pro"
+arrangement = "Short"
+```
+
+`item` is the output key the build printed. Each item may have one decision.
+
+A decision either sets `skip = true`, which leaves the item out of the
+playlist, or changes the item with any of:
+
+- `playlist_name`: the item's name in the playlist.
+- `slide_type`: `text`, `lyrics`, `scripture`, `title`, `graphic`, or `nametag`.
+- `[decision.action]`: what to do for the item, by `kind`:
+
+| `kind` | Fields | Effect |
+|---|---|---|
+| `use_existing` | `file_path`, optional `arrangement` | Use this library presentation unchanged. |
+| `generate_new` | optional `background` | Render the item's content as a new presentation. |
+| `edit_description` | `file_path`, optional `background` | Render the item's description into this presentation. |
+| `set_background` | `background` | Keep the proposed render; use this background. |
+| `select_arrangement` | `arrangement` | Keep the proposed presentation; select this arrangement. |
+
+`background` is a background id from the project config.
+
+Four more fields may be written on a decision for whoever reads the file
+later: `question`, `options` (a list), `decided_by` (`operator` or `rule`),
+and `at` (a timestamp). They do not change what is built.
+
+Unknown fields are errors, so a misspelled key is reported instead of ignored.
+
+## What changing the file does
+
+The file's decisions are one of the five inputs a build is named by, with the
+plan as Planning Center has it, the configuration and display assets, the
+Bible corpora, and the presentation library. `proflow commit` and the MCP
+`build_service` tool install the verified build of those inputs as they are
+at that moment. Edit a decision after building and there is no build of the
+new decisions to install: build again.

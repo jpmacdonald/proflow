@@ -151,7 +151,7 @@ pub struct BuildServiceArgs {
     /// Plan ID from `fetch_plan` results.
     #[schemars(description = "Plan ID (from fetch_plan/preview_playlist)")]
     pub plan_id: String,
-    /// Revision returned by the most recent preview for this plan.
+    /// Revision returned by the preview being approved.
     #[schemars(description = "Required preview_revision returned by preview_playlist")]
     pub preview_revision: String,
     /// Optional assertion matching the service type already bound by preview.
@@ -238,12 +238,13 @@ pub(super) struct EffectiveConfigResponse {
 
 #[derive(Serialize)]
 pub(super) struct ReviewedPreviewResponse {
+    /// Identity of the rendered artifacts; present only when the preview is
+    /// fully resolved and therefore buildable.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) preview_revision: Option<super::review::PreviewRevision>,
-    /// An earlier executable preview for this plan that this preview replaced;
-    /// its revision can no longer be built.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) superseded_preview_revision: Option<super::review::PreviewRevision>,
+    pub(super) preview_revision: Option<String>,
+    /// Every item still waiting for a decision.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) open_decisions: Vec<crate::workflow::execute::OpenDecision>,
     pub(super) playlist_name: String,
     pub(super) package_mode: PlaylistExportMode,
     pub(super) media_assets: Vec<ReviewedMediaAssetResponse>,

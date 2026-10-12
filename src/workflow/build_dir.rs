@@ -179,6 +179,19 @@ pub enum Resumed<S: Stage, N: Stage> {
 }
 
 impl BuildDir<Opened> {
+    /// Reopen the directory named by `plan` and `inputs`, if a build of
+    /// exactly these inputs was ever started.
+    #[must_use]
+    pub fn find(builds_root: &Path, plan: &BuildPlanId, inputs: &BuildInputs<'_>) -> Option<Self> {
+        let path = builds_root
+            .join(plan.as_str())
+            .join(InputHash::of(inputs).to_string());
+        path.is_dir().then_some(Self {
+            path,
+            stage: PhantomData,
+        })
+    }
+
     /// Create or reopen the directory named by `plan` and `inputs`.
     pub fn open(
         builds_root: &Path,
@@ -342,6 +355,12 @@ impl<S: Stage> Clone for BuildDir<S> {
 /// SHA-256 of one stage's seal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SealDigest([u8; 32]);
+
+impl fmt::Display for SealDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&hex(&self.0))
+    }
+}
 
 impl BuildDir<Classified> {
     /// Make room to render this build again.

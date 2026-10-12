@@ -1,12 +1,14 @@
 //! Execution of an approved plan through one filesystem transaction.
 
-use crate::workflow::build_dir::{BuildDir, Classified, Rendered};
+use crate::planning_center::PlanSnapshot;
+use crate::workflow::build_dir::{BuildDir, Classified, Rendered, Verified};
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::BuildFileTransaction;
 use crate::workflow::transaction::PreparedFileTransaction;
 use proflow_propresenter::library::{LibraryCatalog, PreparedLibraryUpdate};
 use proflow_propresenter::text_fit::FontProgramSnapshot;
 
+use super::build_stages::ReviewedDecisions;
 use super::receipt::{
     prepare_build_receipt, receipt_path_for_playlist, verify_sealed_build_artifacts,
     BuildReceiptError, BuildReceiptInputs,
@@ -15,6 +17,7 @@ use super::rendered_service::collect_build_warnings;
 use super::rendered_stage::{
     load_prepared, write_committed, write_prepared, LoadedPrepared, RenderedArtifacts,
 };
+use super::request::{BoundBuildRequest, BuildRequest};
 use super::review::PreparedBuildRequest;
 use super::{BuildServiceError, ServiceBuildExecutor};
 
@@ -128,11 +131,59 @@ impl ServiceBuildExecutor<'_> {
 
     /// Commit the verified build `reviewed` names, reading every artifact and
     /// every fingerprint back from its build directory.
+    #[cfg(test)]
     pub(super) fn commit_prepared_service(
         &self,
         reviewed: PreparedBuildRequest,
     ) -> Result<BuildServiceResult, BuildServiceError> {
-        let build = reviewed.into_verified_build()?;
+        self.commit_verified_build(reviewed.into_verified_build()?)
+    }
+
+    /// Commit the verified build of `request` as the plan, runtime, library
+    /// and decisions stand now.
+    ///
+    /// `current` must be a snapshot fetched for this commit: it is hashed into
+    /// the name of the build directory, so a plan that changed after the build
+    /// finds no build. `revision`, when given, must be the revision the build
+    /// reported when it was rendered.
+    pub(crate) fn commit_recorded(
+        &self,
+        mut request: BuildRequest,
+        current: &PlanSnapshot,
+        revision: Option<&str>,
+    ) -> Result<BuildServiceResult, BuildServiceError> {
+        self.render_assets.verify_current()?;
+        self.bible_corpora.verify_current()?;
+        request = Self::bind_request_identity(request, current)?;
+        let skip_output_keys = std::mem::take(&mut request.skip_output_keys);
+        let overrides = std::mem::take(&mut request.overrides);
+        let request = BoundBuildRequest::try_from(request)?;
+        let library_candidates = self.lock_library()?.scan_candidates()?;
+        let build = self.verified_build(
+            &ReviewedDecisions {
+                request: &request,
+                skip_output_keys: &skip_output_keys,
+                overrides: &overrides,
+            },
+            current,
+            &library_candidates,
+        )?;
+        if revision.is_some_and(|revision| {
+            build
+                .verify_stage::<Rendered>()
+                .map_or(true, |rendered| rendered.to_string() != revision)
+        }) {
+            return Err(BuildServiceError::PreparedBuildSuperseded);
+        }
+        self.commit_verified_build(build)
+    }
+
+    fn commit_verified_build(
+        &self,
+        build: BuildDir<Verified>,
+    ) -> Result<BuildServiceResult, BuildServiceError> {
+        build.verify_stage::<Rendered>()?;
+        build.verify_stage::<Verified>()?;
         let reviewed_candidates = self.verify_snapshot_stage(&build)?;
         let LoadedPrepared {
             outputs,

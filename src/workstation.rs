@@ -2,7 +2,7 @@
 //! that a service build reads.
 //!
 //! This is the one composition root. The MCP server and the diagnostic
-//! `build_service` binary both load a [`Workstation`] and borrow an executor
+//! `proflow` binary both load a [`Workstation`] and borrow an executor
 //! from it; neither assembles clients or snapshots on its own.
 
 use std::path::PathBuf;
@@ -20,8 +20,8 @@ use crate::paths::{BuildLocations, BuildLocationsError, PROJECT_CONFIG_FILE};
 use crate::planning_center::PlanningCenterClient;
 use crate::project_config::load_project_config;
 use crate::workflow::execute::{
-    BuildRequest, BuildReview, BuildServiceError, PreparedBuildRequest, RenderAssetSnapshot,
-    ServiceBuildExecutor,
+    BuildRequest, BuildReview, BuildServiceError, RenderAssetSnapshot, RequestError,
+    ReviewDecisions, ServiceBuildExecutor,
 };
 use crate::workflow::report::BuildServiceResult;
 
@@ -177,37 +177,72 @@ impl Workstation {
         review_service_request(&self.planning_center, &self.executor(), request).await
     }
 
-    /// Review `plan_id` with the decisions recorded in its `review.toml`.
+    /// Review `plan_id` with the decisions recorded in its `review.toml`, and
+    /// render and verify it when every decision is answered.
     ///
     /// The file is the whole request: answering a question there is what
-    /// makes the next review resolve it.
-    pub async fn review_recorded_decisions(
+    /// makes the next review resolve it. `service_name`, when given, must be
+    /// the plan's service type.
+    pub async fn build_recorded(
         &self,
         plan_id: &str,
+        service_name: Option<&str>,
     ) -> Result<BuildReview, BuildServiceError> {
-        let request = self.executor().recorded_request(plan_id)?;
+        let mut request = self.executor().recorded_request(plan_id)?;
+        request.service_name = service_name.map(ToString::to_string);
         self.review_service_request(request).await
     }
 
-    /// Refresh the reviewed Planning Center snapshot, then verify and commit.
-    pub async fn build_prepared_request(
+    /// Fetch the plan again and commit the verified build of exactly what it,
+    /// the configuration, the library and the recorded decisions are now.
+    ///
+    /// If any of them changed since the build, there is no such build and
+    /// nothing is committed. `revision`, when given, must be the revision the
+    /// build reported.
+    pub async fn commit_recorded(
         &self,
-        reviewed: PreparedBuildRequest,
+        plan_id: &str,
+        service_name: Option<&str>,
+        revision: Option<&str>,
     ) -> Result<BuildServiceResult, BuildServiceError> {
-        build_prepared_request(&self.planning_center, &self.executor(), reviewed).await
+        let executor = self.executor();
+        let mut request = executor.recorded_request(plan_id)?;
+        request.service_name = service_name.map(ToString::to_string);
+        let current = self
+            .planning_center
+            .capture_plan(executor.plan_lookup(&request)?)
+            .await?;
+        executor.commit_recorded(request, &current, revision)
     }
 
-    /// Review and build one plan in a single pass, for callers that have no
-    /// separate preview step.
-    pub async fn build_service(
+    /// Replace the decisions recorded for `plan_id`.
+    pub fn record_decisions(
         &self,
-        request: &BuildRequest,
-    ) -> Result<BuildServiceResult, BuildServiceError> {
-        let prepared = self
-            .review_service_request(request.clone())
-            .await?
-            .into_prepared()?;
-        self.build_prepared_request(prepared).await
+        plan_id: &str,
+        decisions: &ReviewDecisions,
+    ) -> Result<(), BuildServiceError> {
+        Ok(decisions.write(&self.executor().review_decisions_path(plan_id)?)?)
+    }
+
+    /// The upcoming plan that is scheduled soonest, optionally among plans of
+    /// one service type.
+    pub async fn next_plan_id(
+        &self,
+        service_name: Option<&str>,
+    ) -> Result<String, BuildServiceError> {
+        let days_ahead = self.render_assets.config().plan_lookahead_days();
+        let (_, plans) = self
+            .planning_center
+            .get_upcoming_services(days_ahead)
+            .await?;
+        Ok(soonest_plan(
+            plans
+                .iter()
+                .map(|plan| (plan.id.as_str(), plan.service_name.as_str(), plan.date)),
+            service_name,
+            days_ahead.get(),
+        )?
+        .to_string())
     }
 
     /// Planning Center API client.
@@ -254,15 +289,80 @@ pub async fn review_service_request(
     executor.review_snapshot(request, snapshot)
 }
 
-/// The Planning Center boundary around a synchronous commit: refresh the
-/// reviewed snapshot immediately before the executor verifies and commits.
-pub async fn build_prepared_request(
-    planning_center: &PlanningCenterClient,
-    executor: &ServiceBuildExecutor<'_>,
-    reviewed: PreparedBuildRequest,
-) -> Result<BuildServiceResult, BuildServiceError> {
-    let current = planning_center
-        .refresh_plan_snapshot(reviewed.plan_snapshot())
-        .await?;
-    executor.build_prepared_request(reviewed, &current)
+/// Choose the soonest plan from `(id, service type, date)` triples.
+///
+/// Two service types often meet at the same time. Rather than guess between
+/// them, the choice is refused and names the candidates.
+fn soonest_plan<'a>(
+    plans: impl IntoIterator<Item = (&'a str, &'a str, chrono::DateTime<chrono::Utc>)>,
+    service_name: Option<&str>,
+    days_ahead: i64,
+) -> Result<&'a str, RequestError> {
+    let mut candidates = plans
+        .into_iter()
+        .filter(|(_, service, _)| service_name.is_none_or(|wanted| wanted == *service))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, _, date)| *date);
+    let Some((first, _, soonest)) = candidates.first().copied() else {
+        return Err(RequestError::NoUpcomingPlan { days_ahead });
+    };
+    candidates.retain(|(_, _, date)| *date == soonest);
+    if candidates.len() > 1 {
+        return Err(RequestError::AmbiguousNextPlan {
+            candidates: candidates
+                .iter()
+                .map(|(id, service, _)| format!("{id} ({service})"))
+                .collect(),
+        });
+    }
+    Ok(first)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use chrono::{DateTime, Duration, Utc};
+
+    use super::*;
+
+    fn at(hours: i64) -> DateTime<Utc> {
+        DateTime::<Utc>::UNIX_EPOCH + Duration::hours(hours)
+    }
+
+    #[test]
+    fn the_next_plan_is_the_soonest_of_the_wanted_service_type() {
+        let plans = [
+            ("late", "Sunday Morning", at(48)),
+            ("soon", "Sunday Morning", at(24)),
+            ("sooner", "Wednesday Night", at(12)),
+        ];
+        assert_eq!(soonest_plan(plans, None, 30).expect("soonest"), "sooner");
+        assert_eq!(
+            soonest_plan(plans, Some("Sunday Morning"), 30).expect("soonest of type"),
+            "soon"
+        );
+    }
+
+    #[test]
+    fn no_plan_and_two_plans_at_the_same_time_are_refused() {
+        assert!(matches!(
+            soonest_plan([("a", "Sunday Morning", at(1))], Some("Other"), 30),
+            Err(RequestError::NoUpcomingPlan { days_ahead: 30 })
+        ));
+        let simultaneous = [
+            ("a", "Traditional", at(24)),
+            ("b", "Contemporary", at(24)),
+            ("c", "Traditional", at(48)),
+        ];
+        assert!(matches!(
+            soonest_plan(simultaneous, None, 30),
+            Err(RequestError::AmbiguousNextPlan { candidates })
+                if candidates == ["a (Traditional)", "b (Contemporary)"]
+        ));
+        assert_eq!(
+            soonest_plan(simultaneous, Some("Contemporary"), 30).expect("named type"),
+            "b"
+        );
+    }
 }

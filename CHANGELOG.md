@@ -49,8 +49,6 @@ Dates are the day the work landed on `main`.
   (`docs/schema-audit.md`).
 - `just live-data`: runs the ignored tests that need the live data root; part
   of `just deep`; skips loudly without a root.
-- MCP `preview_playlist` returns `superseded_preview_revision` when a new
-  preview replaces an earlier executable one.
 - `docs/semantic-resolution.md` (translation, song identity, arrangement
   contracts) and `docs/text-fit-strategy.md` (proposal).
 - Playlist document (`docs/playlist-document.md`): `PlaylistDocument`, in
@@ -137,7 +135,7 @@ Dates are the day the work landed on `main`.
 - Songs: exact song-title matches own identity; ambiguous or conflicting
   titles require an explicit file selection.
 - README condensed around setup, configuration, and operation.
-- `build_service --configured-workspace` trusts the configured ProPresenter
+- `proflow --configured-workspace` trusts the configured ProPresenter
   root without consulting the active macOS show.
 - Typed identities in the compiled config (`project_config/runtime/
   identity.rs`). `PresentationTypeKey` is minted only when a presentation
@@ -162,10 +160,31 @@ Dates are the day the work landed on `main`.
   plan with no file has no decisions. `BuildReview::open_decisions` lists
   every item still waiting, and `into_prepared` now fails with
   `UnansweredDecisions` naming all of them instead of `UnresolvedPlan` for
-  the first. Nothing writes the file yet and no command reads it: the CLI
-  that does both is phase 2. The MCP tools still take decisions as
-  arguments; `EntryOverrideAction` and its resolution moved out of
-  `src/mcp` so both read one definition. New dependency: `toml`.
+  the first. `EntryOverrideAction` and its resolution moved out of `src/mcp`
+  so the file and the MCP override read one definition. New dependency:
+  `toml`. The format is documented in `docs/review-decisions.md`.
+- Phase 2: the command line is the boundary and the MCP tools call the same
+  functions.
+  - `proflow build --plan <id|next> [--service <type>]` reviews the plan with
+    its `review.toml` and renders and verifies it. With open decisions it
+    lists every one and exits 2. `proflow commit --plan ...` installs the
+    verified build. Exit 0 is done, 1 is an error; neither prompts
+    (`src/cli.rs`, `src/bin/proflow.rs`). `--plan next` is the soonest
+    upcoming plan, refused when two plans share that time unless `--service`
+    names one.
+  - Commit no longer needs the process that built. `Workstation::
+    commit_recorded` fetches the plan again, recomputes the five inputs, and
+    commits the verified build in the directory they name. A plan,
+    configuration, library or decision that changed since the build names a
+    directory with no build, so nothing is installed (`NoVerifiedBuild`).
+    This replaces the separate Planning Center freshness comparison. A build
+    is committed once (`BuildAlreadyCommitted`).
+  - MCP `preview_playlist` writes its arguments to the plan's `review.toml`,
+    replacing what was there, then builds from it. `preview_revision` is now
+    the identity of the rendered stage and survives a server restart;
+    `build_service` commits by plan and refuses a revision that is not the
+    build on disk. The response gains `open_decisions`. The process-local
+    preview store is deleted.
 - A target that changed between preview and commit is now reported as the
   typed `OutputReviewError` (`Changed`, `Appeared`, `Disappeared`) naming
   the path, instead of an I/O error reading "changed concurrently". The
@@ -220,33 +239,31 @@ Dates are the day the work landed on `main`.
   MCP override schema. Decisions made by rules are not written to
   `review.toml`, since writing them would change the hash that names the
   directory holding the result; they are in `classified/plans.json`.
+  Phase 2 has no separate `proflow review`: a review of a fully decided plan
+  already renders, so `build` is the one command, and it prints the open
+  decisions instead of writing them into `review.toml`. There are no golden
+  files; the three outputs are asserted verbatim in `src/cli/tests.rs`.
 - Build directories are never pruned. Every committed build keeps its
   artifacts and the bytes they replaced under `<data root>/builds/`, in
   place or in `retired/<n>/`. Nothing deletes old builds yet.
 - Two processes that review the same plan with the same inputs at the same
   time share one build directory and one `<stage>.tmp`; nothing locks it.
-- A build directory is trusted as much as the data root it lives in. Within
-  one process a prepared build is pinned to the rendered stage it previewed;
-  a later process that commits by plan (phase 2) has only the seals, which
-  anyone able to write the data root can rewrite.
-- Preview revisions are process-local. Restarting the MCP server, including
-  the restart that activates a new project config, discards every pending
-  preview. Persisting sealed previews under their revision would make
-  `build_service` restart-safe; this is a product decision, not started.
-  Scoped on 2026-10-11 and not built, for three reasons the decision should
-  weigh. None of the sealed state deserializes: `PreparedBuildRequest` and
-  everything under it (`ResolvedItemPlan`, `SourceManifest`,
-  `BoundBuildRequest`, `PreparedFileTransaction`, `PreparedLibraryUpdate`,
-  `FontProgramSnapshot`, `LibraryCandidates`, `RuntimeEvidence`) is built
-  only through checked constructors, so loading it from disk means a second
-  way to manufacture an executable request. Staged files are removed when
-  the transaction drops, so the transaction's lifetime would have to outlive
-  the process. And the restart named above, activating a new project
-  config, must discard previews anyway: plans compiled under the old config
-  are not the new config's plans, and commit already refuses a different
-  runtime (`PreparedRuntimeMismatch`). Persistence would only cover a crash
-  or a restart with nothing changed, where one more `preview_playlist` call
-  is the current cost.
+- A build directory is trusted as much as the data root it lives in. Commit
+  checks every stage against its seal and the snapshot against the
+  directory name, which catches accidents and stale builds, not someone who
+  can write the data root and reseal a stage. The MCP revision narrows that:
+  it must match the rendered stage.
+- `proflow build` and MCP `preview_playlist` share one `review.toml` per
+  plan. A preview replaces the file with its arguments, including with no
+  decisions when it is given none.
+- The `proflow` handlers and the two MCP handlers still have no
+  handler-level test (they need a live Planning Center). Their logic is
+  tested below them: command-line parsing and output, the executor's commit
+  by inputs, and the argument-to-decisions conversion.
+  A mutation run over the phase 2 modules (79 mutants: 42 caught, 31
+  unviable) missed 6, all in that untested layer: `Outcome::from_review`,
+  `Workstation::record_decisions` and `next_plan_id`, and two MCP server
+  functions.
 - The compiled config still looks macros and theme slides up by name in the
   loaded native assets (`MacroCache::find`, `slide_template`), and those
   lookups can still miss. `MacroName` and `ThemeSlideName` say which kind of
@@ -277,6 +294,18 @@ Dates are the day the work landed on `main`.
   built and tested on Linux. `just local` covers them.
 
 ### Dropped
+
+- The `build_service` binary and its `--skip`, `--decisions <json>`,
+  `--override-file`, `--portable` and `--library-local` arguments. `proflow
+  build` and `proflow commit` replace it, and every decision it took as an
+  argument is written in the plan's `review.toml`.
+- MCP `preview_playlist`'s `superseded_preview_revision` field, with the
+  process-local preview store it described. A revision that no longer names
+  the build on disk is refused at `build_service`.
+- Restart-safe previews as a separate item: phase 2 delivers it. The build
+  is on disk and the revision is derived from it.
+- `Workstation::build_service` and `build_prepared_request`, and the
+  executor's commit that took a refreshed snapshot from its caller.
 
 - `origin/claude/code-review-YH3Xk` (five commits from 2026-02-18: Planning
   Center credential error messages and loading-spinner fixes for the

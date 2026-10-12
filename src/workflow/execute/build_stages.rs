@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 
 use crate::planning_center::PlanSnapshot;
 use crate::workflow::build_dir::{
-    hex, BuildDir, BuildDirError, BuildInputs, BuildPlanId, Classified, Opened, Snapshotted,
-    Verified,
+    hex, BuildDir, BuildDirError, BuildInputs, BuildPlanId, Classified, Committed, Opened,
+    Rendered, Resumed, Snapshotted, Verified,
 };
 use crate::workflow::plan::ResolvedItemPlan;
 use proflow_propresenter::library::LibraryCandidates;
@@ -89,32 +89,99 @@ impl ServiceBuildExecutor<'_> {
         library_candidates: &LibraryCandidates,
         plans: &[ResolvedItemPlan],
     ) -> Result<BuildDir<Classified>, BuildServiceError> {
-        let plan = json(planning_center)?;
-        let render_assets = json(self.render_assets.fingerprint())?;
-        let bible_corpora = json(&self.bible_corpora.fingerprint().to_json())?;
-        let catalog = json(&catalog_entries(library_candidates)?)?;
-        let decisions_bytes = json(&canonical_decisions(decisions))?;
-
+        let inputs = self.recorded_inputs(decisions, planning_center, library_candidates)?;
         let build: BuildDir<Opened> = BuildDir::open(
             &self.builds_root(),
             &BuildPlanId::new(decisions.request.plan_id.as_str())?,
-            &BuildInputs {
-                plan_snapshot: &plan,
-                render_assets: &render_assets,
-                bible_corpora: &bible_corpora,
-                library: &catalog,
-                review_decisions: &decisions_bytes,
-            },
+            &inputs.borrowed(),
         )?;
         let build: BuildDir<Snapshotted> = build.resume_or_write(|stage| {
-            fs::write(stage.join(PLAN_FILE), &plan)?;
-            fs::write(stage.join(RENDER_ASSETS_FILE), &render_assets)?;
-            fs::write(stage.join(BIBLE_CORPORA_FILE), &bible_corpora)?;
-            fs::write(stage.join(CATALOG_FILE), &catalog)?;
-            fs::write(stage.join(DECISIONS_FILE), &decisions_bytes)
+            fs::write(stage.join(PLAN_FILE), &inputs.plan)?;
+            fs::write(stage.join(RENDER_ASSETS_FILE), &inputs.render_assets)?;
+            fs::write(stage.join(BIBLE_CORPORA_FILE), &inputs.bible_corpora)?;
+            fs::write(stage.join(CATALOG_FILE), &inputs.catalog)?;
+            fs::write(stage.join(DECISIONS_FILE), &inputs.decisions)
         })?;
         let plans = json(&plans)?;
         Ok(build.resume_or_write(|stage| fs::write(stage.join(PLANS_FILE), &plans))?)
+    }
+
+    /// Find the verified, uncommitted build of exactly these inputs.
+    ///
+    /// The inputs are recomputed from the live plan, runtime, library and
+    /// decisions, so a build is found only while nothing it was derived from
+    /// has changed.
+    pub(super) fn verified_build(
+        &self,
+        decisions: &ReviewedDecisions<'_>,
+        planning_center: &PlanSnapshot,
+        library_candidates: &LibraryCandidates,
+    ) -> Result<BuildDir<Verified>, BuildServiceError> {
+        let plan_id = decisions.request.plan_id.as_str();
+        let not_built = || BuildServiceError::NoVerifiedBuild {
+            plan_id: plan_id.to_string(),
+        };
+        let inputs = self.recorded_inputs(decisions, planning_center, library_candidates)?;
+        let build = BuildDir::find(
+            &self.builds_root(),
+            &BuildPlanId::new(plan_id)?,
+            &inputs.borrowed(),
+        )
+        .ok_or_else(not_built)?;
+        let Resumed::Written(build) = build.resume::<Snapshotted>()? else {
+            return Err(not_built());
+        };
+        let Resumed::Written(build) = build.resume::<Classified>()? else {
+            return Err(not_built());
+        };
+        let Resumed::Written(build) = build.resume::<Rendered>()? else {
+            return Err(not_built());
+        };
+        let Resumed::Written(build) = build.resume::<Verified>()? else {
+            return Err(not_built());
+        };
+        if build.stage_directory::<Committed>().exists() {
+            return Err(BuildServiceError::BuildAlreadyCommitted {
+                plan_id: plan_id.to_string(),
+            });
+        }
+        Ok(build)
+    }
+
+    fn recorded_inputs(
+        &self,
+        decisions: &ReviewedDecisions<'_>,
+        planning_center: &PlanSnapshot,
+        library_candidates: &LibraryCandidates,
+    ) -> Result<RecordedInputs, BuildServiceError> {
+        Ok(RecordedInputs {
+            plan: json(planning_center)?,
+            render_assets: json(self.render_assets.fingerprint())?,
+            bible_corpora: json(&self.bible_corpora.fingerprint().to_json())?,
+            catalog: json(&catalog_entries(library_candidates)?)?,
+            decisions: json(&canonical_decisions(decisions))?,
+        })
+    }
+}
+
+/// The five build inputs as the exact bytes that are hashed and recorded.
+struct RecordedInputs {
+    plan: Vec<u8>,
+    render_assets: Vec<u8>,
+    bible_corpora: Vec<u8>,
+    catalog: Vec<u8>,
+    decisions: Vec<u8>,
+}
+
+impl RecordedInputs {
+    fn borrowed(&self) -> BuildInputs<'_> {
+        BuildInputs {
+            plan_snapshot: &self.plan,
+            render_assets: &self.render_assets,
+            bible_corpora: &self.bible_corpora,
+            library: &self.catalog,
+            review_decisions: &self.decisions,
+        }
     }
 }
 
