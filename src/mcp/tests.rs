@@ -263,13 +263,19 @@ fn preview_entry_override_rejects_misspelled_decisions() {
 
 #[test]
 fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview() {
+    let builds = tempfile::tempdir().expect("temporary builds root");
     let mut snapshots = HashMap::new();
     let first = replace_prepared_snapshot(
         &mut snapshots,
         "plan-1".to_string(),
         Some(
-            PreparedBuildRequest::offline_test("plan-1", "Sunday Morning", "First preview")
-                .expect("empty reviewed request should capture"),
+            PreparedBuildRequest::offline_test(
+                builds.path(),
+                "plan-1",
+                "Sunday Morning",
+                "First preview",
+            )
+            .expect("empty reviewed request should capture"),
         ),
     );
     let stale_revision = first.revision.expect("executable preview mints a revision");
@@ -280,6 +286,7 @@ fn reviewed_revision_is_consumed_once_and_stale_calls_preserve_current_preview()
         "plan-1".to_string(),
         Some(
             PreparedBuildRequest::offline_test(
+                builds.path(),
                 "plan-1",
                 "Sunday Morning",
                 "May 24, 2026 - Sunday Morning",
@@ -358,13 +365,19 @@ fn malformed_preview_revisions_are_rejected_before_lookup() {
 
 #[test]
 fn unresolved_repreview_invalidates_an_older_prepared_revision() {
+    let builds = tempfile::tempdir().expect("temporary builds root");
     let mut snapshots = HashMap::new();
     let prepared = replace_prepared_snapshot(
         &mut snapshots,
         "plan-1".to_string(),
         Some(
-            PreparedBuildRequest::offline_test("plan-1", "Sunday Morning", "Old prepared playlist")
-                .expect("old prepared snapshot"),
+            PreparedBuildRequest::offline_test(
+                builds.path(),
+                "plan-1",
+                "Sunday Morning",
+                "Old prepared playlist",
+            )
+            .expect("old prepared snapshot"),
         ),
     );
     let stale_revision = prepared

@@ -631,3 +631,96 @@ fn rollback_does_not_overwrite_a_concurrently_changed_committed_target() {
     assert!(error.to_string().contains("changed concurrently"));
     assert_eq!(fs::read(target).expect("concurrent target"), b"concurrent");
 }
+
+fn sealed_pair(dir: &Path) -> (PathBuf, PathBuf, PreparedFileTransaction) {
+    let replaced = dir.join("replaced.pro");
+    let created = dir.join("created.proplaylist");
+    fs::write(&replaced, b"original").expect("existing target");
+    let mut transaction = reviewed_transaction(&[replaced.clone(), created.clone()]);
+    for (target, bytes) in [
+        (&replaced, b"new presentation".as_slice()),
+        (&created, b"playlist"),
+    ] {
+        let staged = transaction.stage_reviewed(target).expect("stage");
+        fs::write(staged, bytes).expect("write staged bytes");
+    }
+    (replaced, created, transaction.seal().expect("seal"))
+}
+
+#[test]
+fn an_exported_transaction_restages_and_commits_the_same_bytes_in_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let export = tempfile::tempdir().expect("export directory");
+    let (replaced, created, sealed) = sealed_pair(dir.path());
+    let outputs = sealed.export(export.path()).expect("export");
+    drop(sealed);
+
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| (output.target.clone(), output.replaces_existing))
+            .collect::<Vec<_>>(),
+        [(replaced.clone(), true), (created.clone(), false)]
+    );
+    assert_eq!(fs::read(&replaced).expect("untouched"), b"original");
+    assert!(!created.exists());
+
+    let committed = PreparedFileTransaction::restage(export.path(), &outputs)
+        .expect("restage")
+        .commit()
+        .expect("commit");
+
+    assert_eq!(committed, [replaced.clone(), created.clone()]);
+    assert_eq!(fs::read(&replaced).expect("replaced"), b"new presentation");
+    assert_eq!(fs::read(&created).expect("created"), b"playlist");
+}
+
+#[test]
+fn restaging_refuses_a_target_that_changed_since_it_was_exported() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let export = tempfile::tempdir().expect("export directory");
+    let (replaced, created, sealed) = sealed_pair(dir.path());
+    let outputs = sealed.export(export.path()).expect("export");
+    drop(sealed);
+
+    fs::write(&replaced, b"edited meanwhile").expect("edit target");
+    assert!(matches!(
+        PreparedFileTransaction::restage(export.path(), &outputs),
+        Err(OutputReviewError::Changed { path, .. }) if path == replaced
+    ));
+
+    fs::write(&replaced, b"original").expect("restore target");
+    fs::write(&created, b"appeared meanwhile").expect("create target");
+    assert!(matches!(
+        PreparedFileTransaction::restage(export.path(), &outputs),
+        Err(OutputReviewError::Appeared { path, .. }) if path == created
+    ));
+}
+
+#[test]
+fn restaging_refuses_an_artifact_that_differs_from_its_recorded_fingerprint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let export = tempfile::tempdir().expect("export directory");
+    let (replaced, _, sealed) = sealed_pair(dir.path());
+    let outputs = sealed.export(export.path()).expect("export");
+    drop(sealed);
+
+    fs::write(export.path().join("artifacts/000"), b"swapped").expect("swap artifact");
+
+    assert!(matches!(
+        PreparedFileTransaction::restage(export.path(), &outputs),
+        Err(OutputReviewError::Stage { path, .. }) if path == replaced
+    ));
+    assert_eq!(fs::read(&replaced).expect("untouched"), b"original");
+    let leftovers = fs::read_dir(dir.path())
+        .expect("list targets")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("proflow-stage")
+        })
+        .count();
+    assert_eq!(leftovers, 0, "a refused restage leaves no staged copies");
+}

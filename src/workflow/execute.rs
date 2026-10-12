@@ -42,6 +42,7 @@ mod presentation_output;
 mod receipt;
 mod render_assets;
 mod rendered_service;
+mod rendered_stage;
 mod request;
 pub(crate) mod restyle_text_fit;
 mod review;
@@ -352,6 +353,12 @@ pub enum BuildServiceError {
         "prepared build was committed through a different runtime than it was prepared against"
     )]
     PreparedRuntimeMismatch,
+    /// The rendered stage of the build directory is not the one this prepared
+    /// build was made from.
+    #[error(
+        "the prepared build was rendered again or changed on disk after preview; preview again"
+    )]
+    PreparedBuildSuperseded,
     /// A `.pro` file appeared in or vanished from the presentation library
     /// after the build was prepared, so ambiguity review is no longer valid.
     #[error("presentation library candidates changed after preview; preview again")]

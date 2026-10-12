@@ -43,13 +43,7 @@ fn prepared_build_refuses_commit_when_the_library_candidate_set_changed() {
     let runtime = TestRuntime::new(root.path());
     let library = runtime.locations().presentation_library().to_path_buf();
     write_song_with_arrangements(&library.join("Amazing Grace.pro"), &[]);
-    let prepared = PreparedBuildRequest::offline_test_prepared_by(
-        &runtime.executor(),
-        "plan-1",
-        "Sunday Morning",
-        "Candidates",
-    )
-    .expect("prepare offline build");
+    let prepared = prepare_empty(&runtime, "Candidates");
 
     write_song_with_arrangements(&library.join("Amazing Grace Copy.pro"), &[]);
     let error = runtime

@@ -245,6 +245,36 @@ impl OutputManifest {
         Ok(Self { outputs })
     }
 
+    /// Rebuild the reviewed output set recorded by a rendered build stage.
+    ///
+    /// Each entry is a target and the exact bytes it held when it was
+    /// reviewed, or `None` when it was absent. The result is checked against
+    /// the live target the same way a freshly captured manifest is.
+    pub(in crate::workflow) fn recorded(
+        outputs: impl IntoIterator<Item = (PathBuf, Option<Vec<u8>>)>,
+    ) -> Result<Self, OutputReviewError> {
+        let mut reviewed = Vec::new();
+        let mut seen = std::collections::BTreeMap::new();
+        for (index, (target, original)) in outputs.into_iter().enumerate() {
+            let path = PhysicalPath::resolve_output(&target)?;
+            if let Some(first_index) = seen.insert(path.clone(), index) {
+                return Err(OutputReviewError::DuplicateTarget {
+                    path: path.as_path().to_path_buf(),
+                    first: format!("reviewed output #{}", first_index + 1),
+                    second: format!("reviewed output #{}", index + 1),
+                });
+            }
+            let state = original.map_or(ReviewedOutputState::Absent, |bytes| {
+                ReviewedOutputState::Present {
+                    sha256: hash_bytes(&bytes),
+                    bytes,
+                }
+            });
+            reviewed.push(ReviewedOutput { path, state });
+        }
+        Ok(Self { outputs: reviewed })
+    }
+
     pub(in crate::workflow) fn into_outputs(self) -> Vec<ReviewedOutput> {
         self.outputs
     }

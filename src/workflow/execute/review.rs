@@ -1,6 +1,5 @@
 //! Review capture and approval state transitions.
 
-#[cfg(test)]
 use std::path::Path;
 
 use crate::planning_center::{PlanFreshnessError, PlanSnapshot};
@@ -14,12 +13,10 @@ use super::build_stages::ReviewedDecisions;
 use super::overrides::resolve_requested_plans;
 use super::receipt::receipt_path_for_playlist;
 use super::request::{BoundBuildRequest, BuildRequest, RequestError};
-use super::run::PreparedService;
-#[cfg(test)]
-use super::run::RuntimeEvidence;
 use super::{BuildServiceError, ServiceBuildExecutor};
-use crate::workflow::approval::SourceManifest;
+use crate::workflow::build_dir::{BuildDir, Rendered, SealDigest, Verified};
 use crate::workflow::plan::{ReadyAction, ResolvedItemPlan};
+use crate::workflow::report::BuildServiceResult;
 
 mod path_ownership;
 mod scripture_excerpt;
@@ -49,18 +46,23 @@ pub struct NeedsReviewBuildRequest {
     plans: Vec<ResolvedItemPlan>,
 }
 
-/// Exact native artifacts prepared from one fully resolved review.
+/// One fully resolved review whose native artifacts are verified on disk.
+///
+/// The artifacts, the bytes they replace, and every fingerprint commit checks
+/// live in the build directory this value names. What it holds in memory is
+/// only what a caller displays, plus the identity of the rendered stage it was
+/// made from: commit refuses a build directory whose rendered stage is no
+/// longer that one.
 ///
 /// Fields are private so callers cannot manufacture an executable request from
 /// plans that did not pass capture, rendering, packaging, and transaction seal.
-/// Reviewed source and portable-media payloads have been consumed; only their
-/// fingerprints remain for the final drift check.
 #[derive(Debug)]
 pub struct PreparedBuildRequest {
     request: ReviewedRequest,
     plans: Vec<ResolvedItemPlan>,
-    sources: SourceManifest,
-    prepared: PreparedService,
+    result: BuildServiceResult,
+    build: BuildDir<Verified>,
+    rendered: SealDigest,
 }
 
 /// Planning Center source captured before classification and retained through
@@ -163,7 +165,7 @@ impl BuildReview {
     /// already crossed the prepared boundary.
     pub fn materialized_result(&self) -> Option<&crate::workflow::report::BuildServiceResult> {
         match self {
-            Self::Prepared(prepared) => Some(prepared.prepared.result()),
+            Self::Prepared(prepared) => Some(&prepared.result),
             Self::NeedsReview(_) => None,
         }
     }
@@ -223,22 +225,31 @@ impl BuildReview {
 }
 
 impl PreparedBuildRequest {
-    pub(super) const fn from_materialized(
+    /// Name the verified build a finished render or an earlier review left.
+    pub(super) fn from_verified_build(
         request: ReviewedRequest,
         plans: Vec<ResolvedItemPlan>,
-        sources: SourceManifest,
-        prepared: PreparedService,
-    ) -> Self {
-        Self {
+        result: BuildServiceResult,
+        build: BuildDir<Verified>,
+    ) -> Result<Self, BuildServiceError> {
+        let rendered = build.verify_stage::<Rendered>()?;
+        Ok(Self {
             request,
             plans,
-            sources,
-            prepared,
-        }
+            result,
+            build,
+            rendered,
+        })
     }
 
-    pub(super) fn into_commit_parts(self) -> (SourceManifest, PreparedService) {
-        (self.sources, self.prepared)
+    /// Hand the build directory to commit, if its rendered stage is still the
+    /// one this value was made from.
+    pub(super) fn into_verified_build(self) -> Result<BuildDir<Verified>, BuildServiceError> {
+        if self.build.verify_stage::<Rendered>()? != self.rendered {
+            return Err(BuildServiceError::PreparedBuildSuperseded);
+        }
+        self.build.verify_stage::<Verified>()?;
+        Ok(self.build)
     }
 
     pub(super) const fn planning_center_source(&self) -> &ReviewedPlanningCenterSource {
@@ -280,90 +291,85 @@ impl PreparedBuildRequest {
         self.request.request.playlist_export.media_assets()
     }
 
+    /// Directory holding every stage of this build.
+    pub fn build_directory(&self) -> &Path {
+        self.build.path()
+    }
+
     #[cfg(test)]
     pub(crate) fn prepared_artifact_bytes(
         &self,
         target: &Path,
-    ) -> Result<Option<Vec<u8>>, std::io::Error> {
-        self.prepared.artifact_bytes(target)
+    ) -> Result<Option<Vec<u8>>, BuildServiceError> {
+        super::rendered_stage::artifact_bytes(&self.build, target)
     }
 
     #[cfg(test)]
     pub(crate) fn has_reviewed_source(&self, source: &Path) -> bool {
-        self.sources.contains(source)
+        super::rendered_stage::load_prepared(&self.build)
+            .is_ok_and(|prepared| prepared.sources.contains(source))
     }
 
+    /// A verified build with no artifacts, for tests of the bookkeeping
+    /// around prepared builds. It belongs to no runtime and cannot commit.
     #[cfg(test)]
     pub(crate) fn offline_test(
+        builds_root: &Path,
         plan_id: &str,
         service_name: &str,
         playlist_name: &str,
     ) -> Result<Self, BuildServiceError> {
-        Self::offline_test_with(
-            RuntimeEvidence::diagnostic(),
-            LibraryCandidates::empty(),
-            plan_id,
-            service_name,
-            playlist_name,
-        )
-    }
+        use crate::workflow::approval::{OutputManifest, SourceManifest};
+        use crate::workflow::build_dir::{BuildInputs, BuildPlanId, Classified, Snapshotted};
+        use crate::workflow::transaction::BuildFileTransaction;
+        use proflow_propresenter::text_fit::{FontProgramSnapshot, TextFitContractSummary};
 
-    /// Offline prepared state bound to `executor`'s runtime evidence.
-    #[cfg(test)]
-    pub(crate) fn offline_test_prepared_by(
-        executor: &ServiceBuildExecutor<'_>,
-        plan_id: &str,
-        service_name: &str,
-        playlist_name: &str,
-    ) -> Result<Self, BuildServiceError> {
-        Self::offline_test_with(
-            executor.runtime_evidence(),
-            executor.lock_library()?.scan_candidates()?,
-            plan_id,
-            service_name,
-            playlist_name,
-        )
-    }
-
-    #[cfg(test)]
-    fn offline_test_with(
-        runtime: RuntimeEvidence,
-        library_candidates: LibraryCandidates,
-        plan_id: &str,
-        service_name: &str,
-        playlist_name: &str,
-    ) -> Result<Self, BuildServiceError> {
         let request = ReviewedRequest::offline(BuildRequest {
             plan_id: plan_id.to_string(),
             service_name: Some(service_name.to_string()),
             playlist_name: Some(playlist_name.to_string()),
             ..BuildRequest::default()
         })?;
-        let inputs = ReviewedBuildInputs::capture(
-            request,
-            Vec::new(),
-            PresentationSize::FULL_HD,
-            Path::new("."),
-            Path::new("."),
-            std::iter::empty(),
-            std::iter::empty(),
-            LibraryCandidates::empty(),
-        )?;
-        let ReviewedBuildInputs {
-            request,
-            reviewed,
-            outputs,
-            ..
-        } = inputs;
+        let build: BuildDir<Snapshotted> = BuildDir::open(
+            builds_root,
+            &BuildPlanId::new(plan_id)?,
+            &BuildInputs {
+                plan_snapshot: b"offline",
+                render_assets: b"offline",
+                bible_corpora: b"offline",
+                library: b"offline",
+                review_decisions: playlist_name.as_bytes(),
+            },
+        )?
+        .write(|_| Ok(()))?;
+        let build: BuildDir<Classified> = build.write(|_| Ok(()))?;
+        let result = BuildServiceResult {
+            playlist_path: std::path::PathBuf::new(),
+            receipt_path: std::path::PathBuf::new(),
+            receipt_revision: String::new(),
+            text_fit_contract: TextFitContractSummary::diagnostic(),
+            package_mode: PlaylistExportMode::LibraryLinks,
+            media_asset_count: 0,
+            total_items: 0,
+            entries: Vec::new(),
+            generated_count: 0,
+            library_count: 0,
+            skipped_count: 0,
+            warnings: Vec::new(),
+        };
         let transaction =
-            crate::workflow::transaction::BuildFileTransaction::from_reviewed(outputs).seal()?;
-        let (plans, sources) = reviewed.into_verified_parts()?;
-        Ok(Self::from_materialized(
-            request,
-            plans,
-            sources,
-            PreparedService::offline_test(runtime, library_candidates, transaction),
-        ))
+            BuildFileTransaction::from_reviewed(OutputManifest::capture(std::iter::empty())?)
+                .seal()?;
+        let build = super::rendered_stage::write_prepared(
+            build,
+            &super::rendered_stage::RenderedArtifacts {
+                transaction: &transaction,
+                sources: &SourceManifest::recorded(std::iter::empty()),
+                font_programs: &FontProgramSnapshot::diagnostic(),
+                result: &result,
+            },
+        )?;
+        Self::from_verified_build(request, Vec::new(), result, build)
     }
 }
 
@@ -384,7 +390,7 @@ impl ServiceBuildExecutor<'_> {
         let request = BoundBuildRequest::try_from(request)?;
         let mut plans = resolve_requested_plans(plans, &skip_output_keys, &overrides)?;
         reconcile_description_scripture_excerpts(&mut plans, self.bible_corpora)?;
-        self.classified_build(
+        let build = self.classified_build(
             &ReviewedDecisions {
                 request: &request,
                 skip_output_keys: &skip_output_keys,
@@ -402,6 +408,10 @@ impl ServiceBuildExecutor<'_> {
                 },
             )));
         }
+        // A fully resolved review always renders. A render left by an earlier
+        // review of the same inputs is not reused: it may predate this binary
+        // or an input the hash does not cover.
+        let build = build.clear_later_stages()?;
         let mut additional_sources = request
             .playlist_export
             .media_assets()
@@ -416,6 +426,37 @@ impl ServiceBuildExecutor<'_> {
                 additional_sources.push(path);
             }
         }
+        let (output_targets, existing_generated_targets) =
+            self.planned_output_targets(&request, &plans)?;
+        validate_reviewed_path_ownership(
+            &plans,
+            self.render_assets.locations().project_data_root(),
+            &additional_sources,
+            &output_targets,
+        )?;
+        additional_sources.extend(existing_generated_targets);
+        let reviewed = ReviewedBuildInputs::capture(
+            ReviewedRequest::new(request, planning_center)?,
+            plans,
+            presentation_size,
+            self.render_assets.locations().project_data_root(),
+            self.render_assets.locations().propresenter_root(),
+            additional_sources,
+            output_targets.into_iter().map(|target| target.physical),
+            library_candidates,
+        )?;
+        validate_reviewed_background_bindings(&reviewed)?;
+        let prepared = self.prepare_reviewed_service(reviewed, build)?;
+        Ok(BuildReview::Prepared(Box::new(prepared)))
+    }
+
+    /// Every path the build will write, with the plan that owns it, and the
+    /// generated targets that already exist and are therefore also sources.
+    fn planned_output_targets(
+        &self,
+        request: &BoundBuildRequest,
+        plans: &[ResolvedItemPlan],
+    ) -> Result<(Vec<PlannedOutputTarget>, Vec<std::path::PathBuf>), BuildServiceError> {
         let playlist_path = playlist_output_path(
             self.render_assets.locations().playlist_output(),
             &request.playlist_name,
@@ -426,7 +467,7 @@ impl ServiceBuildExecutor<'_> {
             PlannedOutputTarget::resolve(ReviewedOutputOwner::Playlist, &playlist_path)?,
         ];
         let mut existing_generated_targets = Vec::new();
-        for plan in &plans {
+        for plan in plans {
             match plan.ready_action() {
                 Some(
                     ReadyAction::RestyleExisting { file_path, .. }
@@ -454,26 +495,7 @@ impl ServiceBuildExecutor<'_> {
                 Some(ReadyAction::UseExisting { .. }) | None => {}
             }
         }
-        validate_reviewed_path_ownership(
-            &plans,
-            self.render_assets.locations().project_data_root(),
-            &additional_sources,
-            &output_targets,
-        )?;
-        additional_sources.extend(existing_generated_targets);
-        let reviewed = ReviewedBuildInputs::capture(
-            ReviewedRequest::new(request, planning_center)?,
-            plans,
-            presentation_size,
-            self.render_assets.locations().project_data_root(),
-            self.render_assets.locations().propresenter_root(),
-            additional_sources,
-            output_targets.into_iter().map(|target| target.physical),
-            library_candidates,
-        )?;
-        validate_reviewed_background_bindings(&reviewed)?;
-        let prepared = self.prepare_reviewed_service(reviewed)?;
-        Ok(BuildReview::Prepared(Box::new(prepared)))
+        Ok((output_targets, existing_generated_targets))
     }
 
     #[cfg(test)]

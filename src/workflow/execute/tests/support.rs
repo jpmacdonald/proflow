@@ -294,6 +294,20 @@ pub(super) fn reviewed_request(playlist_name: &str) -> BuildRequest {
     }
 }
 
+/// A prepared build with no plan entries: only its playlist and receipt.
+pub(super) fn prepare_empty(runtime: &TestRuntime, playlist_name: &str) -> PreparedBuildRequest {
+    expect_prepared(
+        runtime
+            .executor()
+            .review_build_request(
+                reviewed_request(playlist_name),
+                &[],
+                proflow_propresenter::PresentationSize::FULL_HD,
+            )
+            .expect("review an empty plan"),
+    )
+}
+
 pub(super) fn expect_prepared(review: BuildReview) -> PreparedBuildRequest {
     review
         .into_prepared()

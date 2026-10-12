@@ -290,8 +290,11 @@ fn receipt_target_drift_after_review_aborts_the_whole_build() {
         .build_prepared_offline(reviewed)
         .expect_err("changed receipt target must invalidate the transaction");
 
-    assert!(matches!(error, BuildServiceError::Io(_)));
-    assert!(error.to_string().contains("changed concurrently"));
+    assert!(matches!(
+        error,
+        BuildServiceError::OutputReview(OutputReviewError::Appeared { ref path, .. })
+            if *path == receipt_path
+    ));
     assert_eq!(
         std::fs::read(&receipt_path).expect("concurrent receipt preserved"),
         b"appeared after review"

@@ -560,13 +560,7 @@ fn prepared_build_refuses_commit_through_a_different_runtime() {
     let other_root = tempfile::tempdir().expect("other temporary root");
     let preparing = TestRuntime::new(preparing_root.path());
     let other = TestRuntime::new(other_root.path());
-    let prepared = PreparedBuildRequest::offline_test_prepared_by(
-        &preparing.executor(),
-        "plan-1",
-        "Sunday Morning",
-        "Cross Runtime",
-    )
-    .expect("prepare offline build against the first runtime");
+    let prepared = prepare_empty(&preparing, "Cross Runtime");
 
     let error = other
         .executor()
@@ -580,13 +574,7 @@ fn prepared_build_refuses_commit_through_a_different_runtime() {
 fn prepared_build_commits_through_the_runtime_it_was_prepared_against() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = TestRuntime::new(root.path());
-    let prepared = PreparedBuildRequest::offline_test_prepared_by(
-        &runtime.executor(),
-        "plan-1",
-        "Sunday Morning",
-        "Same Runtime",
-    )
-    .expect("prepare offline build");
+    let prepared = prepare_empty(&runtime, "Same Runtime");
 
     runtime
         .executor()

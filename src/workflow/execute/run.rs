@@ -1,23 +1,20 @@
 //! Execution of an approved plan through one filesystem transaction.
 
-#[cfg(test)]
-use std::path::{Path, PathBuf};
-
-use crate::bible::BibleCorpusFingerprint;
+use crate::workflow::build_dir::{BuildDir, Classified, Rendered};
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::BuildFileTransaction;
 use crate::workflow::transaction::PreparedFileTransaction;
-use proflow_propresenter::library::{LibraryCandidates, PreparedLibraryUpdate};
+use proflow_propresenter::library::{LibraryCatalog, PreparedLibraryUpdate};
 use proflow_propresenter::text_fit::FontProgramSnapshot;
-#[cfg(test)]
-use proflow_propresenter::text_fit::TextFitContractSummary;
 
 use super::receipt::{
     prepare_build_receipt, receipt_path_for_playlist, verify_sealed_build_artifacts,
     BuildReceiptError, BuildReceiptInputs,
 };
-use super::render_assets::RenderAssetFingerprint;
 use super::rendered_service::collect_build_warnings;
+use super::rendered_stage::{
+    load_prepared, write_committed, write_prepared, LoadedPrepared, RenderedArtifacts,
+};
 use super::review::PreparedBuildRequest;
 use super::{BuildServiceError, ServiceBuildExecutor};
 
@@ -27,6 +24,7 @@ impl ServiceBuildExecutor<'_> {
     pub(super) fn prepare_reviewed_service(
         &self,
         inputs: super::review::ReviewedBuildInputs,
+        build: BuildDir<Classified>,
     ) -> Result<PreparedBuildRequest, BuildServiceError> {
         let super::review::ReviewedBuildInputs {
             request,
@@ -104,159 +102,86 @@ impl ServiceBuildExecutor<'_> {
         let transaction = rendered.transaction.seal()?;
         verify_sealed_build_artifacts(&receipt_path, &receipt, &staged_artifacts, &transaction)?;
         self.render_assets.verify_current()?;
-        let artifacts = transaction.presentation_artifacts()?;
-        let catalog_updates = {
+        {
             let catalog = self.lock_library()?;
-            artifacts
-                .iter()
-                .map(|(path, bytes)| catalog.prepare_owned_update(path, bytes))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .flatten()
-                .collect()
-        };
-
-        let library_candidates = self.lock_library()?.scan_candidates()?;
-        if library_candidates != reviewed_candidates {
-            return Err(BuildServiceError::LibraryCandidatesChanged);
+            // A rendered presentation the catalog cannot take is refused now,
+            // not at commit.
+            catalog_updates(&catalog, &transaction)?;
+            if catalog.scan_candidates()? != reviewed_candidates {
+                return Err(BuildServiceError::LibraryCandidatesChanged);
+            }
         }
-        let prepared = PreparedService {
-            runtime: self.runtime_evidence(),
-            library_candidates,
-            transaction,
-            catalog_updates,
-            font_programs,
-            result,
-        };
-        Ok(PreparedBuildRequest::from_materialized(
-            request, plans, sources, prepared,
-        ))
+        let build = write_prepared(
+            build,
+            &RenderedArtifacts {
+                transaction: &transaction,
+                sources: &sources,
+                font_programs: &font_programs,
+                result: &result,
+            },
+        )?;
+        // The artifacts now live in the build directory. Dropping the
+        // transaction removes the copies staged beside the live targets.
+        drop(transaction);
+        PreparedBuildRequest::from_verified_build(request, plans, result, build)
     }
 
+    /// Commit the verified build `reviewed` names, reading every artifact and
+    /// every fingerprint back from its build directory.
     pub(super) fn commit_prepared_service(
         &self,
         reviewed: PreparedBuildRequest,
     ) -> Result<BuildServiceResult, BuildServiceError> {
-        let (sources, prepared) = reviewed.into_commit_parts();
-        let PreparedService {
-            transaction,
-            catalog_updates,
+        let build = reviewed.into_verified_build()?;
+        let reviewed_candidates = self.verify_snapshot_stage(&build)?;
+        let LoadedPrepared {
+            outputs,
+            sources,
             font_programs,
-            result,
-            runtime,
-            library_candidates,
-        } = prepared;
-        if runtime != self.runtime_evidence() {
-            return Err(BuildServiceError::PreparedRuntimeMismatch);
-        }
+            mut result,
+        } = load_prepared(&build)?;
+
         let mut catalog = self.lock_library()?;
-        if catalog.scan_candidates()? != library_candidates {
+        if catalog
+            .scan_candidates()?
+            .paths()
+            .ne(reviewed_candidates.iter().map(std::path::PathBuf::as_path))
+        {
             return Err(BuildServiceError::LibraryCandidatesChanged);
         }
-        let committed_catalog = catalog.with_prepared_updates(&catalog_updates)?;
         sources.verify()?;
         self.render_assets.verify_current()?;
         self.bible_corpora.verify_current()?;
         font_programs.verify_current()?;
-        transaction.commit()?;
+        let transaction =
+            PreparedFileTransaction::restage(&build.stage_directory::<Rendered>(), &outputs)?;
+        let committed_catalog =
+            catalog.with_prepared_updates(&catalog_updates(&catalog, &transaction)?)?;
+        let targets = transaction.commit()?;
         *catalog = committed_catalog;
         drop(catalog);
+        // The library is the truth of a commit. A build directory that could
+        // not record it is reported, not turned into a failed build.
+        if let Err(error) = write_committed(build, &targets) {
+            result.warnings.push(format!(
+                "the build is committed, but its build directory could not record that: {error}"
+            ));
+        }
         Ok(result)
     }
 }
 
-/// The render-asset and Bible-corpus evidence a build was prepared against.
-/// Commit verifies freshness through the committing runtime, so that runtime
-/// must hold the same evidence the build was prepared from.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct RuntimeEvidence {
-    render_assets: RenderAssetFingerprint,
-    bible_corpora: BibleCorpusFingerprint,
-}
-
-impl RuntimeEvidence {
-    #[cfg(test)]
-    pub(super) const fn diagnostic() -> Self {
-        Self {
-            render_assets: RenderAssetFingerprint {
-                schema: "diagnostic",
-                config_sha256: String::new(),
-                theme: None,
-                macros: None,
-                audience_workspace: None,
-                audience_themes: Vec::new(),
-                revision: String::new(),
-            },
-            bible_corpora: BibleCorpusFingerprint::diagnostic(),
-        }
-    }
-}
-
-impl ServiceBuildExecutor<'_> {
-    pub(super) fn runtime_evidence(&self) -> RuntimeEvidence {
-        RuntimeEvidence {
-            render_assets: self.render_assets.fingerprint().clone(),
-            bible_corpora: self.bible_corpora.fingerprint(),
-        }
-    }
-}
-
-pub(super) struct PreparedService {
-    runtime: RuntimeEvidence,
-    library_candidates: LibraryCandidates,
-    transaction: PreparedFileTransaction,
-    catalog_updates: Vec<PreparedLibraryUpdate>,
-    font_programs: FontProgramSnapshot,
-    result: BuildServiceResult,
-}
-
-impl PreparedService {
-    pub(super) const fn result(&self) -> &BuildServiceResult {
-        &self.result
-    }
-}
-
-#[cfg(test)]
-impl PreparedService {
-    pub(super) fn artifact_bytes(&self, target: &Path) -> std::io::Result<Option<Vec<u8>>> {
-        self.transaction.staged_bytes_for(target)
-    }
-
-    pub(super) fn offline_test(
-        runtime: RuntimeEvidence,
-        library_candidates: LibraryCandidates,
-        transaction: PreparedFileTransaction,
-    ) -> Self {
-        Self {
-            runtime,
-            library_candidates,
-            transaction,
-            catalog_updates: Vec::new(),
-            font_programs: FontProgramSnapshot::diagnostic(),
-            result: BuildServiceResult {
-                playlist_path: PathBuf::new(),
-                receipt_path: PathBuf::new(),
-                receipt_revision: String::new(),
-                text_fit_contract: TextFitContractSummary::diagnostic(),
-                package_mode: proflow_propresenter::playlist::PlaylistExportMode::LibraryLinks,
-                media_asset_count: 0,
-                total_items: 0,
-                entries: Vec::new(),
-                generated_count: 0,
-                library_count: 0,
-                skipped_count: 0,
-                warnings: Vec::new(),
-            },
-        }
-    }
-}
-
-impl std::fmt::Debug for PreparedService {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PreparedService")
-            .field("transaction", &self.transaction)
-            .field("playlist_path", &self.result.playlist_path)
-            .finish_non_exhaustive()
-    }
+/// Catalog entries for every presentation the transaction will install.
+fn catalog_updates(
+    catalog: &LibraryCatalog,
+    transaction: &PreparedFileTransaction,
+) -> Result<Vec<PreparedLibraryUpdate>, BuildServiceError> {
+    Ok(transaction
+        .presentation_artifacts()?
+        .iter()
+        .map(|(path, bytes)| catalog.prepare_owned_update(path, bytes))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }

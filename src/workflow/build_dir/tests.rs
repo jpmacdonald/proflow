@@ -229,3 +229,118 @@ fn plan_ids_that_could_leave_the_builds_root_are_rejected() {
         "plan_7-a"
     );
 }
+
+fn through<N>(build: BuildDir<N::Previous>) -> BuildDir<N>
+where
+    N: WrittenStage,
+    N::Previous: Stage,
+{
+    build
+        .write(|stage| fs::write(stage.join("file"), N::DIRECTORY))
+        .expect("write stage")
+}
+
+fn rendered(root: &Path) -> BuildDir<Rendered> {
+    through(through::<Classified>(snapshotted(root)))
+}
+
+#[test]
+fn a_seal_digest_identifies_the_stage_content() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let other_root = tempfile::tempdir().expect("other temporary root");
+    let build = snapshotted(root.path());
+    let digest = build.verify_stage::<Snapshotted>().expect("digest");
+
+    assert_eq!(
+        digest,
+        snapshotted(other_root.path())
+            .verify_stage::<Snapshotted>()
+            .expect("equal stage")
+    );
+    let classified: BuildDir<Classified> = through(build);
+    assert_ne!(
+        digest,
+        classified
+            .verify_stage::<Classified>()
+            .expect("other stage")
+    );
+
+    fs::write(classified.stage_path().join("file"), b"edited").expect("edit");
+    assert!(matches!(
+        classified.verify_stage::<Classified>(),
+        Err(BuildDirError::SealMismatch {
+            stage: "classified",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_directory_is_named_only_by_its_own_inputs() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let build = opened(root.path());
+    assert!(build.is_named_by(&INPUTS));
+    assert!(!build.is_named_by(&BuildInputs {
+        library: b"another library",
+        ..INPUTS
+    }));
+}
+
+#[test]
+fn clearing_deletes_a_render_that_was_never_committed() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let build: BuildDir<Verified> = through(rendered(root.path()));
+    let path = build.path().to_path_buf();
+    let classified: BuildDir<Classified> = match opened(root.path())
+        .resume::<Snapshotted>()
+        .expect("resume snapshot")
+    {
+        Resumed::Written(build) => match build.resume().expect("resume classified") {
+            Resumed::Written(build) => build,
+            Resumed::NotYet(_) => panic!("classified stage must exist"),
+        },
+        Resumed::NotYet(_) => panic!("snapshot stage must exist"),
+    };
+
+    let cleared = classified.clear_later_stages().expect("clear");
+
+    assert!(path.join("classified").is_dir());
+    assert!(!path.join("rendered").exists());
+    assert!(!path.join("verified").exists());
+    assert!(!path.join("retired").exists());
+    // Nothing is left to clear, and the build renders again.
+    let cleared = cleared.clear_later_stages().expect("clear again");
+    through::<Rendered>(cleared);
+}
+
+#[test]
+fn clearing_keeps_a_committed_build_as_a_numbered_record() {
+    let root = tempfile::tempdir().expect("temporary root");
+    for record in ["0", "1"] {
+        let classified = match snapshotted_or_resumed(root.path()) {
+            Resumed::Written(build) => build,
+            Resumed::NotYet(build) => through(build),
+        };
+        let committed: BuildDir<Committed> =
+            through(through::<Verified>(through::<Rendered>(classified.clone())));
+        let path = committed.path().to_path_buf();
+
+        classified.clear_later_stages().expect("clear");
+
+        for stage in ["rendered", "verified", "committed"] {
+            assert!(!path.join(stage).exists());
+            assert!(path.join("retired").join(record).join(stage).is_dir());
+        }
+    }
+}
+
+fn snapshotted_or_resumed(root: &Path) -> Resumed<Snapshotted, Classified> {
+    let snapshot = match opened(root)
+        .resume::<Snapshotted>()
+        .expect("resume snapshot")
+    {
+        Resumed::Written(build) => build,
+        Resumed::NotYet(build) => through(build),
+    };
+    snapshot.resume().expect("resume classified")
+}

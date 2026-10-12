@@ -710,14 +710,6 @@ impl BibleCorpusFingerprint {
                 .collect::<BTreeMap<_, _>>(),
         })
     }
-
-    #[cfg(test)]
-    pub(crate) const fn diagnostic() -> Self {
-        Self {
-            root: PathBuf::new(),
-            sources: BTreeMap::new(),
-        }
-    }
 }
 
 /// Immutable, parsed Bible corpora captured from one project data bundle.

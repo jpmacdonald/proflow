@@ -1,9 +1,12 @@
 //! Staged file transaction for service builds.
 //!
-//! Rendering writes only sibling staging files. Commit atomically replaces each
-//! target and writes the playlist last, so a failed render never changes live
-//! library state and a reported commit failure can restore already-replaced
-//! targets. The multi-file operation is process-transactional, not power-loss
+//! Rendering writes only sibling staging files. Once sealed, a transaction is
+//! exported to its build directory and its staging files are removed; commit
+//! stages the exported bytes beside their targets again, through the same
+//! reviewed-output checks, immediately before installing them. Commit
+//! atomically replaces each target and writes the playlist last, so a failed
+//! render never changes live library state and a reported commit failure can
+//! restore already-replaced targets. The multi-file operation is process-transactional, not power-loss
 //! atomic or durable: it has no fsync journal or startup recovery protocol.
 //!
 //! Each target is compared with its staged-time snapshot immediately before its
@@ -71,6 +74,27 @@ pub(crate) struct StagedArtifact {
     target: PathBuf,
     length: u64,
     sha256: [u8; 32],
+}
+
+/// One artifact of a sealed transaction as recorded in a build directory.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExportedOutput {
+    /// Final target the artifact is committed to.
+    pub(crate) target: PathBuf,
+    /// Exact artifact byte length.
+    pub(crate) length: u64,
+    /// SHA-256 of the exact artifact bytes.
+    pub(crate) sha256: String,
+    /// Whether the target held a file when it was reviewed.
+    pub(crate) replaces_existing: bool,
+}
+
+const ARTIFACTS_DIRECTORY: &str = "artifacts";
+const ORIGINALS_DIRECTORY: &str = "originals";
+
+fn exported_path(directory: &Path, kind: &str, index: usize) -> PathBuf {
+    directory.join(kind).join(format!("{index:03}"))
 }
 
 impl StagedArtifact {
@@ -258,6 +282,88 @@ impl PreparedFileTransaction {
             .collect()
     }
 
+    /// Copy every sealed artifact, and the bytes it will replace, into
+    /// `directory`, in commit order.
+    pub(crate) fn export(&self, directory: &Path) -> io::Result<Vec<ExportedOutput>> {
+        fs::create_dir(directory.join(ARTIFACTS_DIRECTORY))?;
+        fs::create_dir(directory.join(ORIGINALS_DIRECTORY))?;
+        self.files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| {
+                let bytes = fs::read(&file.staged)?;
+                if fingerprint_bytes(&bytes)? != file.prepared {
+                    return Err(io::Error::other(format!(
+                        "prepared build artifact changed after preview: {}",
+                        file.reviewed_path.requested_path().display()
+                    )));
+                }
+                fs::write(exported_path(directory, ARTIFACTS_DIRECTORY, index), bytes)?;
+                if let Some(original) = &file.original {
+                    fs::write(
+                        exported_path(directory, ORIGINALS_DIRECTORY, index),
+                        original,
+                    )?;
+                }
+                Ok(ExportedOutput {
+                    target: file.reviewed_path.requested_path().to_path_buf(),
+                    length: file.prepared.length,
+                    sha256: crate::workflow::build_dir::hex(&file.prepared.sha256),
+                    replaces_existing: file.original.is_some(),
+                })
+            })
+            .collect()
+    }
+
+    /// Stage an exported artifact set again, beside its live targets.
+    ///
+    /// This goes through the same reviewed-output checks as a first render:
+    /// each target must still hold exactly the bytes recorded for it, and the
+    /// restaged bytes must match the fingerprints in `outputs`.
+    pub(crate) fn restage(
+        directory: &Path,
+        outputs: &[ExportedOutput],
+    ) -> Result<Self, OutputReviewError> {
+        let stage_error = |target: &Path, source: io::Error| OutputReviewError::Stage {
+            path: target.to_path_buf(),
+            source,
+        };
+        let recorded = outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                let original = output
+                    .replaces_existing
+                    .then(|| fs::read(exported_path(directory, ORIGINALS_DIRECTORY, index)))
+                    .transpose()
+                    .map_err(|source| stage_error(&output.target, source))?;
+                Ok((output.target.clone(), original))
+            })
+            .collect::<Result<Vec<_>, OutputReviewError>>()?;
+        let mut transaction =
+            BuildFileTransaction::from_reviewed(OutputManifest::recorded(recorded)?);
+        for (index, output) in outputs.iter().enumerate() {
+            let staged = transaction.stage_reviewed(&output.target)?;
+            fs::copy(
+                exported_path(directory, ARTIFACTS_DIRECTORY, index),
+                &staged,
+            )
+            .map_err(|source| stage_error(&output.target, source))?;
+        }
+        let prepared = transaction.seal()?;
+        for (file, output) in prepared.files.iter().zip(outputs) {
+            if file.prepared.length != output.length
+                || crate::workflow::build_dir::hex(&file.prepared.sha256) != output.sha256
+            {
+                return Err(stage_error(
+                    &output.target,
+                    io::Error::other("rendered artifact does not match its recorded fingerprint"),
+                ));
+            }
+        }
+        Ok(prepared)
+    }
+
     /// Read exact sealed bytes for native presentation targets.
     ///
     /// The returned bytes are fingerprint-checked against the sealed state.
@@ -284,15 +390,6 @@ impl PreparedFileTransaction {
                 Ok((file.reviewed_path.requested_path().to_path_buf(), bytes))
             })
             .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn staged_bytes_for(&self, target: &Path) -> io::Result<Option<Vec<u8>>> {
-        self.files
-            .iter()
-            .find(|file| file.reviewed_path.requested_path() == target)
-            .map(|file| fs::read(&file.staged))
-            .transpose()
     }
 
     /// Commit in reservation order. Callers reserve the playlist last.

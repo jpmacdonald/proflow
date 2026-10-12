@@ -6,14 +6,15 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::planning_center::PlanSnapshot;
 use crate::workflow::build_dir::{
-    hex, BuildDir, BuildInputs, BuildPlanId, Classified, Opened, Snapshotted,
+    hex, BuildDir, BuildDirError, BuildInputs, BuildPlanId, Classified, Opened, Snapshotted,
+    Verified,
 };
 use crate::workflow::plan::ResolvedItemPlan;
 use proflow_propresenter::library::LibraryCandidates;
@@ -55,6 +56,12 @@ struct MediaAsset<'a> {
 struct CatalogEntry<'a> {
     path: &'a Path,
     sha256: String,
+}
+
+/// One catalog entry as read back from `snapshot/catalog.json`.
+#[derive(Deserialize)]
+struct RecordedCatalogEntry {
+    path: PathBuf,
 }
 
 /// The decisions of one review, borrowed from the request they arrived in.
@@ -104,6 +111,46 @@ impl ServiceBuildExecutor<'_> {
         })?;
         let plans = json(&plans)?;
         Ok(build.resume_or_write(|stage| fs::write(stage.join(PLANS_FILE), &plans))?)
+    }
+}
+
+impl ServiceBuildExecutor<'_> {
+    /// Prove a build's recorded inputs still describe this runtime, and
+    /// return the library candidates it was reviewed against.
+    ///
+    /// The snapshot stage must match its seal and hash to the name of its
+    /// directory, and the render assets and Bible corpora recorded in it must
+    /// be the ones this executor holds.
+    pub(super) fn verify_snapshot_stage(
+        &self,
+        build: &BuildDir<Verified>,
+    ) -> Result<Vec<PathBuf>, BuildServiceError> {
+        build.verify_stage::<Snapshotted>()?;
+        let stage = build.stage_directory::<Snapshotted>();
+        let read = |file: &str| fs::read(stage.join(file));
+        let render_assets = read(RENDER_ASSETS_FILE)?;
+        let bible_corpora = read(BIBLE_CORPORA_FILE)?;
+        let catalog = read(CATALOG_FILE)?;
+        if !build.is_named_by(&BuildInputs {
+            plan_snapshot: &read(PLAN_FILE)?,
+            render_assets: &render_assets,
+            bible_corpora: &bible_corpora,
+            library: &catalog,
+            review_decisions: &read(DECISIONS_FILE)?,
+        }) {
+            return Err(BuildDirError::InputsMismatch {
+                path: build.path().to_path_buf(),
+            }
+            .into());
+        }
+        if render_assets != json(self.render_assets.fingerprint())?
+            || bible_corpora != json(&self.bible_corpora.fingerprint().to_json())?
+        {
+            return Err(BuildServiceError::PreparedRuntimeMismatch);
+        }
+        let entries: Vec<RecordedCatalogEntry> =
+            serde_json::from_slice(&catalog).map_err(io::Error::other)?;
+        Ok(entries.into_iter().map(|entry| entry.path).collect())
     }
 }
 

@@ -1,7 +1,7 @@
 //! Structured workflow result summaries.
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::workflow::ExpectedPresentationContract;
 use proflow_propresenter::inspection::PresentationStructureSummary;
@@ -9,7 +9,7 @@ use proflow_propresenter::playlist::PlaylistExportMode;
 use proflow_propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
 
 /// What the build did for one plan entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuildEntryAction {
     /// A new native presentation was rendered from plan content.
@@ -28,7 +28,7 @@ pub enum BuildEntryAction {
 }
 
 /// Summary of a single item processed by the service build workflow.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildServiceEntry {
     /// Stable source-item identity used by preview overrides.
     pub output_key: String,
@@ -66,7 +66,7 @@ pub struct BuildServiceEntry {
 }
 
 /// Effective arrangement override carried by one playlist item.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaylistSelectionSummary {
     /// Selected native arrangement UUID.
     pub arrangement_uuid: String,
@@ -77,7 +77,7 @@ pub struct PlaylistSelectionSummary {
 }
 
 /// Result summary from a complete service build.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildServiceResult {
     /// Final playlist package path.
     pub playlist_path: PathBuf,

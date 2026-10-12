@@ -1,6 +1,6 @@
 //! Semantic expectations that final native presentation bytes must satisfy.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{PlanDisposition, ReadyAction, ResolvedItemPlan};
 use crate::project_config::{
@@ -10,7 +10,7 @@ use crate::workflow::description_parser::SpeakerRole;
 use proflow_propresenter::PresentationSize;
 
 /// Native presentation properties promised by one reviewed semantic plan.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExpectedPresentationContract {
     /// Required canvas for every presentation slide action.
     pub canvas: PresentationSize,
@@ -33,7 +33,7 @@ pub struct ExpectedPresentationContract {
 }
 
 /// Checked operator-cue cardinality promised before native rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "count", rename_all = "snake_case")]
 pub enum ExpectedCueCount {
     /// The presentation must contain at least one operator-visible cue.
@@ -43,7 +43,7 @@ pub enum ExpectedCueCount {
 }
 
 /// Ownership of macro transitions in the effective operator traversal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "regions", rename_all = "snake_case")]
 pub enum ExpectedMacroPolicy {
     /// Reused native macro actions must remain unchanged.
@@ -53,7 +53,7 @@ pub enum ExpectedMacroPolicy {
 }
 
 /// One macro transition promised by a generated or restyled presentation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExpectedMacroRegion {
     /// Semantic location where the transition must occur.
     pub selector: ExpectedMacroSelector,
@@ -62,7 +62,7 @@ pub struct ExpectedMacroRegion {
 }
 
 /// Stable semantic selector for a macro-entry region.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExpectedMacroSelector {
     /// Zero-based cue occurrence in effective operator order.

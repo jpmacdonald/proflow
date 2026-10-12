@@ -212,10 +212,11 @@ fn playlist_changed_after_preview_is_rejected() {
     let error = executor
         .build_prepared_offline(reviewed)
         .expect_err("changed playlist cannot be overwritten");
-    assert!(matches!(error, BuildServiceError::Io(_)));
-    assert!(error
-        .to_string()
-        .contains("build output target changed concurrently"));
+    assert!(matches!(
+        error,
+        BuildServiceError::OutputReview(OutputReviewError::Changed { ref path, .. })
+            if *path == playlist_target
+    ));
     assert_eq!(
         std::fs::read(&playlist_target).expect("preserve external playlist change"),
         b"changed playlist"

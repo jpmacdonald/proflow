@@ -1,7 +1,7 @@
 //! Stable semantic summaries of native presentation structure.
 
 /// Operator-facing presentation structure summary.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PresentationStructureSummary {
     /// Presentation UUID. Useful for duplicate-file detection; normally volatile
     /// for freshly generated documents.
@@ -23,7 +23,9 @@ pub struct PresentationStructureSummary {
 }
 
 /// A malformed or ambiguous native presentation reference.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PresentationReferenceDiagnostic {
     /// More than one cue owns the same UUID.
@@ -102,7 +104,7 @@ pub enum PresentationReferenceDiagnostic {
 }
 
 /// Cue-level semantic summary.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CueStructureSummary {
     /// Raw cue index.
     pub index: usize,
@@ -131,7 +133,7 @@ pub struct CueStructureSummary {
 }
 
 /// Label attached to a slide action.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ActionLabelSignature {
     /// Operator-visible label text.
     pub text: String,
@@ -140,7 +142,7 @@ pub struct ActionLabelSignature {
 }
 
 /// Presentation-level scripture metadata.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BibleReferenceSummary {
     /// Native book index.
     pub book_index: u32,
@@ -161,7 +163,7 @@ pub struct BibleReferenceSummary {
 }
 
 /// Inclusive integer range from native presentation metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IntRangeSummary {
     /// First value in the range.
     pub start: i32,
@@ -170,7 +172,7 @@ pub struct IntRangeSummary {
 }
 
 /// Text element style/layout summary.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TextStyleSignature {
     /// Text element name from the slide, when present.
     pub element_name: String,
@@ -199,7 +201,7 @@ pub struct TextStyleSignature {
 }
 
 /// Cue-group semantic summary.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CueGroupStructureSummary {
     /// Raw cue group index.
     pub index: usize,
@@ -220,7 +222,7 @@ pub struct CueGroupStructureSummary {
 }
 
 /// Keyboard shortcut attached to a cue group.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HotKeySignature {
     /// Native key-code value.
     pub code: i32,
@@ -229,7 +231,7 @@ pub struct HotKeySignature {
 }
 
 /// Arrangement semantic summary.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ArrangementStructureSummary {
     /// Raw arrangement index.
     pub index: usize,

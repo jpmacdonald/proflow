@@ -56,6 +56,24 @@ impl FontProgramSnapshot {
         })
     }
 
+    /// Every font program in this snapshot with its recorded SHA-256.
+    pub fn programs(&self) -> impl Iterator<Item = (&std::path::Path, &str)> {
+        self.programs
+            .iter()
+            .map(|program| (program.path.as_path(), program.sha256.as_str()))
+    }
+
+    /// Rebuild a snapshot from the pairs [`Self::programs`] reported, so a
+    /// build recorded on disk is held to the same font check at commit.
+    pub fn from_recorded(programs: impl IntoIterator<Item = (PathBuf, String)>) -> Self {
+        Self {
+            programs: programs
+                .into_iter()
+                .map(|(path, sha256)| FontProgramFingerprint { path, sha256 })
+                .collect(),
+        }
+    }
+
     /// Empty snapshot for tests that never measured text.
     #[cfg(any(test, feature = "diagnostics"))]
     pub const fn diagnostic() -> Self {

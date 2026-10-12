@@ -17,11 +17,12 @@ use proflow_propresenter::playlist::{
 use super::mcp_err;
 use super::schema::{EntryOverride, EntryOverrideAction, PlaylistMediaAssetArg};
 
-/// One-time token naming a sealed preview held by this server process.
+/// One-time token naming a prepared build this server process previewed.
 ///
 /// A revision is minted when a fully resolved preview is stored and is
-/// consumed by exactly one build attempt. It has no meaning to another
-/// process or after a restart.
+/// consumed by exactly one build attempt. The prepared build itself is in its
+/// build directory on disk; the revision, and the record of which rendered
+/// stage it showed, exist only in this process and are gone after a restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(transparent)]
 pub(super) struct PreviewRevision(uuid::Uuid);

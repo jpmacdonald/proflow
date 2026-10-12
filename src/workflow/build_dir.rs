@@ -40,6 +40,7 @@ const INPUT_HASH_DOMAIN: &[u8] = b"proflow.build-inputs.v1";
 const SEAL_FILE: &str = "stage.json";
 const SEAL_VERSION: u32 = 1;
 const REVIEW_FILE: &str = "review.toml";
+const RETIRED_DIRECTORY: &str = "retired";
 
 /// Planning Center plan identity, checked to be one safe directory name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +212,15 @@ impl<S: Stage> BuildDir<S> {
         &self.path
     }
 
+    /// Whether `inputs` are the inputs this directory is named after.
+    #[must_use]
+    pub fn is_named_by(&self, inputs: &BuildInputs<'_>) -> bool {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == InputHash::of(inputs).to_string())
+    }
+
     /// Write the next stage, exactly once.
     ///
     /// `write` fills an empty temporary directory. The stage appears under its
@@ -296,6 +306,82 @@ impl<S: WrittenStage> BuildDir<S> {
     }
 }
 
+impl<S: Stage> BuildDir<S> {
+    /// Check that stage `P` still matches its seal and return the seal's
+    /// identity.
+    ///
+    /// Two stages with the same digest hold the same files, so a caller that
+    /// remembers the digest can tell whether the stage it reviewed is still
+    /// the one on disk.
+    pub fn verify_stage<P: WrittenStage>(&self) -> Result<SealDigest, BuildDirError> {
+        let stage = self.path.join(P::DIRECTORY);
+        verify_seal(&stage, P::DIRECTORY)?;
+        let path = stage.join(SEAL_FILE);
+        let bytes = fs::read(&path).map_err(|source| io_error(&path, source))?;
+        Ok(SealDigest(Sha256::digest(bytes).into()))
+    }
+
+    /// Directory of stage `P`, which may not be written.
+    #[must_use]
+    pub fn stage_directory<P: WrittenStage>(&self) -> PathBuf {
+        self.path.join(P::DIRECTORY)
+    }
+}
+
+impl<S: Stage> Clone for BuildDir<S> {
+    /// A build directory handle is a path and a stage; a second handle to the
+    /// same stage grants nothing the first did not.
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            stage: PhantomData,
+        }
+    }
+}
+
+/// SHA-256 of one stage's seal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SealDigest([u8; 32]);
+
+impl BuildDir<Classified> {
+    /// Make room to render this build again.
+    ///
+    /// A render that was never committed is deleted: nothing was installed
+    /// from it. A committed build is the record of what was installed, so its
+    /// stages move to `retired/<n>/` instead. Does nothing when no later
+    /// stage exists.
+    pub fn clear_later_stages(self) -> Result<Self, BuildDirError> {
+        // Latest stage first: an interruption leaves `rendered/` without the
+        // stages that depend on it, never the reverse.
+        let later = [
+            Committed::DIRECTORY,
+            Verified::DIRECTORY,
+            Rendered::DIRECTORY,
+        ]
+        .map(|stage| self.path.join(stage));
+        if self.path.join(Committed::DIRECTORY).exists() {
+            let retired = self.path.join(RETIRED_DIRECTORY);
+            fs::create_dir_all(&retired).map_err(|source| io_error(&retired, source))?;
+            let taken = fs::read_dir(&retired)
+                .map_err(|source| io_error(&retired, source))?
+                .count();
+            let destination = retired.join(taken.to_string());
+            fs::create_dir(&destination).map_err(|source| io_error(&destination, source))?;
+            for from in later.iter().filter(|stage| stage.exists()) {
+                let name = from.file_name().unwrap_or_default();
+                fs::rename(from, destination.join(name))
+                    .map_err(|source| io_error(from, source))?;
+            }
+        } else {
+            for stage in later.iter().filter(|stage| stage.exists()) {
+                fs::remove_dir_all(stage).map_err(|source| io_error(stage, source))?;
+            }
+        }
+        sync_directory(&self.path)?;
+        Ok(self)
+    }
+}
+
 /// Why a build directory operation was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum BuildDirError {
@@ -317,6 +403,13 @@ pub enum BuildDirError {
         /// Stage directory name.
         stage: &'static str,
         /// Offending entry.
+        path: PathBuf,
+    },
+    /// The inputs recorded in the snapshot stage do not hash to the name of
+    /// the directory that holds them.
+    #[error("build directory {path} is not named by the inputs recorded in it")]
+    InputsMismatch {
+        /// Build directory whose name and recorded inputs disagree.
         path: PathBuf,
     },
     /// A stage's files differ from what its seal recorded.

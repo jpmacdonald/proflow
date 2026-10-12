@@ -200,6 +200,16 @@ impl SourceManifest {
         Ok(())
     }
 
+    /// Rebuild the source manifest recorded by a rendered build stage.
+    pub(super) fn recorded(sources: impl IntoIterator<Item = (PathBuf, [u8; 32])>) -> Self {
+        Self {
+            sources: sources
+                .into_iter()
+                .map(|(path, sha256)| SourceFingerprint { path, sha256 })
+                .collect(),
+        }
+    }
+
     /// Exact reviewed source identities in deterministic path order.
     pub(super) fn digests(&self) -> impl Iterator<Item = (&Path, [u8; 32])> {
         self.sources

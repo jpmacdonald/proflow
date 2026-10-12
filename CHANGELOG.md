@@ -87,10 +87,27 @@ Dates are the day the work landed on `main`.
   inputs, one file each: `plan.json`, `render-assets.json`,
   `bible-corpora.json`, `catalog.json`, `decisions.json`) and `classified/`
   (`plans.json`, the effective plan), including reviews that still need
-  decisions. An equal review reopens the same directory. Rendering and commit
-  do not read these stages yet: prepared state is still held in memory until
-  slice 2. Review now reads every library presentation a second time to hash
-  it.
+  decisions. An equal review reopens the same directory. Review now reads
+  every library presentation a second time to hash it.
+- Phase 1, slice 2 (`src/workflow/execute/rendered_stage.rs`): prepared
+  state is the build directory, not a value in memory. A finished render
+  writes `rendered/` (every artifact, the bytes each one replaces,
+  `manifest.json` with the source and font fingerprints, and `result.json`)
+  and `verified/` (`checks.json`), then removes the copies staged beside the
+  live targets. `PreparedBuildRequest` names that directory and remembers
+  the seal of the rendered stage it was made from. Commit re-reads
+  everything from disk: it checks the seals, that the snapshot stage hashes
+  to the directory name, that the recorded render assets and Bible corpora
+  are the committing runtime's, and that the library candidates, sources and
+  fonts are unchanged; it then stages the artifacts beside their targets
+  again through the existing reviewed-output checks, installs them, and
+  writes `committed/targets.json`. A fully resolved review always renders:
+  an earlier render of the same inputs is deleted, or moved to
+  `retired/<n>/` if it was committed. `PreparedRuntimeMismatch` now comes
+  from comparing the recorded inputs, and the in-memory `RuntimeEvidence`
+  and `PreparedService` are gone. Mutation run over the four pipeline
+  modules: 81 mutants, 42 caught, 36 unviable, 3 missed (two `fsync`
+  helpers and one digest-length guard, the last now covered by a test).
 
 ### Changed
 
@@ -132,6 +149,16 @@ Dates are the day the work landed on `main`.
   plain strings again only where the format crate is called. Service group
   names needed nothing: compilation already reduces them to service scopes.
 
+- A target that changed between preview and commit is now reported as the
+  typed `OutputReviewError` (`Changed`, `Appeared`, `Disappeared`) naming
+  the path, instead of an I/O error reading "changed concurrently". The
+  check itself is unchanged; it now runs when commit stages the artifacts
+  again.
+- The build report types (`BuildServiceResult` and what it contains,
+  `ExpectedPresentationContract`, the presentation structure summary)
+  derive `Deserialize` so a committed result can be read back from
+  `rendered/result.json`.
+
 ### Fixed
 
 - A presentation path that starts at `/Libraries/...` no longer infers the
@@ -168,6 +195,15 @@ Dates are the day the work landed on `main`.
   not done: freshness and Planning Center failures occur at both review and
   commit, so the phase grouping is not clean, and nested enums add a match
   level everywhere. Revisit only with a concrete consumer that needs it.
+- Build directories are never pruned. Every committed build keeps its
+  artifacts and the bytes they replaced under `<data root>/builds/`, in
+  place or in `retired/<n>/`. Nothing deletes old builds yet.
+- Two processes that review the same plan with the same inputs at the same
+  time share one build directory and one `<stage>.tmp`; nothing locks it.
+- A build directory is trusted as much as the data root it lives in. Within
+  one process a prepared build is pinned to the rendered stage it previewed;
+  a later process that commits by plan (phase 2) has only the seals, which
+  anyone able to write the data root can rewrite.
 - Preview revisions are process-local. Restarting the MCP server, including
   the restart that activates a new project config, discards every pending
   preview. Persisting sealed previews under their revision would make
