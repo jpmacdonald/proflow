@@ -82,7 +82,7 @@ Dates are the day the work landed on `main`.
   `review.toml` lives beside the hashed directories
   (`<builds root>/<plan id>/review.toml`), because its bytes are a hash
   input and it cannot sit inside the directory it names. Mutation run on the
-  module: 34 mutants, 2 missed, both the `fsync` helpers, whose effect a
+  module: 32 mutants, 20 caught, 10 unviable, 2 missed, both the `fsync` helpers, whose effect a
   test cannot observe.
 
 ### Changed
