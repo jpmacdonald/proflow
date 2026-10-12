@@ -120,7 +120,7 @@ live-data:
     fi; \
     skip=(); \
     if [[ "$(uname -s)" != Darwin ]]; then skip=(--skip workflow::execute::tests::); fi; \
-    {{ cargo }} test -p proflow --lib --all-features -- --ignored "${skip[@]}"
+    {{ cargo }} test -p proflow --lib --all-features -- --ignored ${skip[@]+"${skip[@]}"}
 
 # Native ProPresenter fidelity: schema-exact codecs and an independently
 # exported playlist reconstructed through the production writer.
