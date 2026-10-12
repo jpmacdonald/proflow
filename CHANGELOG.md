@@ -139,6 +139,20 @@ Dates are the day the work landed on `main`.
   the restart that activates a new project config, discards every pending
   preview. Persisting sealed previews under their revision would make
   `build_service` restart-safe; this is a product decision, not started.
+  Scoped on 2026-10-11 and not built, for three reasons the decision should
+  weigh. None of the sealed state deserializes: `PreparedBuildRequest` and
+  everything under it (`ResolvedItemPlan`, `SourceManifest`,
+  `BoundBuildRequest`, `PreparedFileTransaction`, `PreparedLibraryUpdate`,
+  `FontProgramSnapshot`, `LibraryCandidates`, `RuntimeEvidence`) is built
+  only through checked constructors, so loading it from disk means a second
+  way to manufacture an executable request. Staged files are removed when
+  the transaction drops, so the transaction's lifetime would have to outlive
+  the process. And the restart named above, activating a new project
+  config, must discard previews anyway: plans compiled under the old config
+  are not the new config's plans, and commit already refuses a different
+  runtime (`PreparedRuntimeMismatch`). Persistence would only cover a crash
+  or a restart with nothing changed, where one more `preview_playlist` call
+  is the current cost.
 - Presentation type keys, service group names, theme slide names, and macro
   names are still raw strings in the compiled config. Cross-references are
   validated at load; typed identifiers would remove the remaining
@@ -208,6 +222,14 @@ Dates are the day the work landed on `main`.
   resolved-font evidence). The diagnostic oracle proves nothing about real
   text metrics, text splitting, or overflow: goldens and fit sizes remain
   macOS-only.
+- 2026-10-11: `just deep` members pass on the server, each run on its own:
+  `just ci` (764 tests under nextest), `just parity`, `just proto`,
+  `just prop`, `just mutants` (49 mutants: 39 caught, 10 unviable, 0
+  missed), `just invariants`. `just live-data` skipped: no data root there.
+  The `#rust` dev shell in `~/Projects/nix-config` now carries
+  `cargo-audit`, `cargo-deny`, `cargo-machete`, `cargo-mutants`, and
+  `cargo-nextest` (nix-config `205f2b8`, local to the server, not pushed),
+  so `just tools-check` passes and no `nix shell` wrapper is needed.
 - 2026-10-11: with the playlist document, `just local` (455 host and 298
   format-crate unit tests), `just doctest`, `just doc`, `just invariants`,
   `just parity`, `just machete`, and `just deny` pass on the server.
