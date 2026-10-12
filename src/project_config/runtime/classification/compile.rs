@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::super::{ExistingSource, PresentationPolicy, ServiceScope};
+use super::super::{ExistingSource, PresentationPolicy, PresentationTypeKey, ServiceScope};
 use super::{
     normalize_identity, normalize_phrases, ClassificationTier, CompiledClassification,
     CompiledDecision, CompiledDecisionChoice, CompiledDecisionMatcher, CompiledDirectTarget,
@@ -18,7 +18,7 @@ use crate::project_config::{
 
 pub fn compile_classifications(
     config: &RawProjectConfig,
-    presentations: &BTreeMap<String, Arc<PresentationPolicy>>,
+    presentations: &BTreeMap<PresentationTypeKey, Arc<PresentationPolicy>>,
 ) -> Result<Vec<CompiledClassification>, Vec<ConfigValidationIssue>> {
     let mut compiled =
         Vec::with_capacity(config.library_identities.len() + config.item_rules.len());
@@ -77,7 +77,7 @@ fn compile_library_identity_matcher(matcher: &LibraryIdentityMatch) -> CompiledI
 
 pub fn compile_required_playlist_items(
     config: &RawProjectConfig,
-    presentations: &BTreeMap<String, Arc<PresentationPolicy>>,
+    presentations: &BTreeMap<PresentationTypeKey, Arc<PresentationPolicy>>,
 ) -> Result<Vec<CompiledRequiredPlaylistItem>, Vec<ConfigValidationIssue>> {
     let mut compiled = Vec::with_capacity(config.required_playlist_items.len());
     let mut issues = Vec::new();
@@ -89,7 +89,7 @@ pub fn compile_required_playlist_items(
                 &required.use_type,
                 &format!("{path}.use_type"),
             )?;
-            let type_key = resolved.key().to_string();
+            let type_key = resolved.key().clone();
             let presentation = match resolved.policy() {
                 PresentationPolicy::PreserveExisting {
                     kind,
@@ -168,7 +168,7 @@ fn compile_required_scope(
 }
 
 fn compile_rule_outcome(
-    presentations: &BTreeMap<String, Arc<PresentationPolicy>>,
+    presentations: &BTreeMap<PresentationTypeKey, Arc<PresentationPolicy>>,
     outcome: &ItemRuleOutcome,
     path: &str,
 ) -> Result<CompiledRuleOutcome, ConfigValidationIssue> {
@@ -199,7 +199,7 @@ fn compile_rule_outcome(
 }
 
 fn compile_expansion_step(
-    presentations: &BTreeMap<String, Arc<PresentationPolicy>>,
+    presentations: &BTreeMap<PresentationTypeKey, Arc<PresentationPolicy>>,
     step: &ExpansionStep,
     path: &str,
     index: usize,
@@ -231,7 +231,7 @@ fn compile_expansion_step(
 }
 
 fn compile_decision(
-    presentations: &BTreeMap<String, Arc<PresentationPolicy>>,
+    presentations: &BTreeMap<PresentationTypeKey, Arc<PresentationPolicy>>,
     decision: &DecisionConfig,
     path: &str,
 ) -> Result<CompiledDecision, ConfigValidationIssue> {
@@ -384,16 +384,15 @@ fn compile_decision_matcher(matcher: &DecisionChoiceMatch) -> CompiledDecisionMa
 }
 
 fn resolve_presentation(
-    presentations: &BTreeMap<String, Arc<PresentationPolicy>>,
+    presentations: &BTreeMap<PresentationTypeKey, Arc<PresentationPolicy>>,
     key: &str,
     path: &str,
 ) -> Result<ResolvedPresentationType, ConfigValidationIssue> {
     presentations
-        .get(key)
-        .cloned()
-        .map(|policy| ResolvedPresentationType {
-            key: key.to_string(),
-            policy,
+        .get_key_value(key)
+        .map(|(key, policy)| ResolvedPresentationType {
+            key: key.clone(),
+            policy: Arc::clone(policy),
         })
         .ok_or_else(|| ConfigValidationIssue {
             path: path.to_string(),

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::project_config::MacroName;
 use crate::workflow::plan::{
     BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, RenderStyle,
     RestyleMacroSelector,
@@ -267,7 +268,7 @@ fn assert_generated_recipes(config: &ProjectConfig) {
         .expect("responsive entry macro pair");
     assert_eq!(macro_pair.enter(), "Scripture/Prayer");
     assert_eq!(
-        macro_pair.leader_enter(),
+        macro_pair.leader_enter().map(MacroName::as_str),
         Some("Scripture/Prayer (Highlighted)")
     );
     let palette = responsive

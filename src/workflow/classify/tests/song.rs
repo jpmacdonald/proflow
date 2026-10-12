@@ -1,5 +1,6 @@
 use super::support::*;
 use crate::project_config::parse_project_config_str;
+use crate::project_config::PresentationTypeKey;
 use crate::workflow::classify::build_plan;
 use crate::workflow::plan::ReadyAction;
 use proflow_propresenter::library::LibraryCatalog;
@@ -71,7 +72,7 @@ fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
             .expect("classified plan item");
 
         assert_eq!(
-            plan.item_type(),
+            plan.item_type().map(PresentationTypeKey::as_str),
             Some(expected_type),
             "wrong rule selected for '{title}' in '{service}'"
         );
@@ -89,7 +90,7 @@ fn repo_rule_matrix_keeps_named_exceptions_ahead_of_song_fallbacks() {
         .find(|plan| plan.pco_title == "Affirmation of Faith - The Heidelberg Catechism")
         .expect("classified affirmation item");
     assert_eq!(
-        affirmation.item_type(),
+        affirmation.item_type().map(PresentationTypeKey::as_str),
         Some("liturgical_audience_generated"),
         "text-category affirmations must use the liturgy rule"
     );
@@ -126,7 +127,11 @@ fn repo_expansion_rule_matrix_keeps_speaker_nametag_and_liturgy_order() {
         let actual_types = plans
             .iter()
             .filter(|plan| plan.pco_title == title)
-            .map(|plan| plan.item_type().expect("expanded item type"))
+            .map(|plan| {
+                plan.item_type()
+                    .map(PresentationTypeKey::as_str)
+                    .expect("expanded item type")
+            })
             .collect::<Vec<_>>();
         assert_eq!(actual_types, expected_types, "wrong expansion for {title}");
     }
@@ -188,7 +193,10 @@ fn repo_native_liturgy_routes_select_the_reviewed_files() {
         );
         assert_eq!(plans.len(), 1, "unexpected expansion for {title}");
         let plan = &plans[0];
-        assert_eq!(plan.item_type(), Some("preserved_liturgy_static"));
+        assert_eq!(
+            plan.item_type().map(PresentationTypeKey::as_str),
+            Some("preserved_liturgy_static")
+        );
         assert!(matches!(
             plan.ready_action(),
             Some(ReadyAction::RestyleExisting { .. })

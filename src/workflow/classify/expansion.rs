@@ -27,7 +27,7 @@ pub(super) fn process_expansion(
 ) {
     for (step_index, step) in expansion.iter().enumerate() {
         let presentation = step.presentation();
-        let output_key = OutputKey::expanded(&item.id, step_index, presentation.key());
+        let output_key = OutputKey::expanded(&item.id, step_index, presentation.key().as_str());
         match step {
             CompiledExpansionStep::Direct {
                 presentation,
@@ -53,7 +53,7 @@ pub(super) fn process_expansion(
                         strip_speaker(&item.title),
                         "Speaker could not be resolved for expansion".to_string(),
                         presentation.kind(),
-                        Some(presentation.key().to_string()),
+                        Some(presentation.key().clone()),
                         PlanDisposition::NeedsReview(ReviewContext::new(None)),
                     ));
                     continue;
@@ -121,7 +121,7 @@ fn build_speaker_expansion_plan(
                 strip_speaker(&item.title),
                 format!("Configured person '{name}' has no nametag target"),
                 ItemKind::Nametag,
-                Some(presentation.key().to_string()),
+                Some(presentation.key().clone()),
                 PlanDisposition::NeedsReview(ReviewContext::new(None)),
             );
         };

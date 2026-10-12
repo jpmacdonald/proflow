@@ -500,7 +500,7 @@ fn apply_macro_for_role(
             .cues
             .get_mut(index)
             .ok_or(MacroApplyError::CueUnavailable { index, cue_count })?;
-        replace_entry_macro(cue, binding.select(starts_with_leader), macros)?;
+        replace_entry_macro(cue, binding.select(starts_with_leader).as_str(), macros)?;
     }
     Ok(())
 }
@@ -511,10 +511,10 @@ fn resolve_role<'a>(
     themes: &'a ThemeCache,
 ) -> Result<ResolvedCueRole<'a>, PresentationRenderError> {
     if role.text_slots().is_empty() {
-        let slide = themes.text_template(role.slide())?;
+        let slide = themes.text_template(role.slide().as_str())?;
         return bind_role_to_slide(role, id, slide);
     }
-    let template = themes.slide_template(role.slide())?;
+    let template = themes.slide_template(role.slide().as_str())?;
     bind_role_to_slide(role, id, template.slide())
 }
 

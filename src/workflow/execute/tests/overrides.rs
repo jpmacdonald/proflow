@@ -1,4 +1,5 @@
 use super::*;
+use crate::project_config::PresentationTypeKey;
 
 #[test]
 fn override_updates_name_and_complete_render_action() {
@@ -284,7 +285,7 @@ fn slide_type_override_changes_native_semantics_without_forging_policy_identity(
         apply_override(&original, Some(&override_entry)).expect("valid metadata override");
 
     assert_eq!(effective.item_kind(), ItemKind::Scripture);
-    assert_eq!(effective.item_type(), None);
+    assert_eq!(effective.item_type().map(PresentationTypeKey::as_str), None);
     assert_eq!(effective.slide_type(), SlideType::Scripture);
     assert!(effective.render_style().is_none());
 }

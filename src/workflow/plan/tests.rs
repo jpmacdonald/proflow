@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+use crate::project_config::MacroName;
 use std::collections::BTreeMap;
 
 use super::item::OutputKeyError;
@@ -506,7 +507,11 @@ fn checked_render_metadata_exposes_only_valid_values() {
         Some("Body Text")
     );
     assert_eq!(
-        style.content().cue_macro().map(CueMacro::enter),
+        style
+            .content()
+            .cue_macro()
+            .map(CueMacro::enter)
+            .map(MacroName::as_str),
         Some("Content")
     );
     assert_eq!(style.max_lines_per_slide(), Some(6));

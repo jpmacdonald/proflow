@@ -1,3 +1,4 @@
+use crate::project_config::PresentationTypeKey;
 use std::path::Path;
 
 use super::super::expansion::{resolve_speaker, SpeakerResolution};
@@ -11,9 +12,13 @@ use crate::workflow::plan::{
 use proflow_propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
+fn item_type(plan: &ResolvedItemPlan) -> Option<&str> {
+    plan.item_type().map(PresentationTypeKey::as_str)
+}
+
 fn assert_managed_speaker_nametag(plan: &ResolvedItemPlan) {
     assert_eq!(plan.output_key, "pco:1:expand:0:title_static");
-    assert_eq!(plan.item_type(), Some("title_static"));
+    assert_eq!(item_type(plan), Some("title_static"));
     assert!(plan
         .file_path()
         .and_then(Path::to_str)
@@ -119,7 +124,7 @@ fn expansion_outputs_have_stable_keys_and_respect_declared_type() {
     assert_managed_speaker_nametag(&plans[0]);
 
     assert_eq!(plans[1].output_key, "pco:1:expand:1:liturgical_edited");
-    assert_eq!(plans[1].item_type(), Some("liturgical_edited"));
+    assert_eq!(item_type(&plans[1]), Some("liturgical_edited"));
     assert!(is_edit_description(&plans[1]));
     assert!(plans[1]
         .file_path()

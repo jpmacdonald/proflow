@@ -25,6 +25,7 @@ use super::plan::{
     ItemKind, OutputKey, PlanDisposition, ReadyAction, ResolvedItemPlan, ReviewContext,
 };
 use crate::planning_center::types::Item;
+use crate::project_config::PresentationTypeKey;
 use crate::project_config::{
     AmbiguousDecisionPolicy, CompiledDecision, CompiledDirectTarget, CompiledRuleOutcome,
     ExistingSource, PresentationPolicy, ProjectConfig, ResolvedPresentationType, ReviewPolicy,
@@ -474,7 +475,7 @@ fn build_decision_plan(
 )]
 pub(super) fn build_type_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     policy: &PresentationPolicy,
     item: &Item,
     target_library_file: Option<&str>,
@@ -640,7 +641,7 @@ pub(super) fn build_type_plan(
 
 fn configured_disposition_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     item: &Item,
     kind: ItemKind,
     disposition: PlanDisposition,
@@ -653,7 +654,7 @@ fn configured_disposition_plan(
         strip_speaker(&item.title),
         reason.to_string(),
         kind,
-        Some(type_key.to_string()),
+        Some(type_key.clone()),
         disposition,
     )
 }

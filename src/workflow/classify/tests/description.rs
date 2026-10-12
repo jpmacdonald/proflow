@@ -1,6 +1,7 @@
 use super::support::*;
 use crate::planning_center::types::{Category, Item};
 use crate::project_config::{parse_project_config_str, ExistingSource, PresentationPolicy};
+use crate::project_config::{MacroName, ThemeSlideName};
 use crate::workflow::classify::{build_plan, PreviewEntry};
 use crate::workflow::description_parser::{ParsedContent, ParsedSegment, SpeakerRole};
 use crate::workflow::plan::{CueMacro, PlanDisposition, ReadyAction, RenderRole};
@@ -593,7 +594,10 @@ fn v4_split_display_resolves_cue_roles() {
     assert_eq!(plans.len(), 1);
     let style = plans[0].render_style().expect("generated scripture style");
     assert_eq!(
-        style.title().map(RenderRole::slide),
+        style
+            .title()
+            .map(RenderRole::slide)
+            .map(ThemeSlideName::as_str),
         Some("Information (Projectors)")
     );
     assert_eq!(style.content().slide(), "Scripture (Projectors)");
@@ -605,11 +609,16 @@ fn v4_split_display_resolves_cue_roles() {
         style
             .title()
             .and_then(RenderRole::cue_macro)
-            .map(CueMacro::enter),
+            .map(CueMacro::enter)
+            .map(MacroName::as_str),
         Some("Name Tag/Title")
     );
     assert_eq!(
-        style.content().cue_macro().map(CueMacro::enter),
+        style
+            .content()
+            .cue_macro()
+            .map(CueMacro::enter)
+            .map(MacroName::as_str),
         Some("Scripture/Prayer")
     );
 }

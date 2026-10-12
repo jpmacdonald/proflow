@@ -12,7 +12,10 @@ mod compile;
 pub use compile::{compile_classifications, compile_required_playlist_items};
 
 use super::ExistingTransform;
-use super::{ArrangementPolicy, ExistingTransformPolicy, PresentationPolicy, ServiceScope};
+use super::{
+    ArrangementPolicy, ExistingTransformPolicy, PresentationPolicy, PresentationTypeKey,
+    ServiceScope,
+};
 use crate::project_config::{
     AmbiguousDecisionPolicy, DecisionContextField, ItemKind, MatchCategory,
     RequiredPlaylistPlacement, RuleAction, RuleTier,
@@ -21,12 +24,12 @@ use crate::project_config::{
 /// A presentation type key resolved to its checked runtime policy.
 #[derive(Debug, Clone)]
 pub struct ResolvedPresentationType {
-    key: String,
+    key: PresentationTypeKey,
     policy: Arc<PresentationPolicy>,
 }
 
 impl ResolvedPresentationType {
-    pub(crate) fn key(&self) -> &str {
+    pub(crate) const fn key(&self) -> &PresentationTypeKey {
         &self.key
     }
 
@@ -362,7 +365,7 @@ impl CompiledDecisionMatcher {
 #[derive(Debug, Clone)]
 pub struct CompiledRequiredPlaylistItem {
     id: String,
-    type_key: String,
+    type_key: PresentationTypeKey,
     library_file: String,
     placement: RequiredPlaylistPlacement,
     scope: ServiceScope,
@@ -374,7 +377,7 @@ impl CompiledRequiredPlaylistItem {
         &self.id
     }
 
-    pub(crate) fn type_key(&self) -> &str {
+    pub(crate) const fn type_key(&self) -> &PresentationTypeKey {
         &self.type_key
     }
 

@@ -10,6 +10,7 @@ use super::{
     bind_role_to_audience_slide, PresentationRenderError, RenderRole, RenderStyle,
     LEADER_ROLE_SUFFIX,
 };
+use crate::project_config::MacroName;
 use crate::workflow::execute::RenderAssetSnapshot;
 use proflow_propresenter::audience::PresentationDestination;
 use proflow_propresenter::presentation_spec::{
@@ -366,7 +367,7 @@ fn retain_audience_measurement(
 fn cue_audience_macro<'a>(
     cue_role: &CueRoleId,
     style: &'a RenderStyle,
-) -> Option<(&'a RenderRole, &'a str)> {
+) -> Option<(&'a RenderRole, &'a MacroName)> {
     if let Some(title) = style.title() {
         if cue_role == title.id() {
             return title
@@ -394,7 +395,7 @@ struct AudienceMeasurement {
 struct AudienceTextCandidate<'a> {
     cue_role: &'a CueRoleId,
     configured_role: &'a RenderRole,
-    macro_name: &'a str,
+    macro_name: &'a MacroName,
     field: &'a TextField,
     segments: &'a [StyledSegment],
     source_evidence: &'a TextFitEvidence,
@@ -416,7 +417,7 @@ fn measure_audience_destinations(
         max_lines,
     } = candidate;
     let destinations = audience_assets
-        .audience_destinations_for_macro(macro_name)
+        .audience_destinations_for_macro(macro_name.as_str())
         .ok_or_else(|| PresentationRenderError::MissingAudienceDestinations {
             macro_name: macro_name.to_string(),
         })?;

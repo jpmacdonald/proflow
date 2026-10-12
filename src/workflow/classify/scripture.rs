@@ -2,6 +2,7 @@
 
 use crate::bible::BibleVersion;
 use crate::planning_center::types::Item;
+use crate::project_config::PresentationTypeKey;
 use crate::project_config::ProjectConfig;
 
 use super::expansion::{resolve_speaker, SpeakerResolution};
@@ -18,7 +19,7 @@ use crate::workflow::scripture::{
 #[allow(clippy::too_many_lines)]
 pub(super) fn build_scripture_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     item: &Item,
     style: RenderStyle,
     config: &ProjectConfig,
@@ -55,7 +56,7 @@ pub(super) fn build_scripture_plan(
                 strip_speaker(&item.title),
                 error.to_string(),
                 ItemKind::Scripture,
-                Some(type_key.to_string()),
+                Some(type_key.clone()),
                 PlanDisposition::NeedsReview(ReviewContext::new(None)),
             );
         }
@@ -76,7 +77,7 @@ pub(super) fn build_scripture_plan(
                     strip_speaker(&item.title),
                     error.to_string(),
                     ItemKind::Scripture,
-                    Some(type_key.to_string()),
+                    Some(type_key.clone()),
                     PlanDisposition::NeedsReview(ReviewContext::new(None)),
                 );
             }
@@ -122,7 +123,7 @@ pub(super) fn build_scripture_plan(
                 combined_name,
                 "Combined scripture source requires at least two references".to_string(),
                 ItemKind::Scripture,
-                Some(type_key.to_string()),
+                Some(type_key.clone()),
                 PlanDisposition::NeedsReview(ReviewContext::new(None)),
             );
         };
@@ -136,7 +137,7 @@ pub(super) fn build_scripture_plan(
                 "Generate combined scripture slides ({reference_count} refs, {version_summary})"
             ),
             ItemKind::Scripture,
-            Some(type_key.to_string()),
+            Some(type_key.clone()),
             PlanDisposition::Ready(ReadyAction::GenerateScripture { scripture, style }),
         );
     }
@@ -156,7 +157,7 @@ pub(super) fn build_scripture_plan(
                 strip_speaker(&item.title),
                 error.to_string(),
                 ItemKind::Scripture,
-                Some(type_key.to_string()),
+                Some(type_key.clone()),
                 PlanDisposition::NeedsReview(ReviewContext::new(None)),
             );
         }
@@ -169,14 +170,14 @@ pub(super) fn build_scripture_plan(
         format!("{} {}", parsed_ref.reference, parsed_ref.version.name()),
         format!("Generate scripture slides ({})", parsed_ref.version.name()),
         ItemKind::Scripture,
-        Some(type_key.to_string()),
+        Some(type_key.clone()),
         PlanDisposition::Ready(ReadyAction::GenerateScripture { scripture, style }),
     )
 }
 
 fn build_selected_excerpt_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     item: &Item,
     style: RenderStyle,
     parsed: &ParsedScriptureRef,
@@ -197,7 +198,7 @@ fn build_selected_excerpt_plan(
             "Selected-verse scripture requires numbered Planning Center description text"
                 .to_string(),
             ItemKind::Scripture,
-            Some(type_key.to_string()),
+            Some(type_key.clone()),
             PlanDisposition::NeedsReview(ReviewContext::new(None)),
         );
     };
@@ -215,7 +216,7 @@ fn build_selected_excerpt_plan(
                 format!("{} {}", parsed.reference, parsed.version.name()),
                 error.to_string(),
                 ItemKind::Scripture,
-                Some(type_key.to_string()),
+                Some(type_key.clone()),
                 PlanDisposition::NeedsReview(ReviewContext::new(None)),
             );
         }
@@ -228,7 +229,7 @@ fn build_selected_excerpt_plan(
         format!("{} {}", parsed.reference, parsed.version.name()),
         "Validate Planning Center selected-verse text against the local Bible corpus".to_string(),
         ItemKind::Scripture,
-        Some(type_key.to_string()),
+        Some(type_key.clone()),
         PlanDisposition::NeedsReview(ReviewContext::new(Some(action))),
     )
 }
@@ -240,7 +241,7 @@ fn names_selected_verses(title: &str) -> bool {
 
 fn build_prefix_excerpt_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     item: &Item,
     style: RenderStyle,
     configured_default: Option<BibleVersion>,
@@ -269,7 +270,7 @@ fn build_prefix_excerpt_plan(
         format!("{} {}", parsed.display_reference, parsed.version.name()),
         "Validate Planning Center partial-verse text against the local Bible corpus".to_string(),
         ItemKind::Scripture,
-        Some(type_key.to_string()),
+        Some(type_key.clone()),
         PlanDisposition::NeedsReview(ReviewContext::new(Some(action))),
     ))
 }

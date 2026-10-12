@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use super::{ExistingTransform, RenderStyle, ResolvedBackground};
 use crate::bible::BibleVersion;
+use crate::project_config::PresentationTypeKey;
 use crate::workflow::description_parser::ParsedContent;
 use proflow_propresenter::SlideType;
 
@@ -621,7 +622,7 @@ struct PlannedOutput {
     item_kind: ItemKind,
     #[serde(rename = "item_type")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    configured_type: Option<String>,
+    configured_type: Option<PresentationTypeKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
     slide_type_override: Option<SlideType>,
     disposition: PlanDisposition,
@@ -630,7 +631,7 @@ struct PlannedOutput {
 impl PlannedOutput {
     fn new(
         item_kind: ItemKind,
-        configured_type: Option<String>,
+        configured_type: Option<PresentationTypeKey>,
         disposition: PlanDisposition,
     ) -> Self {
         let mut output = Self {
@@ -777,7 +778,7 @@ impl ResolvedItemPlan {
         playlist_name: String,
         reason: String,
         item_kind: ItemKind,
-        configured_type: Option<String>,
+        configured_type: Option<PresentationTypeKey>,
         disposition: PlanDisposition,
     ) -> Self {
         Self {
@@ -863,8 +864,8 @@ impl ResolvedItemPlan {
     }
 
     /// Configured presentation type that selected this plan, when any.
-    pub fn item_type(&self) -> Option<&str> {
-        self.output.configured_type.as_deref()
+    pub const fn item_type(&self) -> Option<&PresentationTypeKey> {
+        self.output.configured_type.as_ref()
     }
 
     /// Configured classification rule that produced this output, when any.

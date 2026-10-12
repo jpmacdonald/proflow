@@ -23,7 +23,7 @@ pub use model::{
     RestyleMacroConfig, RestyleMacroRegionConfig, RestyleMacroSelectorConfig, RgbColor, RuleAction,
     RuleTier, ServiceGroupConfig, SpeakerColorConfig, SpeakerSource, TargetSpec,
 };
-pub use runtime::ResolvedBackground;
+pub use runtime::{MacroName, PresentationTypeKey, ResolvedBackground, ThemeSlideName};
 pub use storage::{
     load_project_config, parse_project_config_str, parse_project_config_value,
     serialize_project_config, write_project_config, ProjectConfigLoadError,
@@ -51,7 +51,7 @@ pub(crate) use runtime::{
 pub struct ProjectConfig {
     raw: RawProjectConfig,
     plan_lookahead_days: crate::planning_center::PlanLookaheadDays,
-    presentation_policies: BTreeMap<String, std::sync::Arc<PresentationPolicy>>,
+    presentation_policies: BTreeMap<PresentationTypeKey, std::sync::Arc<PresentationPolicy>>,
     classifications: Vec<CompiledClassification>,
     required_playlist_items: Vec<CompiledRequiredPlaylistItem>,
 }
@@ -129,7 +129,9 @@ impl ProjectConfig {
     /// This is the same policy set referenced by compiled item rules, so config
     /// inspection never recompiles or interprets the wire model a second time.
     pub fn presentation_type_keys(&self) -> impl Iterator<Item = &str> {
-        self.presentation_policies.keys().map(String::as_str)
+        self.presentation_policies
+            .keys()
+            .map(PresentationTypeKey::as_str)
     }
 
     pub(crate) fn compiled_classifications(&self) -> &[CompiledClassification] {

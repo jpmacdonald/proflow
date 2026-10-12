@@ -174,7 +174,7 @@ pub(in crate::workflow::execute) fn apply_restyle_macro_policy(
     let mut targets = Vec::with_capacity(policy.regions().len());
     let mut target_indexes = std::collections::HashSet::new();
     for (region_index, region) in policy.regions().iter().enumerate() {
-        if cache.find(region.enter_macro()).is_none() {
+        if cache.find(region.enter_macro().as_str()).is_none() {
             return Err(MacroApplyError::Unavailable(
                 region.enter_macro().to_string(),
             ));
@@ -212,7 +212,10 @@ pub(in crate::workflow::execute) fn apply_restyle_macro_policy(
         if !target_indexes.insert(cue_index) {
             return Err(MacroApplyError::DuplicateRegionTarget { cue_index });
         }
-        targets.push(MacroCueTarget::new(cue_index, region.enter_macro()));
+        targets.push(MacroCueTarget::new(
+            cue_index,
+            region.enter_macro().as_str(),
+        ));
     }
 
     proflow_propresenter::macros::apply_operator_macro_targets(presentation, &targets, cache)

@@ -8,6 +8,7 @@ use std::{
 
 use serde::Serialize;
 
+use super::identity::{MacroName, NameRejection, ThemeSlideName};
 use crate::project_config::{BackgroundAssetPath, BackgroundId};
 use proflow_propresenter::presentation_spec::{CueRoleId, PresentationSpecError};
 
@@ -38,35 +39,29 @@ impl ResolvedBackground {
 /// Macro triggered when the operator enters a cue region.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CueMacro {
-    enter: String,
+    enter: MacroName,
     #[serde(skip_serializing_if = "Option::is_none")]
-    leader_enter: Option<String>,
+    leader_enter: Option<MacroName>,
 }
 
 impl CueMacro {
     /// Build an ordinary entry macro and its optional leader-first variant.
     pub fn new(enter: String, leader_enter: Option<String>) -> Result<Self, RenderPlanError> {
-        if enter.trim().is_empty() {
-            return Err(RenderPlanError::BlankCueMacro);
-        }
-        if let Some(problem) = identifier_problem(&enter) {
-            return Err(RenderPlanError::InvalidCueMacro {
-                name: enter,
-                problem,
-            });
-        }
-        if leader_enter
-            .as_deref()
-            .is_some_and(|macro_name| macro_name.trim().is_empty())
-        {
-            return Err(RenderPlanError::BlankLeaderCueMacro);
-        }
-        if let Some((name, problem)) = leader_enter
-            .as_ref()
-            .and_then(|name| identifier_problem(name).map(|problem| (name.clone(), problem)))
-        {
-            return Err(RenderPlanError::InvalidLeaderCueMacro { name, problem });
-        }
+        let enter = MacroName::new(enter).map_err(|rejection| match rejection {
+            NameRejection::Blank => RenderPlanError::BlankCueMacro,
+            NameRejection::Malformed { name, problem } => {
+                RenderPlanError::InvalidCueMacro { name, problem }
+            }
+        })?;
+        let leader_enter = leader_enter
+            .map(MacroName::new)
+            .transpose()
+            .map_err(|rejection| match rejection {
+                NameRejection::Blank => RenderPlanError::BlankLeaderCueMacro,
+                NameRejection::Malformed { name, problem } => {
+                    RenderPlanError::InvalidLeaderCueMacro { name, problem }
+                }
+            })?;
         Ok(Self {
             enter,
             leader_enter,
@@ -74,22 +69,22 @@ impl CueMacro {
     }
 
     /// Return the ordinary region-entry macro.
-    pub fn enter(&self) -> &str {
+    pub const fn enter(&self) -> &MacroName {
         &self.enter
     }
 
     /// Select the explicit leader-first variant when applicable.
-    pub fn select(&self, starts_with_leader: bool) -> &str {
+    pub fn select(&self, starts_with_leader: bool) -> &MacroName {
         if starts_with_leader {
-            self.leader_enter.as_deref().unwrap_or(&self.enter)
+            self.leader_enter.as_ref().unwrap_or(&self.enter)
         } else {
             &self.enter
         }
     }
 
     /// Return the optional leader-first entry macro.
-    pub fn leader_enter(&self) -> Option<&str> {
-        self.leader_enter.as_deref()
+    pub const fn leader_enter(&self) -> Option<&MacroName> {
+        self.leader_enter.as_ref()
     }
 }
 
@@ -185,7 +180,7 @@ impl RestyleMacroRegion {
     }
 
     /// Exact macro name applied to the region entry.
-    pub fn enter_macro(&self) -> &str {
+    pub const fn enter_macro(&self) -> &MacroName {
         self.enter_macro.enter()
     }
 }
@@ -236,7 +231,7 @@ pub struct RenderRole {
     /// Stable cue-role identifier from project config.
     id: CueRoleId,
     /// Exact theme slide used for this cue region.
-    slide: String,
+    slide: ThemeSlideName,
     /// Semantic text field to exact named native graphics element.
     text_slots: BTreeMap<String, String>,
     /// Macro triggered when the operator enters this cue region.
@@ -265,16 +260,19 @@ impl RenderRole {
                 problem,
             });
         }
-        if slide.trim().is_empty() {
-            return Err(RenderPlanError::BlankRoleSlide { role_id: id });
-        }
-        if let Some(problem) = identifier_problem(&slide) {
-            return Err(RenderPlanError::InvalidRoleSlide {
-                role_id: id,
-                slide,
-                problem,
-            });
-        }
+        let slide = match ThemeSlideName::new(slide) {
+            Ok(slide) => slide,
+            Err(NameRejection::Blank) => {
+                return Err(RenderPlanError::BlankRoleSlide { role_id: id });
+            }
+            Err(NameRejection::Malformed { name, problem }) => {
+                return Err(RenderPlanError::InvalidRoleSlide {
+                    role_id: id,
+                    slide: name,
+                    problem,
+                });
+            }
+        };
         if let Some((slot, _)) = text_slots.iter().find(|(slot, _)| slot.trim().is_empty()) {
             return Err(RenderPlanError::BlankTextSlotName {
                 role_id: id,
@@ -354,7 +352,7 @@ impl RenderRole {
     }
 
     /// Return the exact theme slide used for this cue region.
-    pub fn slide(&self) -> &str {
+    pub const fn slide(&self) -> &ThemeSlideName {
         &self.slide
     }
 
@@ -474,7 +472,7 @@ impl fmt::Display for IdentifierProblem {
     }
 }
 
-fn identifier_problem(value: &str) -> Option<IdentifierProblem> {
+pub(super) fn identifier_problem(value: &str) -> Option<IdentifierProblem> {
     if value.chars().any(char::is_control) {
         Some(IdentifierProblem::ControlCharacter)
     } else if value.trim() != value {

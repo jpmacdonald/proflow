@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod classification;
 mod existing;
+mod identity;
 mod render;
 
 pub use classification::{
@@ -18,6 +19,7 @@ pub use classification::{
     ResolvedPresentationType, ResolvedRequiredPresentation,
 };
 pub use existing::{BackgroundTransform, CueTransform, ExistingTransform, MacroTransform};
+pub use identity::{MacroName, PresentationTypeKey, ThemeSlideName};
 #[cfg(test)]
 pub use render::{
     CueMacro, IdentifierProblem, RenderPlanError, RestyleMacroRegion, SpeakerPalette,
@@ -420,7 +422,7 @@ pub(super) fn compile_presentation_policies(
     config: &RawProjectConfig,
     roles: &BTreeMap<String, RenderRole>,
 ) -> (
-    BTreeMap<String, Arc<PresentationPolicy>>,
+    BTreeMap<PresentationTypeKey, Arc<PresentationPolicy>>,
     Vec<ConfigValidationIssue>,
 ) {
     let mut policies = BTreeMap::new();
@@ -433,7 +435,7 @@ pub(super) fn compile_presentation_policies(
         }
         match compile_policy(config, roles, key, wire) {
             Ok(policy) => {
-                policies.insert(key.clone(), Arc::new(policy));
+                policies.insert(PresentationTypeKey::compiled(key), Arc::new(policy));
             }
             Err(issue) => issues.push(issue),
         }

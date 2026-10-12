@@ -120,7 +120,7 @@ pub(super) fn reviewed_theme_media_paths(
         let dependencies = executor
             .render_assets
             .themes()
-            .slide_media_dependencies(slide_name)
+            .slide_media_dependencies(slide_name.as_str())
             .map_err(PresentationRenderError::from)?;
         for dependency in dependencies {
             let path = match dependency.resolve(Some(propresenter_root)) {

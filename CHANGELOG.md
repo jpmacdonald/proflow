@@ -98,6 +98,15 @@ Dates are the day the work landed on `main`.
 - README condensed around setup, configuration, and operation.
 - `build_service --configured-workspace` trusts the configured ProPresenter
   root without consulting the active macOS show.
+- Typed identities in the compiled config (`project_config/runtime/
+  identity.rs`). `PresentationTypeKey` is minted only when a presentation
+  type compiles to a policy, so compiled rules, required items, and plans
+  that carry one name a type that exists. `MacroName` and `ThemeSlideName`
+  replace the raw strings in `CueMacro`, `RestyleMacroRegion`, and
+  `RenderRole`. The wire model, the JSON schema, serialized plans and
+  previews, and every validation message are unchanged; the names become
+  plain strings again only where the format crate is called. Service group
+  names needed nothing: compilation already reduces them to service scopes.
 
 ### Fixed
 
@@ -153,14 +162,21 @@ Dates are the day the work landed on `main`.
   runtime (`PreparedRuntimeMismatch`). Persistence would only cover a crash
   or a restart with nothing changed, where one more `preview_playlist` call
   is the current cost.
-- Presentation type keys, service group names, theme slide names, and macro
-  names are still raw strings in the compiled config. Cross-references are
-  validated at load; typed identifiers would remove the remaining
-  `Option` lookups. Not started.
+- The compiled config still looks macros and theme slides up by name in the
+  loaded native assets (`MacroCache::find`, `slide_template`), and those
+  lookups can still miss. `MacroName` and `ThemeSlideName` say which kind of
+  name is being looked up; they do not prove the name is installed. Removing
+  the misses would mean resolving names against the render assets once and
+  carrying handles, which is a separate change. Cue-role ids, text-slot
+  names, arrangement names, and rule ids in the compiled config are still
+  strings.
 - The remaining items of `docs/1.0-roadmap.md` section 4 (release audit of an
-  imported playlist) and section 5 (extracting the format crate to its own
-  repository) are unchanged. The workspace split is the in-repo step toward
-  section 5.
+  imported playlist) and section 5 (the shared format library) are unchanged.
+  Section 5 no longer extracts the crate to its own repository: the owner
+  prefers a monorepo (2026-10-11), so `proflow-propresenter` stays a
+  workspace crate here. How Pew consumes it is undecided.
+- Unverified on macOS (2026-10-11 server work, typed identities): mechanical,
+  no macOS-only path touched; `just local` covers it.
 - Unverified on macOS (2026-10-11 server work): `text_fit/client.rs` now holds
   the helper in a private `HelperSession` inside `NativeTextFitOracle`
   (mechanical move, behavior meant to be identical); `render_plans` has a

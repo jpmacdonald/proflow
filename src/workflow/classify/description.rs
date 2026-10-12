@@ -2,6 +2,7 @@
 
 use super::file_stem;
 use crate::planning_center::types::Item;
+use crate::project_config::PresentationTypeKey;
 use crate::project_config::{DescriptionParserKind, ItemKind};
 use crate::workflow::classify_matching::strip_speaker;
 use crate::workflow::description_parser::{self, ParsedContent};
@@ -31,7 +32,7 @@ pub(super) enum DescriptionPolicy {
 
 pub(super) fn build_static_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     kind: ItemKind,
     policy: StaticPolicy,
     item: &Item,
@@ -82,7 +83,7 @@ pub(super) fn build_static_plan(
 )]
 pub(super) fn build_description_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     kind: ItemKind,
     parser: DescriptionParserKind,
     policy: DescriptionPolicy,
@@ -157,7 +158,7 @@ fn unique_path(target: Option<&ExactLibraryFileMatch>) -> Option<std::path::Path
 #[allow(clippy::too_many_arguments)]
 fn finish_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     kind: ItemKind,
     item: &Item,
     target_library_file: Option<&str>,
@@ -181,7 +182,7 @@ fn finish_plan(
         ),
         reason,
         kind,
-        Some(type_key.to_string()),
+        Some(type_key.clone()),
         disposition,
     )
 }

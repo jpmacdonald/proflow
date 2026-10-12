@@ -111,7 +111,7 @@ fn build_required_playlist_item(
         playlist_name,
         reason,
         kind,
-        Some(required.type_key().to_string()),
+        Some(required.type_key().clone()),
         disposition,
     )
 }

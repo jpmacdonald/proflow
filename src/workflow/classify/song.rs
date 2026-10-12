@@ -2,6 +2,7 @@
 
 use super::file_stem;
 use crate::planning_center::types::Item;
+use crate::project_config::PresentationTypeKey;
 use crate::workflow::classify_matching::strip_title_prefix;
 use crate::workflow::library_search::{
     resolve_exact_library_file, resolve_song_library_match, strip_hymn_number,
@@ -42,7 +43,7 @@ impl RequestedArrangement {
 
 pub(super) fn build_song_plan(
     output_key: OutputKey,
-    type_key: &str,
+    type_key: &PresentationTypeKey,
     policy: &SongPolicy,
     item: &Item,
     target_library_file: Option<&str>,
@@ -114,7 +115,7 @@ pub(super) fn build_song_plan(
         playlist_name,
         reason,
         ItemKind::Song,
-        Some(type_key.to_string()),
+        Some(type_key.clone()),
         disposition,
     );
     if matches!(policy, SongPolicy::Review) {

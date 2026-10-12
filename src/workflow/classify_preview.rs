@@ -234,7 +234,7 @@ impl From<ResolvedItemPlan> for PreviewEntry {
         let content_slide = style.map(|style| style.content().slide().to_string());
         let title_slide =
             style.and_then(|style| style.title().map(|title| title.slide().to_string()));
-        let item_type = plan.item_type().map(str::to_string);
+        let item_type = plan.item_type().map(ToString::to_string);
         let classification_rule = plan.classification_rule().map(str::to_string);
 
         Self {
