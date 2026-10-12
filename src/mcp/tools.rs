@@ -415,3 +415,6 @@ impl ProFlowServer {
         json_result(&result)
     }
 }
+
+#[cfg(test)]
+mod tests;

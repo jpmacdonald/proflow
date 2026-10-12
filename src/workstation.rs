@@ -216,11 +216,17 @@ impl Workstation {
     }
 
     /// Replace the decisions recorded for `plan_id`.
+    ///
+    /// Decisions that could not become a request are refused and the file is
+    /// left as it was.
     pub fn record_decisions(
         &self,
         plan_id: &str,
         decisions: &ReviewDecisions,
     ) -> Result<(), BuildServiceError> {
+        decisions
+            .clone()
+            .into_request(plan_id, self.render_assets.config())?;
         Ok(decisions.write(&self.executor().review_decisions_path(plan_id)?)?)
     }
 
@@ -366,3 +372,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_support;

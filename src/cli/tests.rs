@@ -151,3 +151,120 @@ Receipt:  /show/Playlists/May 24.proplaylist.proflow-build.json
 "
     );
 }
+
+mod handlers {
+    use super::*;
+    use crate::workstation::test_support::{TestWorkstation, ITEM, PLAN_ID, SERVICE};
+
+    async fn run_line(station: &TestWorkstation, line: &str) -> Result<Outcome, BuildServiceError> {
+        run(&station.workstation, &parse(line).expect("command line")).await
+    }
+
+    #[tokio::test]
+    async fn a_plan_goes_from_open_decision_to_built_to_installed_exactly_once() {
+        let station = TestWorkstation::new();
+
+        let blocked = run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+        let Outcome::NeedsDecisions {
+            plan_id,
+            decisions,
+            decisions_file,
+            ..
+        } = &blocked
+        else {
+            panic!("the unmatched item needs a decision: {blocked:?}");
+        };
+        assert_eq!(blocked.exit_code(), 2);
+        assert_eq!(plan_id, PLAN_ID);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].item, ITEM);
+        assert_eq!(decisions_file, &station.decisions_file());
+
+        let nothing_built = run_line(&station, "commit --plan plan-1").await;
+        assert!(matches!(
+            nothing_built,
+            Err(BuildServiceError::NoVerifiedBuild { .. })
+        ));
+
+        station.skip_the_item();
+        let built = run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+        let Outcome::Built {
+            build_directory,
+            result,
+            ..
+        } = &built
+        else {
+            panic!("a fully decided plan builds: {built:?}");
+        };
+        assert_eq!(built.exit_code(), 0);
+        assert_eq!(result.skipped_count, 1);
+        assert!(build_directory.join("verified").is_dir());
+        assert_eq!(station.installed_playlists(), 0, "build installs nothing");
+
+        let committed = run_line(&station, "commit --plan plan-1")
+            .await
+            .expect("commit");
+        let Outcome::Committed { result, .. } = &committed else {
+            panic!("the verified build installs: {committed:?}");
+        };
+        assert!(result.playlist_path.is_file());
+        assert_eq!(station.installed_playlists(), 1);
+
+        assert!(matches!(
+            run_line(&station, "commit --plan plan-1").await,
+            Err(BuildServiceError::BuildAlreadyCommitted { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_decision_edited_after_the_build_leaves_nothing_to_install() {
+        let station = TestWorkstation::new();
+        station.skip_the_item();
+        run_line(&station, "build --plan plan-1")
+            .await
+            .expect("build");
+
+        std::fs::write(
+            station.decisions_file(),
+            format!("playlist_name = \"Renamed\"\n[[decision]]\nitem = \"{ITEM}\"\nskip = true\n"),
+        )
+        .expect("edit decisions");
+
+        assert!(matches!(
+            run_line(&station, "commit --plan plan-1").await,
+            Err(BuildServiceError::NoVerifiedBuild { .. })
+        ));
+        assert_eq!(station.installed_playlists(), 0);
+    }
+
+    #[tokio::test]
+    async fn next_names_the_soonest_plan_and_a_wrong_service_type_is_refused() {
+        let station = TestWorkstation::new();
+
+        let next = run_line(&station, "build --plan next").await.expect("next");
+        assert!(matches!(
+            &next,
+            Outcome::NeedsDecisions { plan_id, .. } if plan_id == PLAN_ID
+        ));
+        assert_eq!(
+            station
+                .workstation
+                .next_plan_id(Some(SERVICE))
+                .await
+                .expect("next of the service type"),
+            PLAN_ID
+        );
+        assert!(matches!(
+            run_line(&station, "build --plan next --service Wednesday").await,
+            Err(BuildServiceError::Request(_))
+        ));
+        assert!(matches!(
+            run_line(&station, "build --plan plan-1 --service Wednesday").await,
+            Err(BuildServiceError::PlanningCenter(_) | BuildServiceError::Request(_))
+        ));
+    }
+}

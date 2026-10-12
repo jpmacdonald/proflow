@@ -195,8 +195,20 @@ Dates are the day the work landed on `main`.
   derive `Deserialize` so a committed result can be read back from
   `rendered/result.json`.
 
+- Handler-level tests for `proflow build` / `commit` and for the MCP
+  `preview_playlist`, `build_service` and `read_playlist` tools. They run a
+  whole `Workstation` over a temporary directory against a local stand-in
+  for Planning Center (`src/workstation/test_support.rs`), from open
+  decision through build to one install. This replaces the "needs a live
+  Planning Center" gap. A mutation run over the handler layer (49 mutants:
+  32 caught, 15 unviable) leaves 2 missed, the MCP server-info text and a
+  generic error helper.
+
 ### Fixed
 
+- A preview whose decisions are refused (for example media with a
+  linked-library package) no longer overwrites the plan's `review.toml`
+  before failing. Decisions are checked before they are recorded.
 - A presentation path that starts at `/Libraries/...` no longer infers the
   filesystem root as the show root. Show-relative media was being resolved
   against `/`, so a missing file was reported at the wrong path (and a file
@@ -256,14 +268,6 @@ Dates are the day the work landed on `main`.
 - `proflow build` and MCP `preview_playlist` share one `review.toml` per
   plan. A preview replaces the file with its arguments, including with no
   decisions when it is given none.
-- The `proflow` handlers and the two MCP handlers still have no
-  handler-level test (they need a live Planning Center). Their logic is
-  tested below them: command-line parsing and output, the executor's commit
-  by inputs, and the argument-to-decisions conversion.
-  A mutation run over the phase 2 modules (79 mutants: 42 caught, 31
-  unviable) missed 6, all in that untested layer: `Outcome::from_review`,
-  `Workstation::record_decisions` and `next_plan_id`, and two MCP server
-  functions.
 - The compiled config still looks macros and theme slides up by name in the
   loaded native assets (`MacroCache::find`, `slide_template`), and those
   lookups can still miss. `MacroName` and `ThemeSlideName` say which kind of
