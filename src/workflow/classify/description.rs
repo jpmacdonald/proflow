@@ -224,9 +224,9 @@ fn resolve_existing_action(
     arrangement: Option<String>,
     restyle: Option<ExistingTransform>,
 ) -> (PlanDisposition, String) {
-    if matches!(target_match, Some(ExactLibraryFileMatch::Ambiguous(_))) {
+    if let Some(ExactLibraryFileMatch::Ambiguous(paths)) = target_match {
         (
-            PlanDisposition::NeedsReview(ReviewContext::new(None)),
+            PlanDisposition::NeedsReview(ReviewContext::file_choices(paths)),
             "Configured existing file is ambiguous".to_string(),
         )
     } else if let Some(file_path) = file_path {
