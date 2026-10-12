@@ -22,6 +22,7 @@ use proflow_propresenter::SlideType;
 mod support;
 use support::*;
 
+mod build_stages;
 mod invariants;
 mod library_freshness;
 mod native_fidelity;

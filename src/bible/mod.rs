@@ -699,6 +699,18 @@ pub struct BibleCorpusFingerprint {
 }
 
 impl BibleCorpusFingerprint {
+    /// The data root and every installed translation's source SHA-256.
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "root": self.root,
+            "sources": self
+                .sources
+                .iter()
+                .map(|(version, sha256)| (*version, digest_hex(sha256)))
+                .collect::<BTreeMap<_, _>>(),
+        })
+    }
+
     #[cfg(test)]
     pub(crate) const fn diagnostic() -> Self {
         Self {

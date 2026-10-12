@@ -4,8 +4,9 @@ use super::*;
 
 const INPUTS: BuildInputs<'static> = BuildInputs {
     plan_snapshot: b"plan",
-    config: b"config",
+    render_assets: b"assets",
     bible_corpora: b"corpora",
+    library: b"library",
     review_decisions: b"decisions",
 };
 
@@ -43,7 +44,11 @@ fn equal_inputs_hash_equally_and_every_input_byte_changes_the_hash() {
             ..INPUTS
         },
         BuildInputs {
-            config: b"confiG",
+            render_assets: b"assetS",
+            ..INPUTS
+        },
+        BuildInputs {
+            library: b"librarY",
             ..INPUTS
         },
         BuildInputs {
@@ -63,8 +68,8 @@ fn equal_inputs_hash_equally_and_every_input_byte_changes_the_hash() {
 #[test]
 fn a_byte_moved_between_two_inputs_changes_the_hash() {
     let moved = BuildInputs {
-        plan_snapshot: b"planc",
-        config: b"onfig",
+        plan_snapshot: b"plana",
+        render_assets: b"ssets",
         ..INPUTS
     };
     assert_ne!(InputHash::of(&INPUTS), InputHash::of(&moved));

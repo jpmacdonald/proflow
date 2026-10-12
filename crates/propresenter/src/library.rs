@@ -348,6 +348,11 @@ impl LibraryCandidates {
     pub const fn empty() -> Self {
         Self(BTreeSet::new())
     }
+
+    /// Every candidate path, in a stable order.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.0.iter().map(PathBuf::as_path)
+    }
 }
 
 /// A decoded catalog replacement prepared from exact bytes awaiting commit.

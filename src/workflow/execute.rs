@@ -33,6 +33,7 @@ use proflow_propresenter::playlist::{
 use proflow_propresenter::serialize::SerializeError;
 use proflow_propresenter::text_fit::FontProgramFreshnessError;
 
+mod build_stages;
 mod overrides;
 mod plan_rendering;
 mod playlist_output;
@@ -355,6 +356,9 @@ pub enum BuildServiceError {
     /// after the build was prepared, so ambiguity review is no longer valid.
     #[error("presentation library candidates changed after preview; preview again")]
     LibraryCandidatesChanged,
+    /// The build directory refused a stage or could not be read or written.
+    #[error(transparent)]
+    BuildDir(#[from] crate::workflow::build_dir::BuildDirError),
     /// A filesystem transaction failed.
     #[error("filesystem transaction failed: {0}")]
     Io(#[from] std::io::Error),

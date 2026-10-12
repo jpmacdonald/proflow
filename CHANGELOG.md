@@ -70,20 +70,27 @@ Dates are the day the work landed on `main`.
 
 - Build directories (`src/workflow/build_dir.rs`), phase 0 of the
   file-shaped pipeline. A build lives at
-  `<builds root>/<plan id>/<input hash>/`; `InputHash` covers the plan
-  snapshot, the config, the Bible corpus fingerprints and the review
-  decisions, each bound to its name and length. Stages (`snapshot`,
+  `<data root>/builds/<plan id>/<input hash>/`. `InputHash` covers five
+  inputs, each bound to its name and length: the plan snapshot, the
+  render-asset fingerprint (which includes the config), the Bible corpus
+  fingerprints, the library (every `.pro` candidate with its content hash),
+  and the operator's decisions in canonical order. Stages (`snapshot`,
   `classified`, `rendered`, `verified`, `committed`) are subdirectories
   written once through a temporary directory and a rename, and sealed with a
   `stage.json` of per-file SHA-256; a stage whose files differ from its seal
   is refused on resume. `BuildDir<S>` carries the stage in its type, so a
-  stage can only be written from the one before it. Nothing calls it yet:
-  the executor still holds prepared state in memory until phase 1.
-  `review.toml` lives beside the hashed directories
-  (`<builds root>/<plan id>/review.toml`), because its bytes are a hash
-  input and it cannot sit inside the directory it names. Mutation run on the
-  module: 32 mutants, 20 caught, 10 unviable, 2 missed, both the `fsync` helpers, whose effect a
-  test cannot observe.
+  stage can only be written from the one before it. Mutation run on the
+  module: 32 mutants, 20 caught, 10 unviable, 2 missed, both the `fsync`
+  helpers, whose effect a test cannot observe.
+- Phase 1, slice 1 (`src/workflow/execute/build_stages.rs`): every review
+  opens the build directory its inputs name and writes `snapshot/` (the five
+  inputs, one file each: `plan.json`, `render-assets.json`,
+  `bible-corpora.json`, `catalog.json`, `decisions.json`) and `classified/`
+  (`plans.json`, the effective plan), including reviews that still need
+  decisions. An equal review reopens the same directory. Rendering and commit
+  do not read these stages yet: prepared state is still held in memory until
+  slice 2. Review now reads every library presentation a second time to hash
+  it.
 
 ### Changed
 

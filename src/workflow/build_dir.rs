@@ -72,11 +72,13 @@ impl BuildPlanId {
 pub struct BuildInputs<'a> {
     /// Captured Planning Center plan snapshot.
     pub plan_snapshot: &'a [u8],
-    /// Serialized checked project configuration.
-    pub config: &'a [u8],
+    /// Fingerprint of the project configuration and native display assets.
+    pub render_assets: &'a [u8],
     /// Fingerprints of the Bible corpora the build reads.
     pub bible_corpora: &'a [u8],
-    /// Review decisions file; empty when no decision has been recorded.
+    /// Every presentation in the library the review could match, by content.
+    pub library: &'a [u8],
+    /// The operator's decisions in canonical form.
     pub review_decisions: &'a [u8],
 }
 
@@ -92,8 +94,9 @@ impl InputHash {
         hasher.update(INPUT_HASH_DOMAIN);
         for (name, bytes) in [
             ("plan_snapshot", inputs.plan_snapshot),
-            ("config", inputs.config),
+            ("render_assets", inputs.render_assets),
             ("bible_corpora", inputs.bible_corpora),
+            ("library", inputs.library),
             ("review_decisions", inputs.review_decisions),
         ] {
             // Name and length keep a byte from moving between two inputs
@@ -246,6 +249,23 @@ impl<S: Stage> BuildDir<S> {
             path: self.path,
             stage: PhantomData,
         })
+    }
+
+    /// Reopen the next stage if an earlier run wrote it, otherwise write it.
+    ///
+    /// Only for a stage whose content is a function of the build inputs, so
+    /// that an earlier run's stage is the stage this run would write.
+    pub fn resume_or_write<N>(
+        self,
+        write: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> Result<BuildDir<N>, BuildDirError>
+    where
+        N: WrittenStage<Previous = S>,
+    {
+        match self.resume()? {
+            Resumed::Written(build) => Ok(build),
+            Resumed::NotYet(build) => build.write(write),
+        }
     }
 
     /// Reopen the next stage if an earlier run wrote it.
@@ -442,7 +462,7 @@ fn mismatch(stage: &'static str, detail: impl fmt::Display) -> BuildDirError {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use fmt::Write as _;
 
     bytes

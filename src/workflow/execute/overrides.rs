@@ -13,7 +13,7 @@ use proflow_propresenter::SlideType;
 /// Public fields keep this type convenient at CLI and MCP translation
 /// boundaries. `resolve_requested_plans` is the single checked transition
 /// that rejects malformed or contradictory values before review capture.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EntryOverride {
     /// Stable output identity of the plan entry being changed.
     pub output_key: String,
@@ -48,7 +48,8 @@ impl EntryOverride {
 /// Each variant carries exactly the data required by that intent. In
 /// particular, a read-only presentation cannot accidentally carry render
 /// styling, and a rendered presentation cannot carry an arrangement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum OverrideAction {
     /// Replace the proposed operation with one exact library presentation.
     UseExisting {
@@ -106,7 +107,9 @@ impl OverrideAction {
 }
 
 /// Semantic slide role accepted at service-build boundaries.
-#[derive(Debug, Clone, Copy, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, schemars::JsonSchema, PartialEq, Eq,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum OverrideSlideType {
     /// Generic text presentation.

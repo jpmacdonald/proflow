@@ -10,6 +10,7 @@ use proflow_propresenter::playlist::{
 };
 use proflow_propresenter::PresentationSize;
 
+use super::build_stages::ReviewedDecisions;
 use super::overrides::resolve_requested_plans;
 use super::receipt::receipt_path_for_playlist;
 use super::request::{BoundBuildRequest, BuildRequest, RequestError};
@@ -383,6 +384,16 @@ impl ServiceBuildExecutor<'_> {
         let request = BoundBuildRequest::try_from(request)?;
         let mut plans = resolve_requested_plans(plans, &skip_output_keys, &overrides)?;
         reconcile_description_scripture_excerpts(&mut plans, self.bible_corpora)?;
+        self.classified_build(
+            &ReviewedDecisions {
+                request: &request,
+                skip_output_keys: &skip_output_keys,
+                overrides: &overrides,
+            },
+            planning_center.snapshot(),
+            &library_candidates,
+            &plans,
+        )?;
         if plans.iter().any(ResolvedItemPlan::needs_review) {
             return Ok(BuildReview::NeedsReview(Box::new(
                 NeedsReviewBuildRequest {
