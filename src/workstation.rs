@@ -177,6 +177,18 @@ impl Workstation {
         review_service_request(&self.planning_center, &self.executor(), request).await
     }
 
+    /// Review `plan_id` with the decisions recorded in its `review.toml`.
+    ///
+    /// The file is the whole request: answering a question there is what
+    /// makes the next review resolve it.
+    pub async fn review_recorded_decisions(
+        &self,
+        plan_id: &str,
+    ) -> Result<BuildReview, BuildServiceError> {
+        let request = self.executor().recorded_request(plan_id)?;
+        self.review_service_request(request).await
+    }
+
     /// Refresh the reviewed Planning Center snapshot, then verify and commit.
     pub async fn build_prepared_request(
         &self,

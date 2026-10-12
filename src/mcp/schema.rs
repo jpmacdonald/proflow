@@ -2,13 +2,17 @@
 //!
 //! These types describe the JSON accepted and returned by the MCP boundary.
 //! Runtime workflow types stay out of this module so changes to internal
-//! planning do not silently change the public tool schema.
+//! planning do not silently change the public tool schema. The one shared
+//! wire type is [`EntryOverrideAction`]: a plan's `review.toml` records the
+//! same action an override carries here, so both read one definition.
 
 use rmcp::schemars;
 use serde::Serialize;
 
+pub use crate::workflow::execute::EntryOverrideAction;
+
 use crate::planning_center::types::Category;
-use crate::project_config::{BackgroundId, ConfigValidationIssue, ProjectConfig};
+use crate::project_config::{ConfigValidationIssue, ProjectConfig};
 use crate::workflow::classify;
 use crate::workflow::execute::OverrideSlideType;
 use proflow_propresenter::playlist::PlaylistExportMode;
@@ -171,44 +175,6 @@ pub struct EntryOverride {
     /// One complete semantic action override. Omit this to change only the
     /// playlist name or slide type.
     pub action: Option<EntryOverrideAction>,
-}
-
-/// Complete operator intent for replacing or refining one preview action.
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum EntryOverrideAction {
-    /// Reuse one exact existing presentation and optional arrangement.
-    UseExisting {
-        /// Existing `.pro` file selected by the operator.
-        file_path: String,
-        /// Optional exact native arrangement name.
-        arrangement: Option<String>,
-    },
-    /// Render the proposed content as a new presentation.
-    GenerateNew {
-        /// Optional replacement background ID from project config.
-        #[schemars(with = "Option<String>")]
-        background: Option<BackgroundId>,
-    },
-    /// Render proposed description content into one existing presentation.
-    EditDescription {
-        /// Existing `.pro` file whose owned envelope will be preserved.
-        file_path: String,
-        /// Optional replacement background ID from project config.
-        #[schemars(with = "Option<String>")]
-        background: Option<BackgroundId>,
-    },
-    /// Keep the proposed render action and replace only its background.
-    SetBackground {
-        /// Replacement background ID from project config.
-        #[schemars(with = "String")]
-        background: BackgroundId,
-    },
-    /// Keep the proposed existing presentation and select its arrangement.
-    SelectArrangement {
-        /// Exact native arrangement name.
-        arrangement: String,
-    },
 }
 
 #[derive(Serialize)]

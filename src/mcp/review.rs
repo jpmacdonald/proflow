@@ -3,19 +3,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::paths::expand_user_path;
 use crate::planning_center::PlanLookaheadDays;
-use crate::project_config::{BackgroundId, ProjectConfig};
+use crate::project_config::ProjectConfig;
 use crate::workflow::execute::{
-    EntryOverride as WorkflowEntryOverride, OverrideAction, PreparedBuildRequest,
+    resolve_override_action, EntryOverride as WorkflowEntryOverride, PreparedBuildRequest,
 };
-use crate::workflow::plan::ResolvedBackground;
 use proflow_propresenter::playlist::{
     PlaylistExportIntent, PlaylistExportMode, PlaylistMediaAsset,
 };
 
 use super::mcp_err;
-use super::schema::{EntryOverride, EntryOverrideAction, PlaylistMediaAssetArg};
+use super::schema::{EntryOverride, PlaylistMediaAssetArg};
 
 /// One-time token naming a prepared build this server process previewed.
 ///
@@ -90,135 +88,38 @@ pub(super) enum ReviewedPlanError {
 }
 
 /// Build the playlist export intent a preview request asks for.
-///
-/// Media assets only exist in a portable package; supplying them with
-/// `LibraryLinks` would silently drop them, so that combination is rejected.
 pub(super) fn playlist_export_intent(
     mode: PlaylistExportMode,
     media_assets: Option<Vec<PlaylistMediaAssetArg>>,
 ) -> Result<PlaylistExportIntent, rmcp::ErrorData> {
-    if mode == PlaylistExportMode::LibraryLinks
-        && media_assets
-            .as_ref()
-            .is_some_and(|assets| !assets.is_empty())
-    {
-        return Err(rmcp::ErrorData::invalid_params(
-            "media_assets require package_mode export_portable; library_local exports carry no media",
-            None,
-        ));
-    }
-    let media_assets = media_assets
-        .unwrap_or_default()
-        .into_iter()
-        .map(|asset| PlaylistMediaAsset {
-            source_path: PathBuf::from(asset.path),
-            archive_path: asset.archive_path,
-        })
-        .collect();
-    Ok(match mode {
-        PlaylistExportMode::LibraryLinks => PlaylistExportIntent::library_links(),
-        PlaylistExportMode::PortableImport => PlaylistExportIntent::portable_import(media_assets),
-    })
+    crate::workflow::execute::playlist_export_intent(
+        mode,
+        media_assets
+            .unwrap_or_default()
+            .into_iter()
+            .map(|asset| PlaylistMediaAsset {
+                source_path: PathBuf::from(asset.path),
+                archive_path: asset.archive_path,
+            })
+            .collect(),
+    )
+    .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))
 }
 
 pub(super) fn resolve_entry_override(
     mappings: &ProjectConfig,
     entry: EntryOverride,
 ) -> Result<WorkflowEntryOverride, rmcp::ErrorData> {
-    let action = entry
-        .action
-        .map(|action| resolve_override_action(mappings, action))
-        .transpose()?;
-
     Ok(WorkflowEntryOverride {
         output_key: entry.output_key,
         playlist_name: entry.playlist_name,
         slide_type: entry.slide_type,
-        action,
+        action: entry
+            .action
+            .map(|action| resolve_override_action(mappings, action))
+            .transpose()
+            .map_err(|error| mcp_err(error.to_string()))?,
     })
-}
-
-fn resolve_override_action(
-    mappings: &ProjectConfig,
-    action: EntryOverrideAction,
-) -> Result<OverrideAction, rmcp::ErrorData> {
-    match action {
-        EntryOverrideAction::UseExisting {
-            file_path,
-            arrangement,
-        } => Ok(OverrideAction::UseExisting {
-            file_path: operator_path(file_path)?,
-            arrangement: optional_operator_identity("arrangement", arrangement)?,
-        }),
-        EntryOverrideAction::GenerateNew { background } => Ok(OverrideAction::GenerateNew {
-            background: background
-                .map(|id| resolve_background_override(mappings, id))
-                .transpose()?,
-        }),
-        EntryOverrideAction::EditDescription {
-            file_path,
-            background,
-        } => Ok(OverrideAction::EditDescription {
-            file_path: operator_path(file_path)?,
-            background: background
-                .map(|id| resolve_background_override(mappings, id))
-                .transpose()?,
-        }),
-        EntryOverrideAction::SetBackground { background } => Ok(OverrideAction::SetBackground {
-            background: resolve_background_override(mappings, background)?,
-        }),
-        EntryOverrideAction::SelectArrangement { arrangement } => {
-            Ok(OverrideAction::SelectArrangement {
-                arrangement: required_operator_identity("arrangement", arrangement)?,
-            })
-        }
-    }
-}
-
-fn resolve_background_override(
-    mappings: &ProjectConfig,
-    id: BackgroundId,
-) -> Result<ResolvedBackground, rmcp::ErrorData> {
-    let file = mappings.backgrounds().get(&id).cloned().ok_or_else(|| {
-        let mut available: Vec<_> = mappings
-            .backgrounds()
-            .keys()
-            .map(std::string::ToString::to_string)
-            .collect();
-        available.sort();
-        mcp_err(format!(
-            "unknown background id '{id}'; configured backgrounds: {}",
-            available.join(", ")
-        ))
-    })?;
-    Ok(ResolvedBackground::new(id, file))
-}
-
-fn operator_path(value: String) -> Result<PathBuf, rmcp::ErrorData> {
-    let value = required_operator_identity("file_path", value)?;
-    Ok(expand_user_path(value))
-}
-
-fn optional_operator_identity(
-    field: &'static str,
-    value: Option<String>,
-) -> Result<Option<String>, rmcp::ErrorData> {
-    value
-        .map(|value| required_operator_identity(field, value))
-        .transpose()
-}
-
-fn required_operator_identity(
-    field: &'static str,
-    value: String,
-) -> Result<String, rmcp::ErrorData> {
-    if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
-        Err(mcp_err(format!(
-            "override {field} must be non-empty, unpadded, and contain no control characters"
-        )))
-    } else {
-        Ok(value)
-    }
 }
 
 pub(super) fn bounded_usize(

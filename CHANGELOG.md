@@ -149,6 +149,23 @@ Dates are the day the work landed on `main`.
   plain strings again only where the format crate is called. Service group
   names needed nothing: compilation already reduces them to service scopes.
 
+- Phase 1, slice 3 (`src/workflow/execute/decisions.rs`): a plan's
+  decisions can be recorded in `<data root>/builds/<plan id>/review.toml`.
+  The file carries what a request carries: `playlist_name`, `package_mode`,
+  `[[media]]`, and one `[[decision]]` per item, which either sets
+  `skip = true` or gives a `playlist_name`, a `slide_type`, or a
+  `[decision.action]` with the same `kind`s the MCP override takes.
+  `question`, `options`, `decided_by` and `at` are kept for the reader and do
+  not change what is built or which build directory is used.
+  `ServiceBuildExecutor::recorded_request` and
+  `Workstation::review_recorded_decisions` review a plan from that file; a
+  plan with no file has no decisions. `BuildReview::open_decisions` lists
+  every item still waiting, and `into_prepared` now fails with
+  `UnansweredDecisions` naming all of them instead of `UnresolvedPlan` for
+  the first. Nothing writes the file yet and no command reads it: the CLI
+  that does both is phase 2. The MCP tools still take decisions as
+  arguments; `EntryOverrideAction` and its resolution moved out of
+  `src/mcp` so both read one definition. New dependency: `toml`.
 - A target that changed between preview and commit is now reported as the
   typed `OutputReviewError` (`Changed`, `Appeared`, `Disappeared`) naming
   the path, instead of an I/O error reading "changed concurrently". The
@@ -195,6 +212,14 @@ Dates are the day the work landed on `main`.
   not done: freshness and Planning Center failures occur at both review and
   commit, so the phase grouping is not clean, and nested enums add a match
   level everywhere. Revisit only with a concrete consumer that needs it.
+- Phase 1 of the file-shaped pipeline differs from its plan
+  (`.agents/plans/file-shaped-pipeline.md`) in four places. `review.toml`
+  sits beside the hashed build directories, not inside one, and has no
+  on-disk "reviewed" stage. The library is a hash input. A decision is
+  `skip` or an action table rather than one `answer` field, so it shares the
+  MCP override schema. Decisions made by rules are not written to
+  `review.toml`, since writing them would change the hash that names the
+  directory holding the result; they are in `classified/plans.json`.
 - Build directories are never pruned. Every committed build keeps its
   artifacts and the bytes they replaced under `<data root>/builds/`, in
   place or in `retired/<n>/`. Nothing deletes old builds yet.

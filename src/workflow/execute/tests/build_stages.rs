@@ -308,3 +308,88 @@ fn a_committed_build_stays_as_a_record_when_its_inputs_are_built_again() {
         .expect("the playlist written by the first commit is replaced by the second");
     assert!(build.join("committed/targets.json").is_file());
 }
+
+#[test]
+fn answering_an_open_decision_in_the_decisions_file_lets_the_next_review_proceed() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let executor = runtime.executor();
+    let mut undecided = test_plan(
+        "pco:item:a",
+        PlanDisposition::NeedsReview(ReviewContext::new(None)),
+    );
+    undecided.reason = "two library presentations match".to_string();
+    let plans = [undecided, skipped("pco:item:b")];
+    let recorded = || {
+        let mut request = executor
+            .recorded_request("plan-1")
+            .expect("recorded request");
+        request.service_name = Some("Sunday Morning".to_string());
+        request.playlist_name = Some("Reviewed".to_string());
+        request
+    };
+
+    let blocked = review(&runtime, recorded(), &plans);
+    assert_eq!(
+        blocked.open_decisions(),
+        [OpenDecision {
+            item: "pco:item:a".to_string(),
+            title: "Test item".to_string(),
+            question: "two library presentations match".to_string(),
+        }]
+    );
+    let error = blocked.into_prepared().expect_err("unanswered");
+    assert!(matches!(
+        &error,
+        BuildServiceError::UnansweredDecisions { decisions } if decisions.len() == 1
+    ));
+    assert!(error.to_string().contains("pco:item:a"));
+
+    let decisions = executor
+        .review_decisions_path("plan-1")
+        .expect("decisions path");
+    assert_eq!(
+        decisions,
+        runtime
+            .locations()
+            .project_data_root()
+            .join("builds/plan-1/review.toml")
+    );
+    std::fs::write(
+        &decisions,
+        "[[decision]]\nitem = \"pco:item:a\"\nskip = true\n",
+    )
+    .expect("answer the decision");
+
+    let answered = review(&runtime, recorded(), &plans);
+    assert!(answered.open_decisions().is_empty());
+    assert!(matches!(answered, BuildReview::Prepared(_)));
+}
+
+#[test]
+fn a_review_reports_the_identity_it_bound_and_the_report_it_materialized() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = TestRuntime::new(root.path());
+    let media = root.path().join("welcome.png");
+    std::fs::write(&media, minimal_png(1, 1)).expect("write media");
+    let mut request = reviewed_request("Reviewed");
+    request.playlist_export = PlaylistExportIntent::portable_import(vec![PlaylistMediaAsset {
+        source_path: media,
+        archive_path: None,
+    }]);
+
+    let reviewed = review(&runtime, request, &[]);
+
+    assert_eq!(reviewed.plan_id(), "plan-1");
+    assert_eq!(reviewed.service_name(), "Sunday Morning");
+    assert_eq!(reviewed.playlist_name(), "Reviewed");
+    assert_eq!(reviewed.plan_title(), "Offline test plan");
+    assert_eq!(reviewed.additional_media_assets().len(), 1);
+    assert_eq!(
+        reviewed
+            .materialized_result()
+            .map(|result| result.media_asset_count),
+        Some(1)
+    );
+    assert_eq!(expect_prepared(reviewed).plan_id(), "plan-1");
+}

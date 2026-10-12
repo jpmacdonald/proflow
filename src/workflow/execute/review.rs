@@ -39,6 +39,17 @@ pub enum BuildReview {
     Prepared(Box<PreparedBuildRequest>),
 }
 
+/// One plan item a review could not resolve without the operator.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OpenDecision {
+    /// Stable output key to name in the decision.
+    pub item: String,
+    /// Operator-visible Planning Center title.
+    pub title: String,
+    /// Why the item could not be resolved.
+    pub question: String,
+}
+
 /// A non-executable review retained only for operator-facing diagnostics.
 #[derive(Debug)]
 pub struct NeedsReviewBuildRequest {
@@ -208,18 +219,34 @@ impl BuildReview {
         self.request().playlist_export.media_assets()
     }
 
-    /// Consume a resolved review, or return the first unresolved semantic item.
+    /// Every plan item still waiting for a decision, in plan order. Empty
+    /// for a prepared review.
+    pub fn open_decisions(&self) -> Vec<OpenDecision> {
+        match self {
+            Self::Prepared(_) => Vec::new(),
+            Self::NeedsReview(review) => review
+                .plans
+                .iter()
+                .filter(|plan| plan.needs_review())
+                .map(|plan| OpenDecision {
+                    item: plan.output_key.to_string(),
+                    title: plan.pco_title.clone(),
+                    question: plan.reason.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Consume a resolved review, or list every item still waiting for a
+    /// decision.
     pub fn into_prepared(self) -> Result<PreparedBuildRequest, BuildServiceError> {
+        let decisions = self.open_decisions();
         match self {
             Self::Prepared(prepared) => Ok(*prepared),
-            Self::NeedsReview(review) => {
-                let plan = review
-                    .plans
-                    .iter()
-                    .find(|plan| plan.needs_review())
-                    .ok_or(BuildServiceError::ReviewStateInvariant)?;
-                Err(super::unresolved_plan_error(plan))
+            Self::NeedsReview(_) if decisions.is_empty() => {
+                Err(BuildServiceError::ReviewStateInvariant)
             }
+            Self::NeedsReview(_) => Err(BuildServiceError::UnansweredDecisions { decisions }),
         }
     }
 }

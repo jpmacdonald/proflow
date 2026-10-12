@@ -72,6 +72,14 @@ pub(super) struct ReviewedDecisions<'a> {
 }
 
 impl ServiceBuildExecutor<'_> {
+    /// Directory holding every plan's build directories and decisions.
+    pub(super) fn builds_root(&self) -> PathBuf {
+        self.render_assets
+            .locations()
+            .project_data_root()
+            .join(BUILDS_DIRECTORY)
+    }
+
     /// Open the build directory these inputs name and write, or reopen, its
     /// `snapshot/` and `classified/` stages.
     pub(super) fn classified_build(
@@ -88,11 +96,7 @@ impl ServiceBuildExecutor<'_> {
         let decisions_bytes = json(&canonical_decisions(decisions))?;
 
         let build: BuildDir<Opened> = BuildDir::open(
-            &self
-                .render_assets
-                .locations()
-                .project_data_root()
-                .join(BUILDS_DIRECTORY),
+            &self.builds_root(),
             &BuildPlanId::new(decisions.request.plan_id.as_str())?,
             &BuildInputs {
                 plan_snapshot: &plan,

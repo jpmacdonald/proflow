@@ -34,6 +34,7 @@ use proflow_propresenter::serialize::SerializeError;
 use proflow_propresenter::text_fit::FontProgramFreshnessError;
 
 mod build_stages;
+mod decisions;
 mod overrides;
 mod plan_rendering;
 mod playlist_output;
@@ -48,6 +49,10 @@ pub(crate) mod restyle_text_fit;
 mod review;
 mod run;
 
+pub use decisions::{
+    playlist_export_intent, resolve_override_action, DecidedBy, DecisionError, EntryOverrideAction,
+    ItemDecision, MediaDecision, ReviewDecisions,
+};
 pub use overrides::{EntryOverride, OverrideAction, OverrideSlideType};
 pub use presentation_contract::PresentationContractError;
 pub use render_assets::{
@@ -56,7 +61,7 @@ pub use render_assets::{
     RenderAssetSnapshotError, ThemeSlideSizeProblem,
 };
 pub use request::{BuildRequest, RequestError};
-pub use review::{BuildReview, NeedsReviewBuildRequest, PreparedBuildRequest};
+pub use review::{BuildReview, NeedsReviewBuildRequest, OpenDecision, PreparedBuildRequest};
 
 #[cfg(test)]
 use self::overrides::{
@@ -133,6 +138,23 @@ pub enum BuildServiceError {
     /// A review state claimed to be blocked but contained no unresolved plan.
     #[error("non-executable review contains no unresolved plan")]
     ReviewStateInvariant,
+    /// The plan's recorded decisions could not be read or applied.
+    #[error(transparent)]
+    Decisions(#[from] DecisionError),
+    /// The build cannot be rendered until every listed item has a decision.
+    #[error(
+        "build blocked by {} unanswered decision(s): {}",
+        decisions.len(),
+        decisions
+            .iter()
+            .map(|decision| format!("{} ('{}'): {}", decision.item, decision.title, decision.question))
+            .collect::<Vec<_>>()
+            .join("; ")
+    )]
+    UnansweredDecisions {
+        /// Every plan item still waiting for a decision, in plan order.
+        decisions: Vec<OpenDecision>,
+    },
     /// Execution was requested for an item that still requires a human decision.
     #[error("build blocked by unresolved item {output_key} ('{title}'): {reason}")]
     UnresolvedPlan {
@@ -465,6 +487,24 @@ impl<'a> ServiceBuildExecutor<'a> {
                 days_ahead: self.render_assets.config().plan_lookahead_days(),
             }),
         }
+    }
+
+    /// Where the operator's decisions for `plan_id` are recorded.
+    pub fn review_decisions_path(&self, plan_id: &str) -> Result<PathBuf, BuildServiceError> {
+        Ok(crate::workflow::build_dir::review_decisions_path(
+            &self.builds_root(),
+            &crate::workflow::build_dir::BuildPlanId::new(plan_id)?,
+        ))
+    }
+
+    /// The request that reviewing `plan_id` with its recorded decisions needs.
+    ///
+    /// A plan with no decisions file is reviewed with no decisions.
+    pub fn recorded_request(&self, plan_id: &str) -> Result<BuildRequest, BuildServiceError> {
+        Ok(
+            ReviewDecisions::read(&self.review_decisions_path(plan_id)?)?
+                .into_request(plan_id, self.render_assets.config())?,
+        )
     }
 
     /// Classify one captured Planning Center snapshot and materialize the same
