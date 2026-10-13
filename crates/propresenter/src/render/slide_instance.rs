@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::SlideInstantiationError;
 use crate::generated::rv_data;
+use crate::identity::IdentitySource;
 
 type UuidRemap = BTreeMap<String, rv_data::Uuid>;
 
@@ -23,6 +24,7 @@ impl SourceIdentities {
         &mut self,
         field: &mut Option<rv_data::Uuid>,
         kind: &'static str,
+        identities: &mut IdentitySource,
     ) -> Result<RemintedIdentity, SlideInstantiationError> {
         let source_key = field.as_ref().and_then(source_identity_key);
         if let Some(key) = &source_key {
@@ -37,7 +39,7 @@ impl SourceIdentities {
             }
         }
 
-        let uuid = new_uuid();
+        let uuid = identities.next();
         field.clone_from(&Some(uuid.clone()));
         Ok(RemintedIdentity { source_key, uuid })
     }
@@ -50,6 +52,7 @@ impl SourceIdentities {
 /// owned by the cloned slide and references between those objects are reminted.
 pub(super) fn instantiate_template_slide(
     template: &rv_data::PresentationSlide,
+    identities: &mut IdentitySource,
 ) -> Result<rv_data::PresentationSlide, SlideInstantiationError> {
     let mut instance = template.clone();
     let mut source_identities = SourceIdentities::default();
@@ -57,35 +60,38 @@ pub(super) fn instantiate_template_slide(
     let mut build_order_ids = UuidRemap::new();
 
     if let Some(slide) = &mut instance.base_slide {
-        source_identities.remint(&mut slide.uuid, "slide")?;
+        source_identities.remint(&mut slide.uuid, "slide", identities)?;
 
         for element in &mut slide.elements {
             if let Some(graphics) = &mut element.element {
-                let reminted = source_identities.remint(&mut graphics.uuid, "graphics element")?;
+                let reminted =
+                    source_identities.remint(&mut graphics.uuid, "graphics element", identities)?;
                 record_remap(&mut element_ids, &reminted);
                 record_remap(&mut build_order_ids, &reminted);
             }
             if let Some(build) = &mut element.build_in {
-                let reminted = source_identities.remint(&mut build.uuid, "build in")?;
+                let reminted = source_identities.remint(&mut build.uuid, "build in", identities)?;
                 record_remap(&mut build_order_ids, &reminted);
             }
             if let Some(build) = &mut element.build_out {
-                let reminted = source_identities.remint(&mut build.uuid, "build out")?;
+                let reminted =
+                    source_identities.remint(&mut build.uuid, "build out", identities)?;
                 record_remap(&mut build_order_ids, &reminted);
             }
             for child_build in &mut element.child_builds {
-                let reminted = source_identities.remint(&mut child_build.uuid, "child build")?;
+                let reminted =
+                    source_identities.remint(&mut child_build.uuid, "child build", identities)?;
                 record_remap(&mut build_order_ids, &reminted);
             }
         }
 
         for guideline in &mut slide.guidelines {
-            source_identities.remint(&mut guideline.uuid, "slide guideline")?;
+            source_identities.remint(&mut guideline.uuid, "slide guideline", identities)?;
         }
     }
 
     for guideline in &mut instance.template_guidelines {
-        source_identities.remint(&mut guideline.uuid, "template guideline")?;
+        source_identities.remint(&mut guideline.uuid, "template guideline", identities)?;
     }
 
     if let Some(slide) = &mut instance.base_slide {
@@ -378,12 +384,6 @@ fn validated_identity_key(uuid: &rv_data::Uuid) -> Option<String> {
         .map(|identity| identity.to_string())
 }
 
-fn new_uuid() -> rv_data::Uuid {
-    rv_data::Uuid {
-        string: uuid::Uuid::new_v4().to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::panic)]
@@ -463,8 +463,11 @@ mod tests {
                 else {
                     continue;
                 };
-                let instance = instantiate_template_slide(slide)
-                    .unwrap_or_else(|error| panic!("instantiate {}: {error}", path.display()));
+                let instance = instantiate_template_slide(
+                    slide,
+                    &mut IdentitySource::for_presentation("test"),
+                )
+                .unwrap_or_else(|error| panic!("instantiate {}: {error}", path.display()));
                 validate_slide_identity_graph(&instance)
                     .unwrap_or_else(|error| panic!("validate {}: {error}", path.display()));
                 slide_count += 1;
@@ -496,8 +499,9 @@ mod tests {
             ..rv_data::PresentationSlide::default()
         };
 
-        let instance = instantiate_template_slide(&source)
-            .expect("opaque source identities are reminted before validation");
+        let instance =
+            instantiate_template_slide(&source, &mut IdentitySource::for_presentation("test"))
+                .expect("opaque source identities are reminted before validation");
         validate_slide_identity_graph(&instance).expect("reminted graph is canonical");
         let slide = instance.base_slide.as_ref().expect("base slide");
         assert!(
@@ -655,7 +659,9 @@ mod tests {
             ..rv_data::PresentationSlide::default()
         };
 
-        let instance = instantiate_template_slide(&source).expect("valid local graph");
+        let instance =
+            instantiate_template_slide(&source, &mut IdentitySource::for_presentation("test"))
+                .expect("valid local graph");
         let source_slide = source.base_slide.as_ref().expect("source slide");
         let slide = instance.base_slide.as_ref().expect("instantiated slide");
         let first = &slide.elements[0];
@@ -815,7 +821,10 @@ mod tests {
         };
 
         assert!(matches!(
-            instantiate_template_slide(&duplicate_source),
+            instantiate_template_slide(
+                &duplicate_source,
+                &mut IdentitySource::for_presentation("test")
+            ),
             Err(SlideInstantiationError::DuplicateIdentity {
                 first_kind: "graphics element",
                 duplicate_kind: "graphics element",
@@ -846,7 +855,10 @@ mod tests {
         };
 
         assert!(matches!(
-            instantiate_template_slide(&dangling_source),
+            instantiate_template_slide(
+                &dangling_source,
+                &mut IdentitySource::for_presentation("test")
+            ),
             Err(SlideInstantiationError::DanglingReference {
                 relation: "alternate-text link",
                 ..

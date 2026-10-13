@@ -54,6 +54,8 @@ pub(crate) mod generated;
 pub mod generated_document;
 /// Installed cue-group metadata.
 pub mod groups;
+/// Checked ownership states for unchanged and editable native documents.
+mod identity;
 /// Standalone semantic presentation inspection.
 pub mod inspection;
 /// Native presentation library catalog and fuzzy matching.
@@ -65,7 +67,6 @@ pub mod live;
 pub mod macros;
 /// Media dependency discovery.
 pub mod media;
-/// Checked ownership states for unchanged and editable native documents.
 pub mod native_document;
 mod native_url;
 mod native_zip;

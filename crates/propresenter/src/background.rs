@@ -207,14 +207,24 @@ pub(crate) fn make_background_media_action_for_test(
     dimensions: (u32, u32),
     propresenter_root: &Path,
 ) -> rv_data::Action {
-    make_background_media_action_with_dimensions(image_path, dimensions, propresenter_root)
+    make_background_media_action_with_dimensions(
+        "test-cue",
+        image_path,
+        dimensions,
+        propresenter_root,
+    )
 }
 
+/// Build the media action that shows `image_path` behind the cue `cue_uuid`.
+/// The action and its media object are identified by that cue and image, so
+/// the same background on the same cue is always the same action.
 fn make_background_media_action_with_dimensions(
+    cue_uuid: &str,
     image_path: &Path,
     dimensions: (u32, u32),
     propresenter_root: &Path,
 ) -> rv_data::Action {
+    let desired_url = super::native_url::canonical_file_url(image_path);
     let media_url = super::native_url::local_file_url(image_path, propresenter_root);
     let filename = image_path
         .file_name()
@@ -236,9 +246,11 @@ fn make_background_media_action_with_dimensions(
     });
 
     let media = Media {
-        uuid: Some(Uuid {
-            string: uuid::Uuid::new_v4().to_string(),
-        }),
+        uuid: Some(deterministic_background_uuid(
+            cue_uuid,
+            &desired_url,
+            b"media",
+        )),
         url: Some(media_url.clone()),
         metadata: Some(media::Metadata {
             manufacture_name: String::new(),
@@ -283,9 +295,11 @@ fn make_background_media_action_with_dimensions(
     };
 
     rv_data::Action {
-        uuid: Some(Uuid {
-            string: uuid::Uuid::new_v4().to_string(),
-        }),
+        uuid: Some(deterministic_background_uuid(
+            cue_uuid,
+            &desired_url,
+            b"action",
+        )),
         name: filename,
         label: None,
         delay_time: 0.0,
@@ -574,17 +588,12 @@ fn canonical_replacement_action(
     dimensions: (u32, u32),
     propresenter_root: &Path,
 ) -> rv_data::Action {
-    let desired_url = super::native_url::canonical_file_url(image_path);
-    let mut canonical =
-        make_background_media_action_with_dimensions(image_path, dimensions, propresenter_root);
-    let action_uuid = deterministic_background_uuid(cue_uuid, &desired_url, b"action");
-    let media_uuid = deterministic_background_uuid(cue_uuid, &desired_url, b"media");
-    canonical.uuid = Some(action_uuid);
-    if let Some(action::ActionTypeData::Media(media_action)) = canonical.action_type_data.as_mut() {
-        if let Some(media) = media_action.element.as_mut() {
-            media.uuid = Some(media_uuid);
-        }
-    }
+    let mut canonical = make_background_media_action_with_dimensions(
+        cue_uuid,
+        image_path,
+        dimensions,
+        propresenter_root,
+    );
 
     if let Some(existing) = existing {
         let canonical_uuid = canonical.uuid.clone();
@@ -673,8 +682,16 @@ fn ensure_background_on_cue_with_dimensions(
 
     cue.actions
         .retain(|action| !is_background_media_action(action));
-    let bg_action =
-        make_background_media_action_with_dimensions(image_path, dimensions, propresenter_root);
+    let cue_uuid = cue
+        .uuid
+        .as_ref()
+        .map_or_else(String::new, |uuid| uuid.string.clone());
+    let bg_action = make_background_media_action_with_dimensions(
+        &cue_uuid,
+        image_path,
+        dimensions,
+        propresenter_root,
+    );
     cue.actions.push(bg_action);
     true
 }

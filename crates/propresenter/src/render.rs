@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use super::generated::rv_data;
 use super::groups::GroupCatalog;
+use super::identity::IdentitySource;
 use super::presentation_spec::{CueContent, CueRoleId, GroupId, PresentationSpec, TextField};
 use super::rtf::{extract_text_options, rtf_to_text, segments_to_rtf_bytes, StyledSegment};
 use super::text_fit::CueTextFitSummary;
@@ -680,7 +681,8 @@ pub fn render_presentation(
     spec: &PresentationSpec,
     assets: &RenderAssets<'_>,
 ) -> Result<RenderedPresentation, RenderError> {
-    let mut presentation = producer_neutral_presentation(spec.name());
+    let mut identities = IdentitySource::for_presentation(spec.name());
+    let mut presentation = producer_neutral_presentation(spec.name(), &mut identities);
     let mut cue_roles_by_index = Vec::new();
     let mut native_group_ids = BTreeMap::<GroupId, rv_data::Uuid>::new();
 
@@ -688,9 +690,10 @@ pub fn render_presentation(
         let mut cue_uuids = Vec::new();
         for cue_spec in group.cues() {
             let role = assets.role(cue_spec.role())?;
-            let slide = render_slide(role, cue_spec.content())?;
+            let slide = render_slide(role, cue_spec.content(), &mut identities)?;
             let cue_uuid = push_presentation_cue(
                 &mut presentation,
+                &mut identities,
                 slide,
                 cue_spec
                     .label()
@@ -700,7 +703,12 @@ pub fn render_presentation(
             cue_roles_by_index.push(role.id().clone());
         }
         let installed_group = group.name().map(|name| assets.group(name)).transpose()?;
-        let native_id = push_cue_group(&mut presentation, installed_group, &cue_uuids);
+        let native_id = push_cue_group(
+            &mut presentation,
+            &mut identities,
+            installed_group,
+            &cue_uuids,
+        );
         if native_group_ids
             .insert(group.id().clone(), native_id)
             .is_some()
@@ -713,9 +721,7 @@ pub fn render_presentation(
 
     let mut selected_native_id = None;
     for arrangement in spec.arrangements() {
-        let native_id = rv_data::Uuid {
-            string: uuid::Uuid::new_v4().to_string(),
-        };
+        let native_id = identities.next();
         let group_identifiers = arrangement
             .groups()
             .map(|group| {
@@ -894,8 +900,9 @@ pub fn preserve_generated_target_metadata(
 fn render_slide(
     role: &ResolvedCueRole<'_>,
     content: &CueContent,
+    identities: &mut IdentitySource,
 ) -> Result<rv_data::PresentationSlide, RenderError> {
-    let mut slide = instantiate_template_slide(role.template.slide())?;
+    let mut slide = instantiate_template_slide(role.template.slide(), identities)?;
     if let CueContent::Text(bindings) = content {
         for (field, segments) in bindings.iter() {
             let index = role.field_index(field)?;
@@ -946,11 +953,12 @@ fn native_text_slots(slide: &rv_data::PresentationSlide) -> Vec<NativeTextSlot<'
         .collect()
 }
 
-fn producer_neutral_presentation(name: &str) -> rv_data::Presentation {
+fn producer_neutral_presentation(
+    name: &str,
+    identities: &mut IdentitySource,
+) -> rv_data::Presentation {
     rv_data::Presentation {
-        uuid: Some(rv_data::Uuid {
-            string: uuid::Uuid::new_v4().to_string(),
-        }),
+        uuid: Some(identities.next()),
         name: name.to_string(),
         background: Some(rv_data::Background {
             is_enabled: false,
@@ -965,19 +973,16 @@ fn producer_neutral_presentation(name: &str) -> rv_data::Presentation {
 
 fn push_presentation_cue(
     presentation: &mut rv_data::Presentation,
+    identities: &mut IdentitySource,
     slide: rv_data::PresentationSlide,
     label: Option<&str>,
-) -> uuid::Uuid {
-    let cue_uuid = uuid::Uuid::new_v4();
+) -> rv_data::Uuid {
+    let cue_uuid = identities.next();
     presentation.cues.push(rv_data::Cue {
-        uuid: Some(rv_data::Uuid {
-            string: cue_uuid.to_string(),
-        }),
+        uuid: Some(cue_uuid.clone()),
         name: String::new(),
         actions: vec![rv_data::Action {
-            uuid: Some(rv_data::Uuid {
-                string: uuid::Uuid::new_v4().to_string(),
-            }),
+            uuid: Some(identities.next()),
             name: String::new(),
             label: label.map(|text| rv_data::action::Label {
                 text: text.to_string(),
@@ -1013,12 +1018,11 @@ fn push_presentation_cue(
 
 fn push_cue_group(
     presentation: &mut rv_data::Presentation,
+    identities: &mut IdentitySource,
     group: Option<rv_data::Group>,
-    cue_uuids: &[uuid::Uuid],
+    cue_uuids: &[rv_data::Uuid],
 ) -> rv_data::Uuid {
-    let native_id = rv_data::Uuid {
-        string: uuid::Uuid::new_v4().to_string(),
-    };
+    let native_id = identities.next();
     let group = group.map_or_else(
         || rv_data::Group {
             uuid: Some(native_id.clone()),
@@ -1037,12 +1041,7 @@ fn push_cue_group(
         .cue_groups
         .push(rv_data::presentation::CueGroup {
             group: Some(group),
-            cue_identifiers: cue_uuids
-                .iter()
-                .map(|uuid| rv_data::Uuid {
-                    string: uuid.to_string(),
-                })
-                .collect(),
+            cue_identifiers: cue_uuids.to_vec(),
         });
     native_id
 }

@@ -186,24 +186,29 @@ fn a_prepared_build_is_held_on_disk_and_commit_records_what_it_installed() {
 }
 
 #[test]
-fn rendering_the_same_inputs_again_supersedes_the_earlier_prepared_build() {
+fn rendering_the_same_inputs_again_produces_the_same_build() {
     let root = tempfile::tempdir().expect("temporary root");
     let runtime = themed_runtime(root.path());
     let earlier = generated_title(&runtime);
+    let artifact = earlier.build_directory().join("rendered/artifacts/000");
+    let first_bytes = std::fs::read(&artifact).expect("first render");
+
     let later = generated_title(&runtime);
+
     assert_eq!(earlier.build_directory(), later.build_directory());
+    assert_eq!(
+        std::fs::read(&artifact).expect("second render"),
+        first_bytes,
+        "the same inputs render the same presentation, byte for byte"
+    );
+    assert_eq!(earlier.revision(), later.revision());
     assert!(!later.build_directory().join("retired").exists());
 
-    let error = runtime
-        .executor()
-        .build_prepared_offline(earlier)
-        .expect_err("the stage the earlier preview showed is gone");
-    assert!(matches!(error, BuildServiceError::PreparedBuildSuperseded));
-
+    // The earlier preview named the same rendered stage, so it still commits.
     runtime
         .executor()
-        .build_prepared_offline(later)
-        .expect("the current render commits");
+        .build_prepared_offline(earlier)
+        .expect("a preview of an identical render is still the build on disk");
 }
 
 #[test]

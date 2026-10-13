@@ -10,7 +10,7 @@ use prost::Message;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::generated::rv_data::{self, action, CollectionElementType, Uuid};
+use super::generated::rv_data::{self, action, CollectionElementType};
 /// Cached macro name → native collection identification loaded from
 /// `ProPresenter`'s config.
 pub struct MacroCache {
@@ -440,11 +440,22 @@ fn declared_action_type_name(value: i32) -> String {
     )
 }
 
-fn make_macro_action_from_identification(identification: CollectionElementType) -> rv_data::Action {
+/// Build the action that fires `identification` on entry to the cue
+/// `cue_uuid`. The action is identified by that cue and macro, so the same
+/// macro on the same cue is always the same action.
+fn make_macro_action_from_identification(
+    identification: CollectionElementType,
+    cue_uuid: &str,
+) -> rv_data::Action {
+    let macro_uuid = identification
+        .parameter_uuid
+        .as_ref()
+        .map_or("", |uuid| uuid.string.as_str());
     rv_data::Action {
-        uuid: Some(Uuid {
-            string: uuid::Uuid::new_v4().to_string(),
-        }),
+        uuid: Some(crate::identity::derived_uuid(
+            "proflow:entry-macro:v1",
+            &[cue_uuid.as_bytes(), macro_uuid.as_bytes()],
+        )),
         name: identification.parameter_name.clone(),
         label: None,
         delay_time: 0.0,
@@ -472,6 +483,10 @@ pub fn replace_entry_macro(
     let Some((installed_name, identification)) = cache.find(macro_name) else {
         return Err(MacroApplyError::Unavailable(macro_name.to_string()));
     };
+    let cue_uuid = cue
+        .uuid
+        .as_ref()
+        .map_or_else(String::new, |uuid| uuid.string.clone());
     let existing = cue
         .actions
         .iter()
@@ -484,9 +499,10 @@ pub fn replace_entry_macro(
                 .cloned()
         });
     let retained = existing.map_or_else(
-        || make_macro_action_from_identification(identification.clone()),
+        || make_macro_action_from_identification(identification.clone(), &cue_uuid),
         |existing| {
-            let mut canonical = make_macro_action_from_identification(identification.clone());
+            let mut canonical =
+                make_macro_action_from_identification(identification.clone(), &cue_uuid);
             canonical.uuid = existing.uuid;
             canonical
         },
@@ -602,6 +618,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use crate::generated::rv_data::Uuid;
 
     fn identification(name: &str, id: &str) -> CollectionElementType {
         CollectionElementType {
@@ -643,7 +660,10 @@ mod tests {
     }
 
     fn native_macro(name: &str) -> rv_data::Action {
-        make_macro_action_from_identification(identification(name, &format!("{name}-id")))
+        make_macro_action_from_identification(
+            identification(name, &format!("{name}-id")),
+            "test-cue",
+        )
     }
 
     fn presentation_with_selected_groups(
@@ -802,10 +822,10 @@ mod tests {
         };
         let mut cue = rv_data::Cue {
             actions: vec![
-                make_macro_action_from_identification(identification(
-                    "Wrong",
-                    "00000000-0000-0000-0000-000000000002",
-                )),
+                make_macro_action_from_identification(
+                    identification("Wrong", "00000000-0000-0000-0000-000000000002"),
+                    "test-cue",
+                ),
                 rv_data::Action {
                     r#type: action::ActionType::BackgroundMedia as i32,
                     ..rv_data::Action::default()
@@ -970,10 +990,10 @@ mod tests {
         assert!(cache.find("title").is_none());
 
         let mut cue = rv_data::Cue {
-            actions: vec![make_macro_action_from_identification(identification(
-                "title",
-                "lowercase",
-            ))],
+            actions: vec![make_macro_action_from_identification(
+                identification("title", "lowercase"),
+                "test-cue",
+            )],
             ..rv_data::Cue::default()
         };
         replace_entry_macro(&mut cue, "Title", &cache).expect("installed exact macro");

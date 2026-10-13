@@ -1,8 +1,12 @@
-use uuid::Uuid;
+//! A playlist and its items are identified by what they are: a playlist by
+//! its name, an item by its playlist, its position and the presentation it
+//! plays. Building the same playlist again therefore produces the same
+//! document, not a second playlist `ProPresenter` treats as unrelated.
 
 use super::domain::{PlaylistEntry, PlaylistMetadata, PlaylistSet};
 use super::naming::document_path_for_presentation_path;
 use crate::generated::rv_data::{self, playlist, playlist_document, playlist_item};
+use crate::identity::derived_uuid;
 
 /// Build a native document containing one named child playlist.
 #[cfg(any(test, feature = "dev-tools"))]
@@ -34,10 +38,14 @@ pub fn build_playlist_set(
 }
 
 fn build_child_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::Playlist {
-    let items = entries.iter().map(build_playlist_item).collect();
+    let items = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| build_playlist_item(name, index, entry))
+        .collect();
 
     rv_data::Playlist {
-        uuid: Some(new_uuid()),
+        uuid: Some(derived_uuid("proflow:playlist:v1", &[name.as_bytes()])),
         name: name.to_string(),
         r#type: playlist::Type::Unknown as i32,
         expanded: false,
@@ -56,9 +64,20 @@ fn build_child_playlist(name: &str, entries: &[PlaylistEntry]) -> rv_data::Playl
     }
 }
 
-fn build_playlist_item(entry: &PlaylistEntry) -> rv_data::PlaylistItem {
+fn build_playlist_item(
+    playlist: &str,
+    index: usize,
+    entry: &PlaylistEntry,
+) -> rv_data::PlaylistItem {
     rv_data::PlaylistItem {
-        uuid: Some(new_uuid()),
+        uuid: Some(derived_uuid(
+            "proflow:playlist-item:v1",
+            &[
+                playlist.as_bytes(),
+                &(index as u64).to_be_bytes(),
+                entry.presentation_path().as_bytes(),
+            ],
+        )),
         name: entry.name().to_string(),
         tags: Vec::new(),
         is_hidden: false,
@@ -86,8 +105,12 @@ fn build_playlist_document(
     children: Vec<rv_data::Playlist>,
     metadata: &PlaylistMetadata,
 ) -> rv_data::PlaylistDocument {
+    let child_names = children
+        .iter()
+        .map(|child| child.name.as_bytes())
+        .collect::<Vec<_>>();
     let root_node = rv_data::Playlist {
-        uuid: Some(new_uuid()),
+        uuid: Some(derived_uuid("proflow:playlist-root:v1", &child_names)),
         name: "PLAYLIST".to_string(),
         r#type: playlist::Type::Unknown as i32,
         expanded: metadata.root_expanded,
@@ -112,11 +135,5 @@ fn build_playlist_document(
         tags: Vec::new(),
         live_video_playlist: None,
         downloads_playlist: None,
-    }
-}
-
-fn new_uuid() -> rv_data::Uuid {
-    rv_data::Uuid {
-        string: Uuid::new_v4().to_string(),
     }
 }

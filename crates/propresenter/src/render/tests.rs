@@ -3,6 +3,7 @@
 use prost::Message;
 
 use super::*;
+use crate::identity::IdentitySource;
 use crate::presentation_spec::{
     ArrangementName, ArrangementSpec, CueSpec, GroupId, GroupSpec, PresentationSpec, TextBindings,
 };
@@ -631,7 +632,10 @@ fn arrangements_round_trip_ordered_repeated_group_references_and_selection() {
 
 #[test]
 fn producer_neutral_envelope_omits_producer_dependent_metadata() {
-    let presentation = producer_neutral_presentation("Native Envelope");
+    let presentation = producer_neutral_presentation(
+        "Native Envelope",
+        &mut IdentitySource::for_presentation("Native Envelope"),
+    );
 
     assert!(matches!(
         presentation.background,
@@ -651,7 +655,10 @@ fn producer_neutral_envelope_omits_producer_dependent_metadata() {
 
 #[test]
 fn generated_target_preservation_keeps_timeline_settings_without_stale_cue_references() {
-    let mut existing = producer_neutral_presentation("Existing");
+    let mut existing = producer_neutral_presentation(
+        "Existing",
+        &mut IdentitySource::for_presentation("Existing"),
+    );
     existing.category = "Liturgy".to_string();
     existing.notes = "Preserve this".to_string();
     let audio_action = rv_data::Action {
@@ -672,7 +679,10 @@ fn generated_target_preservation_keeps_timeline_settings_without_stale_cue_refer
         timecode_offset: 8.5,
         cues_v2: vec![stale_cue],
     });
-    let mut replacement = producer_neutral_presentation("Existing");
+    let mut replacement = producer_neutral_presentation(
+        "Existing",
+        &mut IdentitySource::for_presentation("Existing"),
+    );
 
     preserve_generated_target_metadata(&mut replacement, &existing);
 
@@ -691,7 +701,10 @@ fn generated_target_preservation_keeps_timeline_settings_without_stale_cue_refer
 
 #[test]
 fn generated_target_does_not_inherit_stale_content_semantics() {
-    let mut existing = producer_neutral_presentation("Old song");
+    let mut existing = producer_neutral_presentation(
+        "Old song",
+        &mut IdentitySource::for_presentation("Old song"),
+    );
     existing.chord_chart = Some(rv_data::Url {
         platform: 9,
         ..rv_data::Url::default()
@@ -713,7 +726,10 @@ fn generated_target_does_not_inherit_stale_content_semantics() {
         original_music_key: "Stale original key".to_string(),
         ..rv_data::presentation::Music::default()
     });
-    let mut replacement = producer_neutral_presentation("New liturgy");
+    let mut replacement = producer_neutral_presentation(
+        "New liturgy",
+        &mut IdentitySource::for_presentation("New liturgy"),
+    );
 
     preserve_generated_target_metadata(&mut replacement, &existing);
     apply_application_info(
@@ -762,7 +778,8 @@ fn fresh_chord_chart_platform_follows_the_captured_producer() {
             rv_data::url::Platform::Win32,
         ),
     ] {
-        let mut presentation = producer_neutral_presentation("Fresh");
+        let mut presentation =
+            producer_neutral_presentation("Fresh", &mut IdentitySource::for_presentation("Fresh"));
         apply_application_info(
             &mut presentation,
             Some(&rv_data::ApplicationInfo {
@@ -777,7 +794,10 @@ fn fresh_chord_chart_platform_follows_the_captured_producer() {
         );
     }
 
-    let mut unknown = producer_neutral_presentation("Unknown producer");
+    let mut unknown = producer_neutral_presentation(
+        "Unknown producer",
+        &mut IdentitySource::for_presentation("Unknown producer"),
+    );
     apply_application_info(&mut unknown, None);
     assert!(unknown.chord_chart.is_none());
 }
