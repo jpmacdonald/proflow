@@ -195,7 +195,11 @@ fn native_scale_behavior(
     use rv_data::graphics::text::ScaleBehavior;
 
     match ScaleBehavior::try_from(value) {
-        Ok(ScaleBehavior::None) => Ok(TextScaleBehavior::None),
+        // Shrinking is the operator's safety net for a slide that must hold
+        // all of its text. Output never relies on it: the text must fit at
+        // the authored font size, where the box does not shrink at all, so
+        // measuring at that size is exact.
+        Ok(ScaleBehavior::None | ScaleBehavior::ScaleFontDown) => Ok(TextScaleBehavior::None),
         Ok(ScaleBehavior::AdjustContainerHeight) => {
             let slide = slide.ok_or(NativeTextRequestError::MissingDynamicContainerCanvas)?;
             let bounds = graphics
@@ -235,9 +239,6 @@ fn native_scale_behavior(
             Ok(TextScaleBehavior::AdjustContainerHeight {
                 maximum_content_height,
             })
-        }
-        Ok(ScaleBehavior::ScaleFontDown) => {
-            Err(NativeTextRequestError::UnevidencedFontScaleMinimum)
         }
         Ok(ScaleBehavior::ScaleFontUp) => Err(
             NativeTextRequestError::UnsupportedNativeScaleBehavior("scale_font_up"),
@@ -316,9 +317,6 @@ pub enum NativeTextRequestError {
     /// Container-growth/font-growth semantics are not yet evidenced.
     #[error("native text scale behavior '{0}' is not supported for generated or restyled output")]
     UnsupportedNativeScaleBehavior(&'static str),
-    /// `ProPresenter` has no evidenced minimum for automatic font shrinking.
-    #[error("native scale-font-down has no evidenced minimum readable scale")]
-    UnevidencedFontScaleMinimum,
     /// A future native transform value cannot be interpreted safely.
     #[error("unknown native text transform value {0}")]
     UnknownNativeTransform(i32),
@@ -338,4 +336,49 @@ pub enum NativeTextRequestError {
     /// A future vertical-alignment value cannot be interpreted safely.
     #[error("unknown native text vertical-alignment value {0}")]
     UnknownNativeVerticalAlignment(i32),
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::*;
+    use rv_data::graphics::text::ScaleBehavior;
+
+    fn behavior(value: ScaleBehavior) -> Result<TextScaleBehavior, NativeTextRequestError> {
+        let geometry = TextBoxGeometry::new(
+            1000.0,
+            400.0,
+            TextMargins::new(0.0, 0.0, 0.0, 0.0).expect("valid margins"),
+        )
+        .expect("valid geometry");
+        native_scale_behavior(
+            value as i32,
+            &rv_data::graphics::Element::default(),
+            geometry,
+            None,
+        )
+    }
+
+    #[test]
+    fn a_box_that_may_shrink_its_font_must_still_fit_at_the_authored_size() {
+        assert_eq!(
+            behavior(ScaleBehavior::ScaleFontDown).expect("supported"),
+            TextScaleBehavior::None
+        );
+        assert_eq!(
+            behavior(ScaleBehavior::None).expect("supported"),
+            TextScaleBehavior::None
+        );
+    }
+
+    #[test]
+    fn a_box_that_grows_its_font_is_still_refused() {
+        for growing in [ScaleBehavior::ScaleFontUp, ScaleBehavior::ScaleFontUpDown] {
+            assert!(matches!(
+                behavior(growing),
+                Err(NativeTextRequestError::UnsupportedNativeScaleBehavior(_))
+            ));
+        }
+    }
 }

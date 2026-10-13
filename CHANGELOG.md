@@ -129,6 +129,11 @@ Dates are the day the work landed on `main`.
 - Protobuf schema fixes against ProPresenter 20.0.1: `RenderLayer` field
   numbers, `Slide.Element.DataLink` key-value and zone members, `Timer`
   style enum name.
+- Text fit: a text box set to "Scale Font Down" in ProPresenter is measured
+  at its authored font size and must fit there (owner decision,
+  2026-10-13: shrinking is a manual safety net; generated output uses the
+  theme's font size). It was refused outright before. Font-growing
+  behaviours are still refused.
 - Songs: a Planning Center arrangement name the file does not have no
   longer needs a decision when the file defines exactly one arrangement;
   that arrangement is used and the plan's reason says so (owner decision,
