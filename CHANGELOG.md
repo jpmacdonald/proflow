@@ -270,6 +270,10 @@ Dates are the day the work landed on `main`.
 - A possible song match is offered as a choice when the song's policy
   restyles the file; it was listed in the question but not among the
   choices. Found by the same build.
+- A presentation whose own name ends in a space ("Offertory Nametag ") no
+  longer fails the build: a playlist entry keeps the native name as spelled,
+  and an item's name taken from a file name is trimmed. Found by the real
+  build on macOS.
 - `just live-data` failed on macOS (bash 3.2) when its skip list was empty.
 - A preview whose decisions are refused (for example media with a
   linked-library package) no longer overwrites the plan's `review.toml`
@@ -365,21 +369,19 @@ Dates are the day the work landed on `main`.
   Section 5 no longer extracts the crate to its own repository: the owner
   prefers a monorepo (2026-10-11), so `proflow-propresenter` stays a
   workspace crate here. How Pew consumes it is undecided.
-- Unverified on macOS (2026-10-11 server work, typed identities): mechanical,
-  no macOS-only path touched; `just local` covers it.
-- Unverified on macOS (2026-10-11 server work): `text_fit/client.rs` now holds
-  the helper in a private `HelperSession` inside `NativeTextFitOracle`
-  (mechanical move, behavior meant to be identical); `render_plans` has a
-  `cfg(all(test, not(macos)))` branch; `generated_target_appearing_after_
-  preview_is_rejected` now expects `LibraryCandidatesChanged` (it would have
-  failed on macOS since 68e3286); `ReviewedBuildInputs::capture` and
-  `review_planned_request` take the library candidate set. Run `just local`
-  and `just live-data` on macOS.
-- Unverified on macOS (2026-10-11 server work, playlist document): no
-  macOS-only path was touched, but the new module, the `jsonschema`
-  dev-dependency (and the `Cargo.lock` additions it brought, plus two minor
-  bumps of `regex-automata` and `zmij`) and the two MCP tools have only been
-  built and tested on Linux. `just local` covers them.
+- Verified on macOS, 2026-10-13 (run over SSH from the server): `just local`
+  (849 tests at c1a8487) and `just live-data` (7 tests) pass, and a real
+  `proflow build` of plan 91172659 against Planning Center and a local copy
+  of the church library reaches "built and verified" in 40 s, with native
+  text measurement, at 080fb10. `proflow commit` has still never run for
+  real. The Mac's configured ProPresenter root is a local copy, not the
+  active show (the shared Dropbox library), so builds there need
+  `--configured-workspace`.
+- A render or packaging failure does not name the item that caused it.
+- Text boxes that shrink or grow their font have no configurable limits. A
+  shrink-to-fit box must fit at its authored size; the owner wants a
+  minimum (and maximum) font scale to be a project-config setting if anyone
+  needs shrinking to count. Not built.
 
 ### Dropped
 
