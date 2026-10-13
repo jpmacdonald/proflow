@@ -709,6 +709,29 @@ fn discovered_missing_media_is_a_typed_error() {
 }
 
 #[test]
+fn an_entry_keeps_a_native_name_with_surrounding_spaces_and_refuses_a_blank_one() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let media = directory.path().join("media.jpg");
+    std::fs::write(&media, b"image").expect("write media");
+    let presentation = || media_presentation("Offertory Nametag ", &media, directory.path());
+
+    let entry = PlaylistEntry::embedded(
+        "Offertory Nametag ",
+        "/Show/Libraries/Default/Offertory Nametag .pro",
+        presentation(),
+    )
+    .expect("ProPresenter keeps a trailing space in a name");
+    assert_eq!(entry.name(), "Offertory Nametag ");
+
+    for invalid in ["", "   ", "Line\nBreak"] {
+        assert!(matches!(
+            PlaylistEntry::embedded(invalid, "/Show/Libraries/Default/A.pro", presentation()),
+            Err(PlaylistEntryError::InvalidName)
+        ));
+    }
+}
+
+#[test]
 fn malformed_embedded_presentation_is_a_typed_error() {
     let result = PlaylistEntry::embedded("Broken", "/Libraries/Default/Broken.pro", vec![1, 2, 3]);
     assert!(matches!(

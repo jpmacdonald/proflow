@@ -399,7 +399,7 @@ impl SelectedArrangement {
 #[derive(Debug, thiserror::Error)]
 pub enum PlaylistEntryError {
     /// The operator-visible name was empty, padded, or contained control characters.
-    #[error("playlist entry name is not a valid exact identity")]
+    #[error("playlist entry name is blank or contains a control character")]
     InvalidName,
     /// The presentation path was not an exact path to a `.pro` document.
     #[error("playlist presentation path is invalid: {0:?}")]
@@ -502,7 +502,11 @@ impl PlaylistEntry {
         presentation_path: String,
         content: PlaylistEntryContent,
     ) -> Result<Self, PlaylistEntryError> {
-        if name.trim().is_empty() || name.trim() != name || name.chars().any(char::is_control) {
+        // An entry is named after its presentation, exactly as the native
+        // file spells it. ProPresenter keeps a name such as
+        // "Offertory Nametag " with its trailing space, so that is a valid
+        // name here; only a blank name or a control character is not.
+        if name.trim().is_empty() || name.chars().any(char::is_control) {
             return Err(PlaylistEntryError::InvalidName);
         }
         Ok(Self {
