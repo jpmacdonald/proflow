@@ -129,6 +129,19 @@ Dates are the day the work landed on `main`.
 - Protobuf schema fixes against ProPresenter 20.0.1: `RenderLayer` field
   numbers, `Slide.Element.DataLink` key-value and zone members, `Timer`
   style enum name.
+- Builds are reproducible. Every identity a build creates is derived from
+  what it identifies (`crates/propresenter/src/identity.rs`): a generated
+  presentation and its cues, slides, actions, groups and arrangements from
+  the presentation's name and creation order; an entry macro and a
+  background media action from their cue; a playlist from its name and an
+  item from its playlist, position and presentation. They were random, so
+  each build of unchanged content rewrote the regenerated presentations and
+  the playlist. Measured on macOS with plan 91172659: two builds produce
+  byte-identical output for all 15 files, and once committed, a rebuild of
+  the unchanged plan matches the library exactly (the receipt settles after
+  one further commit, because it records what each file replaced). An
+  earlier preview of an identical render is therefore still the build on
+  disk. Restyled presentations were already stable.
 - Text fit: a text box set to "Scale Font Down" in ProPresenter is measured
   at its authored font size and must fit there (owner decision,
   2026-10-13: shrinking is a manual safety net; generated output uses the
@@ -379,7 +392,8 @@ Dates are the day the work landed on `main`.
   (849 tests at c1a8487) and `just live-data` (7 tests) pass, and a real
   `proflow build` of plan 91172659 against Planning Center and a local copy
   of the church library reaches "built and verified" in 40 s, with native
-  text measurement, at 080fb10. `proflow commit` then installed that build into the local copy
+  text measurement, at 080fb10. `just local` passes there again at 48cbb18
+  (858 tests). `proflow commit` then installed that build into the local copy
   (playlist, receipt and 13 presentations, 15 s). The Mac's configured ProPresenter root is a local copy, not the
   active show (the shared Dropbox library), so builds there need
   `--configured-workspace`.
