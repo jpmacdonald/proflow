@@ -20,7 +20,7 @@ use crate::project_config::{BackgroundAssetPath, BackgroundId};
 use crate::workflow::execute::{
     BuildServiceError, DecisionChoice, EntryOverrideAction, OpenDecision, Remembered,
 };
-use crate::workflow::report::BuildServiceResult;
+use crate::workflow::report::{BuildEntryAction, BuildServiceResult};
 use crate::workstation::{AppliedDefault, RecordedBuild, WorkspaceDiscovery, Workstation};
 
 /// How to call the command.
@@ -578,16 +578,46 @@ fn quoted(value: &str) -> String {
     }
 }
 
+/// What a build did, counted by what happened to each item.
 struct Counts<'a>(&'a BuildServiceResult);
 
 impl fmt::Display for Counts<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let result = self.0;
-        write!(
-            formatter,
-            "{} in the playlist ({} generated, {} from the library), {} skipped",
-            result.total_items, result.generated_count, result.library_count, result.skipped_count
-        )
+        let count = |wanted: fn(&BuildEntryAction) -> bool| {
+            self.0
+                .entries
+                .iter()
+                .filter(|entry| wanted(&entry.action))
+                .count()
+        };
+        let parts = [
+            (
+                count(|action| matches!(action, BuildEntryAction::Generated)),
+                "generated",
+            ),
+            (
+                count(|action| matches!(action, BuildEntryAction::Edited)),
+                "edited",
+            ),
+            (
+                count(|action| matches!(action, BuildEntryAction::Restyled)),
+                "restyled",
+            ),
+            (
+                count(|action| matches!(action, BuildEntryAction::Library)),
+                "used unchanged",
+            ),
+        ];
+        write!(formatter, "{} in the playlist", self.0.total_items)?;
+        let described = parts
+            .iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, what)| format!("{count} {what}"))
+            .collect::<Vec<_>>();
+        if !described.is_empty() {
+            write!(formatter, " ({})", described.join(", "))?;
+        }
+        write!(formatter, ", {} skipped", self.0.skipped_count)
     }
 }
 

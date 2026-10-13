@@ -43,18 +43,28 @@ impl ServiceBuildExecutor<'_> {
             .map_err(crate::workflow::presentation_render::PresentationRenderError::from)?;
         let mut rendered = RenderedService::new(transaction, text_fit.contract().clone());
         for plan in plans {
-            let background = reviewed_background(plan, backgrounds, sources)?;
-            let output = self.render_plan(
-                plan,
-                PlanExecutionInputs {
-                    presentation_size,
-                    background,
-                    sources,
-                    transaction: &mut rendered.transaction,
-                    text_fit: &mut text_fit,
-                },
-            )?;
-            rendered.record(plan, presentation_size, output)?;
+            // Whatever goes wrong for one item, the failure says which item.
+            let for_item = |source: BuildServiceError| BuildServiceError::Item {
+                output_key: plan.output_key.to_string(),
+                title: plan.pco_title.clone(),
+                source: Box::new(source),
+            };
+            let background = reviewed_background(plan, backgrounds, sources).map_err(for_item)?;
+            let output = self
+                .render_plan(
+                    plan,
+                    PlanExecutionInputs {
+                        presentation_size,
+                        background,
+                        sources,
+                        transaction: &mut rendered.transaction,
+                        text_fit: &mut text_fit,
+                    },
+                )
+                .map_err(for_item)?;
+            rendered
+                .record(plan, presentation_size, output)
+                .map_err(for_item)?;
         }
         Ok(rendered)
     }

@@ -124,14 +124,22 @@ fn review_rejects_override_with_wrong_size_before_approval() {
         }),
     }];
 
-    assert!(matches!(
-        runtime.executor().review_build_request(
+    let error = runtime
+        .executor()
+        .review_build_request(
             request,
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
-        ),
-        Err(BuildServiceError::PresentationSizeInvariant { .. })
+        )
+        .expect_err("the override must be refused");
+    assert!(matches!(
+        error.cause(),
+        BuildServiceError::PresentationSizeInvariant { .. }
     ));
+    assert!(
+        error.to_string().starts_with("Test item (pco:"),
+        "the failure names its item: {error}"
+    );
 }
 
 #[test]
@@ -156,14 +164,22 @@ fn review_rejects_override_with_missing_arrangement_before_approval() {
         }),
     }];
 
-    assert!(matches!(
-        runtime.executor().review_build_request(
+    let error = runtime
+        .executor()
+        .review_build_request(
             request,
             &[plan],
             proflow_propresenter::PresentationSize::FULL_HD,
-        ),
-        Err(BuildServiceError::ArrangementUnavailable { .. })
+        )
+        .expect_err("the override must be refused");
+    assert!(matches!(
+        error.cause(),
+        BuildServiceError::ArrangementUnavailable { .. }
     ));
+    assert!(
+        error.to_string().starts_with("Test item (pco:"),
+        "the failure names its item: {error}"
+    );
 }
 
 #[test]

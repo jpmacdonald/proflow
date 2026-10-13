@@ -325,7 +325,7 @@ fn final_presentation_reference_diagnostics_block_preparation() {
         .expect_err("dangling presentation references must block preparation");
 
     assert!(matches!(
-        error,
+        error.cause(),
         BuildServiceError::PresentationStructureDiagnostics {
             output_key,
             diagnostics,

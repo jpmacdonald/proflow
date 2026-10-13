@@ -152,6 +152,17 @@ pub enum BuildServiceError {
         /// Item named by the decision.
         item: String,
     },
+    /// Rendering or packaging one plan item failed.
+    #[error("{title} ({output_key}): {source}")]
+    Item {
+        /// Stable identity of the item.
+        output_key: String,
+        /// The item's Planning Center title.
+        title: String,
+        /// What went wrong for it.
+        #[source]
+        source: Box<Self>,
+    },
     /// The plan's recorded decisions could not be read or applied.
     #[error(transparent)]
     Decisions(#[from] DecisionError),
@@ -423,6 +434,17 @@ pub enum BuildServiceError {
     /// must restart before it can trust the catalog again.
     #[error("presentation library catalog is unavailable after an earlier failure")]
     LibraryCatalogPoisoned,
+}
+
+impl BuildServiceError {
+    /// The failure itself, without the item it happened for.
+    #[must_use]
+    pub fn cause(&self) -> &Self {
+        match self {
+            Self::Item { source, .. } => source.cause(),
+            other => other,
+        }
+    }
 }
 
 impl From<PlanSemanticsError> for BuildServiceError {

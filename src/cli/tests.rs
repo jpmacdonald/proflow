@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::workflow::execute::{DecisionKind, DecisionOption};
+use crate::workflow::report::{BuildEntryAction, BuildServiceEntry};
 use proflow_propresenter::playlist::PlaylistExportMode;
 use proflow_propresenter::text_fit::TextFitContractSummary;
 
@@ -17,10 +18,30 @@ fn result(warnings: &[&str]) -> Box<BuildServiceResult> {
         text_fit_contract: TextFitContractSummary::diagnostic(),
         package_mode: PlaylistExportMode::LibraryLinks,
         media_asset_count: 0,
-        entries: Vec::new(),
+        entries: [
+            (BuildEntryAction::Generated, 3),
+            (BuildEntryAction::Restyled, 7),
+            (BuildEntryAction::Library, 2),
+        ]
+        .into_iter()
+        .flat_map(|(action, count)| std::iter::repeat_n(action, count))
+        .map(|action| BuildServiceEntry {
+            output_key: "pco:1:main".to_string(),
+            position: 0,
+            name: "Item".to_string(),
+            action,
+            file_path: None,
+            slides: None,
+            expected_presentation: None,
+            presentation_structure: None,
+            playlist_selection: None,
+            text_fit_evidence: Vec::new(),
+            warnings: Vec::new(),
+        })
+        .collect(),
         total_items: 12,
-        generated_count: 3,
-        library_count: 9,
+        generated_count: 10,
+        library_count: 2,
         skipped_count: 1,
         warnings: warnings.iter().map(ToString::to_string).collect(),
     })
@@ -391,7 +412,7 @@ fn a_verified_build_exits_zero_and_says_nothing_is_installed() {
     assert_eq!(
         outcome.to_string(),
         "\
-Plan 12345 \"May 24, 2026 - Sunday Morning\" is built and verified: 12 in the playlist (3 generated, 9 from the library), 1 skipped.
+Plan 12345 \"May 24, 2026 - Sunday Morning\" is built and verified: 12 in the playlist (3 generated, 7 restyled, 2 used unchanged), 1 skipped.
 Nothing is installed yet. To install it:
 
   proflow commit --plan 12345
@@ -415,7 +436,7 @@ fn a_committed_build_exits_zero_and_names_what_it_installed() {
     assert_eq!(
         outcome.to_string(),
         "\
-Plan 12345 is installed: 12 in the playlist (3 generated, 9 from the library), 1 skipped.
+Plan 12345 is installed: 12 in the playlist (3 generated, 7 restyled, 2 used unchanged), 1 skipped.
 Playlist: /show/Playlists/May 24.proplaylist
 Receipt:  /show/Playlists/May 24.proplaylist.proflow-build.json
 "

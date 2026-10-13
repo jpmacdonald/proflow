@@ -270,6 +270,12 @@ Dates are the day the work landed on `main`.
 - A possible song match is offered as a choice when the song's policy
   restyles the file; it was listed in the question but not among the
   choices. Found by the same build.
+- A failure while rendering or packaging names its item: "Welcome
+  (pco:123:main): ..." (`BuildServiceError::Item`; `cause()` gives the
+  failure itself). Three failures during the first real build named nothing.
+- The command-line summary counts items by what happened to them
+  (generated, edited, restyled, used unchanged). It reported restyled songs
+  as "generated" and nothing as from the library.
 - A presentation whose own name ends in a space ("Offertory Nametag ") no
   longer fails the build: a playlist entry keeps the native name as spelled,
   and an item's name taken from a file name is trimmed. Found by the real
@@ -373,11 +379,10 @@ Dates are the day the work landed on `main`.
   (849 tests at c1a8487) and `just live-data` (7 tests) pass, and a real
   `proflow build` of plan 91172659 against Planning Center and a local copy
   of the church library reaches "built and verified" in 40 s, with native
-  text measurement, at 080fb10. `proflow commit` has still never run for
-  real. The Mac's configured ProPresenter root is a local copy, not the
+  text measurement, at 080fb10. `proflow commit` then installed that build into the local copy
+  (playlist, receipt and 13 presentations, 15 s). The Mac's configured ProPresenter root is a local copy, not the
   active show (the shared Dropbox library), so builds there need
   `--configured-workspace`.
-- A render or packaging failure does not name the item that caused it.
 - Text boxes that shrink or grow their font have no configurable limits. A
   shrink-to-fit box must fit at its authored size; the owner wants a
   minimum (and maximum) font scale to be a project-config setting if anyone
