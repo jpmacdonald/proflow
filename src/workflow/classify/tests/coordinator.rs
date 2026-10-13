@@ -760,3 +760,12 @@ fn catalog_capabilities_reject_an_oversized_cue_prefix_before_execution() {
 
     assert!(problem.contains("exceeds the checked traversal length 1"));
 }
+
+#[test]
+fn a_library_file_name_with_a_space_before_its_extension_names_an_unpadded_item() {
+    assert_eq!(
+        super::super::file_stem("/Library/Default/Offertory Nametag .pro"),
+        "Offertory Nametag"
+    );
+    assert_eq!(super::super::file_stem("/Library/Song.pro"), "Song");
+}

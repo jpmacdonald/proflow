@@ -680,11 +680,16 @@ fn rule_action_plan(action: &RuleAction, item: &Item, output_key: OutputKey) -> 
     )
 }
 
+/// The playlist name a library file gives its item: its name without the
+/// extension or surrounding spaces. A file saved as "Offertory Nametag .pro"
+/// is still the item "Offertory Nametag"; the file itself is addressed by its
+/// exact path, never by this name.
 pub(super) fn file_stem(path: &str) -> String {
     std::path::Path::new(path)
         .file_stem()
         .and_then(|segment| segment.to_str())
         .unwrap_or(path)
+        .trim()
         .to_string()
 }
 
