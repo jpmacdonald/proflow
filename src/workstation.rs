@@ -5,6 +5,10 @@
 //! `proflow` binary both load a [`Workstation`] and borrow an executor
 //! from it; neither assembles clients or snapshots on its own.
 
+mod discovery;
+pub use discovery::review_service_request;
+use discovery::soonest_plan;
+
 use std::path::PathBuf;
 
 use std::sync::Mutex;
@@ -472,96 +476,8 @@ impl Workstation {
     }
 }
 
-/// The Planning Center boundary around a synchronous review: compute the
-/// lookup, perform it, hand the snapshot to the executor.
-pub async fn review_service_request(
-    planning_center: &PlanningCenterClient,
-    executor: &ServiceBuildExecutor<'_>,
-    request: BuildRequest,
-) -> Result<BuildReview, BuildServiceError> {
-    let snapshot = planning_center
-        .capture_plan(executor.plan_lookup(&request)?)
-        .await?;
-    executor.review_snapshot(request, snapshot)
-}
-
-/// Choose the soonest plan from `(id, service type, date)` triples.
-///
-/// Two service types often meet at the same time. Rather than guess between
-/// them, the choice is refused and names the candidates.
-fn soonest_plan<'a>(
-    plans: impl IntoIterator<Item = (&'a str, &'a str, chrono::DateTime<chrono::Utc>)>,
-    service_name: Option<&str>,
-    days_ahead: i64,
-) -> Result<&'a str, RequestError> {
-    let mut candidates = plans
-        .into_iter()
-        .filter(|(_, service, _)| service_name.is_none_or(|wanted| wanted == *service))
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|(_, _, date)| *date);
-    let Some((first, _, soonest)) = candidates.first().copied() else {
-        return Err(RequestError::NoUpcomingPlan { days_ahead });
-    };
-    candidates.retain(|(_, _, date)| *date == soonest);
-    if candidates.len() > 1 {
-        return Err(RequestError::AmbiguousNextPlan {
-            candidates: candidates
-                .iter()
-                .map(|(id, service, _)| format!("{id} ({service})"))
-                .collect(),
-        });
-    }
-    Ok(first)
-}
-
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-
-    use chrono::{DateTime, Duration, Utc};
-
-    use super::*;
-
-    fn at(hours: i64) -> DateTime<Utc> {
-        DateTime::<Utc>::UNIX_EPOCH + Duration::hours(hours)
-    }
-
-    #[test]
-    fn the_next_plan_is_the_soonest_of_the_wanted_service_type() {
-        let plans = [
-            ("late", "Sunday Morning", at(48)),
-            ("soon", "Sunday Morning", at(24)),
-            ("sooner", "Wednesday Night", at(12)),
-        ];
-        assert_eq!(soonest_plan(plans, None, 30).expect("soonest"), "sooner");
-        assert_eq!(
-            soonest_plan(plans, Some("Sunday Morning"), 30).expect("soonest of type"),
-            "soon"
-        );
-    }
-
-    #[test]
-    fn no_plan_and_two_plans_at_the_same_time_are_refused() {
-        assert!(matches!(
-            soonest_plan([("a", "Sunday Morning", at(1))], Some("Other"), 30),
-            Err(RequestError::NoUpcomingPlan { days_ahead: 30 })
-        ));
-        let simultaneous = [
-            ("a", "Traditional", at(24)),
-            ("b", "Contemporary", at(24)),
-            ("c", "Traditional", at(48)),
-        ];
-        assert!(matches!(
-            soonest_plan(simultaneous, None, 30),
-            Err(RequestError::AmbiguousNextPlan { candidates })
-                if candidates == ["a (Traditional)", "b (Contemporary)"]
-        ));
-        assert_eq!(
-            soonest_plan(simultaneous, Some("Contemporary"), 30).expect("named type"),
-            "b"
-        );
-    }
-}
+mod tests;
 
 #[cfg(test)]
 pub(crate) mod test_support;

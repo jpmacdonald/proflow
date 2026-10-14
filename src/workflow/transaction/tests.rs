@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used)]
 
+use sha2::{Digest, Sha256};
+
 use std::cell::Cell;
 
 use super::*;

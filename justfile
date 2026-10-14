@@ -2,7 +2,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 cargo := "cargo"
 toolchain := env_var_or_default("RUSTUP_TOOLCHAIN", "stable")
-mutants_args := env_var_or_default("MUTANTS_ARGS", "--file src/workflow/transaction.rs")
+mutants_args := env_var_or_default("MUTANTS_ARGS", "--file src/workflow/transaction.rs --file src/workflow/transaction/commit.rs --file src/workflow/transaction/file_io.rs")
 proptest_cases := env_var_or_default("PROPTEST_CASES", "10000")
 
 default:
@@ -140,10 +140,33 @@ release-audit generated saved_back approved_thumbnails="" actual_thumbnails="":
     fi
 
 # Fast local gate for active editing.
-local: fmt check clippy test
+local: fmt structure check clippy test
 
 # Normal completion gate.
 ci: local doctest doc audit deny machete
 
 # Heavy completion gate for invariant-sensitive changes.
 deep: ci parity prop mutants invariants live-data
+
+# Show the local workspace build storage. No files are removed.
+cache-status:
+    @if [ -d target ]; then du -sh target; else echo "No local build cache."; fi
+    @if [ -d target/debug ]; then du -sh target/debug; fi
+    @if [ -d target/debug/incremental ]; then du -sh target/debug/incremental; fi
+
+# Clear local development artifacts only when they exceed the budget in GiB.
+# Cargo holds its build lock during cleanup. Release artifacts are retained.
+cache-trim budget_gib="8":
+    @budget={{quote(budget_gib)}}; \
+        [[ "$budget" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "Budget must be 1 to 9999 GiB." >&2; exit 2; }; \
+        if [ ! -d target/debug ]; then echo "No local development cache."; exit 0; fi; \
+        size_kib=$(du -sk target/debug | awk '{print $1}'); \
+        if (( size_kib > budget * 1024 * 1024 )); then \
+            cargo clean --profile dev --target-dir "$PWD/target"; \
+        else \
+            echo "Local development cache is within the $budget GiB budget."; \
+        fi
+
+# Check handwritten source and test sizes against the repository limits.
+structure:
+    python3 scripts/audit_structure.py

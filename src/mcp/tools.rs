@@ -3,6 +3,8 @@
 //! This module translates wire arguments into existing domain operations. The
 //! server remains the sole owner of clients, caches, paths, and reviewed state.
 
+mod wire;
+
 use std::sync::{Arc, MutexGuard};
 
 use propresenter::library::LibraryCatalog;
@@ -24,12 +26,10 @@ use super::review::{bounded_days, bounded_usize, recorded_decisions};
 use super::schema::{
     format_category, BuildServiceArgs, CatalogAssetsArgs, ConfigValidationResponse,
     ConfigWriteResponse, EffectiveConfigResponse, ExplainRuleMatchArgs, ExplainRuleMatchInput,
-    ExplainRuleMatchResponse, FetchPlanArgs, FileMatch, ItemResponse, PlanResponse,
-    PreviewPlaylistArgs, ReadPlaylistArgs, ReviewedMediaAssetResponse, ReviewedPreviewResponse,
-    ScriptureResponse, SearchLibraryArgs, SongResponse, WriteProjectConfigArgs,
+    ExplainRuleMatchResponse, FetchPlanArgs, FileMatch, PlanResponse, PreviewPlaylistArgs,
+    ReadPlaylistArgs, SearchLibraryArgs, WriteProjectConfigArgs,
 };
 use super::{build_err, mcp_err, ProFlowServer};
-use crate::workstation::RecordedBuild;
 
 impl ProFlowServer {
     fn library_catalog(&self) -> Result<MutexGuard<'_, LibraryCatalog>, rmcp::ErrorData> {
@@ -222,26 +222,7 @@ impl ProFlowServer {
                 .map_or(plan.service_name.as_str(), |s| s.name.as_str());
 
             let items = items_result.map_err(|e| mcp_err(e.to_string()))?;
-            let item_responses: Vec<ItemResponse> = items
-                .iter()
-                .map(|item| ItemResponse {
-                    id: item.id.clone(),
-                    position: item.position,
-                    title: item.title.clone(),
-                    description: item.description.clone(),
-                    category: format_category(item.category).to_string(),
-                    note: item.note.clone(),
-                    song: item.song.as_ref().map(|s| SongResponse {
-                        title: s.title.clone(),
-                        author: s.author.clone(),
-                        lyrics: s.lyrics.clone(),
-                    }),
-                    scripture: item.scripture.as_ref().map(|s| ScriptureResponse {
-                        reference: s.reference.clone(),
-                        text: s.text.clone(),
-                    }),
-                })
-                .collect();
+            let item_responses = items.iter().map(wire::item_response).collect();
 
             response.push(PlanResponse {
                 service_name: service_name.to_string(),
@@ -272,56 +253,12 @@ impl ProFlowServer {
         self.workstation
             .remember_decisions(&plan_id, &decisions)
             .map_err(build_err)?;
-        let RecordedBuild {
-            review: reviewed,
-            open_decisions,
-            applied_defaults,
-            refused_defaults,
-        } = self
+        let recorded = self
             .workstation
             .build_recorded(&plan_id, service_name.as_deref())
             .await
             .map_err(build_err)?;
-        let plan_title = reviewed.plan_title().to_string();
-        let service_name = reviewed.service_name().to_string();
-        let date = reviewed.date().format("%Y-%m-%d").to_string();
-        let entries = classify::render_preview(reviewed.plans());
-        let playlist_name = reviewed.playlist_name().to_string();
-        let package_mode = reviewed.playlist_export_mode();
-        let media_assets = reviewed
-            .additional_media_assets()
-            .iter()
-            .map(|asset| ReviewedMediaAssetResponse {
-                path: asset.source_path.display().to_string(),
-                archive_path: asset.archive_path.clone(),
-            })
-            .collect();
-        let summary = classify::PreviewSummary::from_entries(&entries);
-        let materialized = reviewed.materialized_result().cloned();
-        let result = classify::PreviewResult {
-            plan_title,
-            service_name,
-            date,
-            entries,
-            summary,
-        };
-
-        let preview_revision = match reviewed {
-            crate::workflow::execute::BuildReview::Prepared(prepared) => Some(prepared.revision()),
-            crate::workflow::execute::BuildReview::NeedsReview(_) => None,
-        };
-
-        json_result(&ReviewedPreviewResponse {
-            preview_revision,
-            open_decisions,
-            applied_defaults,
-            refused_defaults,
-            playlist_name,
-            package_mode,
-            media_assets,
-            materialized,
-            preview: result,
-        })
+        json_result(&wire::reviewed_preview(recorded))
     }
 
     /// Explain how the current config/classifier would handle a single item.
@@ -332,36 +269,8 @@ impl ProFlowServer {
         &self,
         Parameters(args): Parameters<ExplainRuleMatchArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let category = args
-            .category
-            .unwrap_or(crate::planning_center::types::Category::Text);
-        let item = crate::planning_center::types::Item {
-            id: "__explain__".to_string(),
-            position: 1,
-            title: args.title.clone(),
-            description: args.description.clone(),
-            category,
-            note: None,
-            song: args
-                .song_title
-                .as_ref()
-                .map(|title| crate::planning_center::types::Song {
-                    title: title.clone(),
-                    author: None,
-                    copyright: None,
-                    ccli: None,
-                    themes: None,
-                    lyrics: None,
-                    arrangement: None,
-                }),
-            scripture: args.scripture_reference.as_ref().map(|reference| {
-                crate::planning_center::types::Scripture {
-                    reference: reference.clone(),
-                    text: None,
-                    translation: None,
-                }
-            }),
-        };
+        let item = wire::explanation_item(&args);
+        let category = item.category;
 
         let mappings = self.workstation.render_assets().config();
         let index_guard = self.library_catalog()?;
