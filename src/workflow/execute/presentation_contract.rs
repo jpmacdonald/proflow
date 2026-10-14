@@ -5,10 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::workflow::{
     ExpectedCueCount, ExpectedMacroPolicy, ExpectedMacroSelector, ExpectedPresentationContract,
 };
-use proflow_propresenter::inspection::PresentationStructureSummary;
-use proflow_propresenter::resolution::inspect_presentation_size;
-use proflow_propresenter::unstable_native::rv_data;
-use proflow_propresenter::PresentationSize;
+use propresenter::inspection::PresentationStructureSummary;
+use propresenter::resolution::inspect_presentation_size;
+use propresenter::unstable_native::rv_data;
+use propresenter::PresentationSize;
 
 /// A deterministic mismatch between reviewed intent and exact final bytes.
 #[derive(Debug, thiserror::Error)]
@@ -23,7 +23,7 @@ pub enum PresentationContractError {
     },
     /// The selected native arrangement graph could not be traversed safely.
     #[error(transparent)]
-    Traversal(#[from] proflow_propresenter::arrangement::OperatorTraversalError),
+    Traversal(#[from] propresenter::arrangement::OperatorTraversalError),
     /// Operator traversal was empty or had the wrong exact cardinality.
     #[error("expected operator cue count {expected:?}, found {actual}")]
     CueCount {
@@ -110,7 +110,7 @@ pub(super) fn validate_final_presentation(
             actual: 0,
         });
     }
-    let traversal = proflow_propresenter::arrangement::checked_operator_cue_indices(presentation)?;
+    let traversal = propresenter::arrangement::checked_operator_cue_indices(presentation)?;
     let count_matches = match expected.operator_cues {
         ExpectedCueCount::NonEmpty => !traversal.is_empty(),
         ExpectedCueCount::Exact(count) => traversal.len() == count,
@@ -144,7 +144,7 @@ fn validate_macros(
     let ExpectedMacroPolicy::Exact(regions) = policy else {
         return Ok(());
     };
-    let groups = proflow_propresenter::arrangement::checked_selected_group_entries(presentation)?;
+    let groups = propresenter::arrangement::checked_selected_group_entries(presentation)?;
     let mut expected_by_cue = BTreeMap::<usize, String>::new();
     for region in regions {
         let cue_index = match &region.selector {
@@ -190,7 +190,7 @@ fn validate_macros(
         let actual = presentation.cues[cue_index]
             .actions
             .iter()
-            .filter_map(proflow_propresenter::macros::macro_action_name)
+            .filter_map(propresenter::macros::macro_action_name)
             .map(str::to_string)
             .collect::<Vec<_>>();
         let expected = expected_by_cue
@@ -244,8 +244,8 @@ mod tests {
 
     use super::*;
     use crate::workflow::ExpectedMacroPolicy;
-    use proflow_propresenter::inspection::summarize_presentation_structure;
-    use proflow_propresenter::unstable_native::rv_data::action;
+    use propresenter::inspection::summarize_presentation_structure;
+    use propresenter::unstable_native::rv_data::action;
 
     fn one_cue_presentation() -> rv_data::Presentation {
         rv_data::Presentation {

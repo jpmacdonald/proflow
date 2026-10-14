@@ -113,14 +113,14 @@ fn reviewed_song_build_refuses_commit_when_a_duplicate_title_appears_after_revie
 
 fn review_against_candidates(
     runtime: &TestRuntime,
-    candidates: proflow_propresenter::library::LibraryCandidates,
+    candidates: propresenter::library::LibraryCandidates,
 ) -> Result<BuildReview, BuildServiceError> {
     let request = reviewed_request("Scanned Candidates");
     let planning_center = super::review::ReviewedPlanningCenterSource::offline(&request);
     runtime.executor().review_planned_request(
         request,
         &[generate_title_plan("pco:item:generated", test_style(None))],
-        proflow_propresenter::PresentationSize::FULL_HD,
+        propresenter::PresentationSize::FULL_HD,
         planning_center,
         candidates,
     )

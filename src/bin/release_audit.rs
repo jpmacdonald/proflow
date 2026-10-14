@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use image::ImageReader;
-use proflow_propresenter::package::{compare_playlist_packages, PlaylistPackageComparison};
+use propresenter::package::{compare_playlist_packages, PlaylistPackageComparison};
 use serde::Serialize;
 use walkdir::WalkDir;
 

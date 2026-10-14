@@ -162,7 +162,7 @@ fn offered(runtime: &TestRuntime, plan: ResolvedItemPlan) -> OpenDecision {
         .review_build_request(
             reviewed_request("Decided"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("review");
     let [decision] = review
@@ -266,7 +266,7 @@ fn deciding_again_replaces_the_earlier_decision_and_keeps_who_when_and_why() {
 
 #[test]
 fn a_linked_library_package_without_media_is_a_valid_intent() {
-    use proflow_propresenter::playlist::PlaylistExportMode;
+    use propresenter::playlist::PlaylistExportMode;
 
     let intent = playlist_export_intent(PlaylistExportMode::LibraryLinks, Vec::new())
         .expect("library links carry no media");

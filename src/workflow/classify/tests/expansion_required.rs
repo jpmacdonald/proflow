@@ -9,7 +9,7 @@ use crate::workflow::classify::build_plan;
 use crate::workflow::plan::{
     CueTransform, ItemKind, MacroTransform, ReadyAction, ResolvedItemPlan,
 };
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 fn item_type(plan: &ResolvedItemPlan) -> Option<&str> {

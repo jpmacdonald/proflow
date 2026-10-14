@@ -3,11 +3,9 @@
 use std::path::Path;
 
 use crate::planning_center::PlanSnapshot;
-use proflow_propresenter::library::LibraryCandidates;
-use proflow_propresenter::playlist::{
-    playlist_output_path, PlaylistExportMode, PlaylistMediaAsset,
-};
-use proflow_propresenter::PresentationSize;
+use propresenter::library::LibraryCandidates;
+use propresenter::playlist::{playlist_output_path, PlaylistExportMode, PlaylistMediaAsset};
+use propresenter::PresentationSize;
 
 use super::build_stages::ReviewedDecisions;
 use super::decisions::{DecisionKind, DecisionOption};

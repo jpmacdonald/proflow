@@ -5,11 +5,9 @@ use std::path::PathBuf;
 use crate::workflow::plan::{ExpectedMacroPolicy, ExpectedMacroRegion, ResolvedItemPlan};
 use crate::workflow::report::{BuildEntryAction, BuildServiceEntry, PlaylistSelectionSummary};
 use crate::workflow::transaction::BuildFileTransaction;
-use proflow_propresenter::inspection::{
-    summarize_presentation_structure, PresentationStructureSummary,
-};
-use proflow_propresenter::playlist::PlaylistEntry;
-use proflow_propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
+use propresenter::inspection::{summarize_presentation_structure, PresentationStructureSummary};
+use propresenter::playlist::PlaylistEntry;
+use propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
 
 use super::BuildServiceError;
 
@@ -38,7 +36,7 @@ impl RenderedService {
     pub(super) fn record(
         &mut self,
         plan: &ResolvedItemPlan,
-        presentation_size: proflow_propresenter::PresentationSize,
+        presentation_size: propresenter::PresentationSize,
         rendered: RenderedPlan,
     ) -> Result<(), BuildServiceError> {
         let mut expected_presentation =
@@ -113,14 +111,12 @@ fn presentation_evidence(
             .ok_or_else(|| BuildServiceError::MissingPresentationEvidence {
                 output_key: output_key.to_string(),
             })?;
-    let presentation = proflow_propresenter::deserialize::decode_presentation_bytes(
-        bytes,
-        entry.presentation_path(),
-    )
-    .map_err(|source| BuildServiceError::PresentationEvidenceInspection {
-        output_key: output_key.to_string(),
-        source,
-    })?;
+    let presentation =
+        propresenter::deserialize::decode_presentation_bytes(bytes, entry.presentation_path())
+            .map_err(|source| BuildServiceError::PresentationEvidenceInspection {
+                output_key: output_key.to_string(),
+                source,
+            })?;
     let summary = summarize_presentation_structure(&presentation);
     if !summary.reference_diagnostics.is_empty() {
         return Err(BuildServiceError::PresentationStructureDiagnostics {
@@ -133,31 +129,33 @@ fn presentation_evidence(
         .selected_arrangement()
         .map(
             |selected| -> Result<PlaylistSelectionSummary, BuildServiceError> {
-                let native_uuid =
-                    proflow_propresenter::arrangement::selectable_arrangement_by_identity(
-                        &presentation,
-                        selected.uuid(),
-                        selected.name(),
-                    )
-                    .map_err(|source| BuildServiceError::PresentationSelectionEvidence {
+                let native_uuid = propresenter::arrangement::selectable_arrangement_by_identity(
+                    &presentation,
+                    selected.uuid(),
+                    selected.name(),
+                )
+                .map_err(|source| BuildServiceError::PresentationSelectionEvidence {
+                    output_key: output_key.to_string(),
+                    arrangement: selected.name().to_string(),
+                    source,
+                })?
+                .native_uuid()
+                .cloned()
+                .ok_or_else(|| {
+                    BuildServiceError::PresentationSelectionEvidence {
                         output_key: output_key.to_string(),
                         arrangement: selected.name().to_string(),
-                        source,
-                    })?
-                    .native_uuid()
-                    .cloned()
-                    .ok_or_else(|| BuildServiceError::PresentationSelectionEvidence {
-                        output_key: output_key.to_string(),
-                        arrangement: selected.name().to_string(),
-                        source: proflow_propresenter::arrangement::ArrangementSelectionError::Unavailable,
-                    })?;
+                        source: propresenter::arrangement::ArrangementSelectionError::Unavailable,
+                    }
+                })?;
                 effective.selected_arrangement = Some(native_uuid);
                 let operator_cue_indexes =
-                    proflow_propresenter::arrangement::checked_operator_cue_indices(&effective)
-                        .map_err(|source| BuildServiceError::PresentationTraversalEvidence {
+                    propresenter::arrangement::checked_operator_cue_indices(&effective).map_err(
+                        |source| BuildServiceError::PresentationTraversalEvidence {
                             output_key: output_key.to_string(),
                             source,
-                        })?;
+                        },
+                    )?;
                 Ok(PlaylistSelectionSummary {
                     arrangement_uuid: selected.uuid().to_string(),
                     arrangement_name: selected.name().to_string(),
@@ -171,7 +169,7 @@ fn presentation_evidence(
         &summary,
         entry
             .selected_arrangement()
-            .map(proflow_propresenter::playlist::SelectedArrangement::name),
+            .map(propresenter::playlist::SelectedArrangement::name),
         expected,
     )
     .map_err(|source| BuildServiceError::PresentationContract {

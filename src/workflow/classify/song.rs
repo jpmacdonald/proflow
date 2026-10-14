@@ -12,7 +12,7 @@ use crate::workflow::plan::{
     ExistingTransform, ItemKind, OutputKey, PlanDisposition, ReadyAction, ResolvedItemPlan,
     ReviewContext,
 };
-use proflow_propresenter::library::{LibraryArrangement, LibraryCatalog, LibraryEntry};
+use propresenter::library::{LibraryArrangement, LibraryCatalog, LibraryEntry};
 
 pub(super) enum SongPolicy {
     Review,

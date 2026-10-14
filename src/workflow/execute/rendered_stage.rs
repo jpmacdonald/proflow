@@ -16,7 +16,7 @@ use crate::workflow::approval::SourceManifest;
 use crate::workflow::build_dir::{hex, BuildDir, Classified, Committed, Rendered, Verified};
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::{ExportedOutput, PreparedFileTransaction};
-use proflow_propresenter::text_fit::FontProgramSnapshot;
+use propresenter::text_fit::FontProgramSnapshot;
 
 use super::BuildServiceError;
 

@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 
 use crate::bible::{to_superscript, Verse};
 
-use proflow_propresenter::text_flow::FitPartitionError;
+use propresenter::text_flow::FitPartitionError;
 #[cfg(test)]
-use proflow_propresenter::text_flow::TextLayout;
+use propresenter::text_flow::TextLayout;
 
 #[cfg(test)]
 const MAX_SCRIPTURE_LINES: usize = 7;

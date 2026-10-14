@@ -10,7 +10,7 @@ use super::{ExistingTransform, RenderStyle, ResolvedBackground};
 use crate::bible::BibleVersion;
 use crate::project_config::{BackgroundAssetPath, BackgroundId, PresentationTypeKey};
 use crate::workflow::description_parser::ParsedContent;
-use proflow_propresenter::SlideType;
+use propresenter::SlideType;
 
 pub use crate::project_config::ItemKind;
 

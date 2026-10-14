@@ -17,11 +17,7 @@ fn build_directories(runtime: &TestRuntime) -> Vec<PathBuf> {
 fn review(runtime: &TestRuntime, request: BuildRequest, plans: &[ResolvedItemPlan]) -> BuildReview {
     runtime
         .executor()
-        .review_build_request(
-            request,
-            plans,
-            proflow_propresenter::PresentationSize::FULL_HD,
-        )
+        .review_build_request(request, plans, propresenter::PresentationSize::FULL_HD)
         .expect("review")
 }
 
@@ -432,7 +428,7 @@ fn build_from(runtime: &TestRuntime, request: BuildRequest, snapshot: PlanSnapsh
         .review_planned_request(
             request,
             &[skipped("pco:item-1:main")],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
             super::review::ReviewedPlanningCenterSource::captured(snapshot),
             candidates,
         )

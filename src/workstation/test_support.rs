@@ -16,9 +16,9 @@ use crate::paths::{BuildLocationInputs, BuildLocations};
 use crate::planning_center::PlanningCenterClient;
 use crate::project_config::{ProjectConfig, RawProjectConfig};
 use crate::workflow::execute::RenderAssetSnapshot;
-use proflow_propresenter::groups::GroupCatalog;
-use proflow_propresenter::library::LibraryCatalog;
-use proflow_propresenter::playlist::PlaylistMetadata;
+use propresenter::groups::GroupCatalog;
+use propresenter::library::LibraryCatalog;
+use propresenter::playlist::PlaylistMetadata;
 
 /// The one plan the stand-in serves.
 pub const PLAN_ID: &str = "plan-1";

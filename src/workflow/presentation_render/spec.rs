@@ -12,14 +12,14 @@ use crate::workflow::description_parser::{
 };
 use crate::workflow::plan::RenderRole;
 use crate::workflow::scripture_layout::split_verses_with_fit;
-use proflow_propresenter::presentation_spec::{
+use propresenter::presentation_spec::{
     CueLabel, CueRoleId, CueSpec, PresentationSpecError, TextBindings, TextField,
 };
-use proflow_propresenter::rtf::StyledSegment;
-use proflow_propresenter::text_flow::{pack_segments_with_fit, FitPartitionError};
+use propresenter::rtf::StyledSegment;
+use propresenter::text_flow::{pack_segments_with_fit, FitPartitionError};
 
 #[cfg(test)]
-use proflow_propresenter::text_flow::TextLayout;
+use propresenter::text_flow::TextLayout;
 
 /// Immutable semantic roles and physical destinations used while planning cues.
 pub(super) struct CueCompiler<'a, 'theme> {

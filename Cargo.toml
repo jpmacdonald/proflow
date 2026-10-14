@@ -1,15 +1,14 @@
 [workspace]
-members = ["crates/propresenter", "tools/proto-gen", "tools/schema-audit"]
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/jpmacdonald/proflow"
 
-# Versions shared by every workspace member live here so the format crate and
-# the host crate cannot drift apart.
+# ProPresenter formats live in the shared sibling repository `../propresenter`,
+# which proflow and pew both build on.
 [workspace.dependencies]
-proflow-propresenter = { path = "crates/propresenter" }
+propresenter = { path = "../propresenter" }
 anyhow = "1.0.80"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
@@ -123,7 +122,7 @@ path = "src/bin/release_audit.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
-proflow-propresenter.workspace = true
+propresenter.workspace = true
 
 # Planning Center integration
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -154,12 +153,12 @@ rmcp = { version = "=1.4.0", features = ["server", "transport-io"] }
 schemars.workspace = true
 
 [dev-dependencies]
-proflow-propresenter = { workspace = true, features = ["diagnostics"] }
+propresenter = { workspace = true, features = ["diagnostics"] }
 tempfile.workspace = true
 httptest = "0.16.4"
 proptest.workspace = true
 
 [features]
 default = []
-dev-tools = ["proflow-propresenter/dev-tools"]
+dev-tools = ["propresenter/dev-tools"]
 integration_test = []

@@ -4,13 +4,13 @@ use std::path::Path;
 
 use crate::workflow::plan::ResolvedItemPlan;
 use crate::workflow::presentation_render::PresentationRenderError;
-use proflow_propresenter::generated_document::GeneratedPresentation;
-use proflow_propresenter::native_document::EditablePresentation;
-use proflow_propresenter::playlist::{PlaylistEntry, PlaylistError, SelectedArrangement};
-use proflow_propresenter::render::RenderedPresentation;
-use proflow_propresenter::serialize::write_presentation_bytes;
-use proflow_propresenter::unstable_native::rv_data;
-use proflow_propresenter::PresentationSize;
+use propresenter::generated_document::GeneratedPresentation;
+use propresenter::native_document::EditablePresentation;
+use propresenter::playlist::{PlaylistEntry, PlaylistError, SelectedArrangement};
+use propresenter::render::RenderedPresentation;
+use propresenter::serialize::write_presentation_bytes;
+use propresenter::unstable_native::rv_data;
+use propresenter::PresentationSize;
 
 use super::super::BuildServiceError;
 
@@ -90,7 +90,7 @@ pub(super) fn validate_rendered_presentation_size(
     expected: PresentationSize,
     output_key: &str,
 ) -> Result<(), BuildServiceError> {
-    let actual = proflow_propresenter::resolution::inspect_presentation_size(presentation);
+    let actual = propresenter::resolution::inspect_presentation_size(presentation);
     if actual.matches(expected) {
         Ok(())
     } else {

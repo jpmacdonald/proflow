@@ -8,6 +8,15 @@ Dates are the day the work landed on `main`.
 
 ## Unreleased
 
+### Shared ProPresenter library (branch `shared-propresenter`)
+
+- `crates/propresenter` (`proflow-propresenter`), `tools/proto-gen`, and
+  `tools/schema-audit` moved to the sibling repository `../propresenter`
+  (crate `propresenter`), which pew also builds on. proflow depends on it by
+  path. `just proto`, `just schema-audit`, and the codec/package fidelity
+  recipes now live there; `docs/schema-audit.md` and
+  `docs/text-fit-strategy.md` moved with them.
+
 ### State as of 2026-10-10
 
 - `main` is the only branch. Everything described below is on `origin/main`.

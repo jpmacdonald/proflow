@@ -41,11 +41,7 @@ fn prepare(
     expect_prepared(
         runtime
             .executor()
-            .review_build_request(
-                request,
-                &[plan],
-                proflow_propresenter::PresentationSize::FULL_HD,
-            )
+            .review_build_request(request, &[plan], propresenter::PresentationSize::FULL_HD)
             .expect("review"),
     )
 }

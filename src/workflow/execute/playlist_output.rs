@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::workflow::approval::CapturedSources;
 use crate::workflow::transaction::BuildFileTransaction;
-use proflow_propresenter::playlist::{
+use propresenter::playlist::{
     playlist_output_path, resolve_playlist_export, write_playlist_set_file_with_reviewed_media,
     PlaylistEntry, PlaylistError, PlaylistExportEvidence, PlaylistMetadata, PlaylistSet,
     ResolvedPlaylistExport, ReviewedPlaylistExportIntent,

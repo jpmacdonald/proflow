@@ -6,11 +6,11 @@ use crate::workflow::plan::{
     BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, ResolvedItemPlan,
     RestyleMacroPolicy, RestyleMacroSelector,
 };
-use proflow_propresenter::native_document::OpaquePresentation;
-use proflow_propresenter::playlist::{PlaylistEntry, SelectedArrangement};
-use proflow_propresenter::render::apply_application_info;
-use proflow_propresenter::unstable_native::rv_data;
-use proflow_propresenter::PresentationSize;
+use propresenter::native_document::OpaquePresentation;
+use propresenter::playlist::{PlaylistEntry, SelectedArrangement};
+use propresenter::render::apply_application_info;
+use propresenter::unstable_native::rv_data;
+use propresenter::PresentationSize;
 
 use super::super::{BuildServiceError, ServiceBuildExecutor};
 use super::target::{
@@ -40,7 +40,7 @@ impl ServiceBuildExecutor<'_> {
             OpaquePresentation::decode(source_bytes, source_path.display().to_string())?
                 .try_into_editable()?;
         let presentation = editable.presentation_mut();
-        proflow_propresenter::resolution::resize_presentation_canvas(
+        propresenter::resolution::resize_presentation_canvas(
             presentation,
             target.presentation_size,
         )?;
@@ -49,19 +49,19 @@ impl ServiceBuildExecutor<'_> {
             target.presentation_size,
             entry.output_key.as_str(),
         )?;
-        proflow_propresenter::arrangement::clear_stale_selected_arrangement(presentation);
+        propresenter::arrangement::clear_stale_selected_arrangement(presentation);
         let selected_arrangement = resolve_selected_arrangement(presentation, arrangement)?;
         if let Some(selected) = selected_arrangement.as_ref() {
             presentation.selected_arrangement = Some(selected_native_uuid(presentation, selected)?);
         }
         if let CueTransform::RetainOperatorPrefix(limit) = transform.cues() {
-            proflow_propresenter::arrangement::retain_first_operator_cues(presentation, limit)?;
+            propresenter::arrangement::retain_first_operator_cues(presentation, limit)?;
         }
         match (transform.background(), target.background) {
             (BackgroundTransform::Replace(_), Some(background)) => {
                 match selected_arrangement.as_ref() {
                     Some(selected) => {
-                        proflow_propresenter::background::replace_arrangement_entry_backgrounds(
+                        propresenter::background::replace_arrangement_entry_backgrounds(
                             presentation,
                             background.path,
                             background.data,
@@ -71,7 +71,7 @@ impl ServiceBuildExecutor<'_> {
                         )?;
                     }
                     None => {
-                        proflow_propresenter::background::replace_operator_entry_background(
+                        propresenter::background::replace_operator_entry_background(
                             presentation,
                             background.path,
                             background.data,
@@ -117,7 +117,7 @@ impl ServiceBuildExecutor<'_> {
             let mut editable = opaque.try_into_editable()?;
             let presentation = editable.presentation_mut();
             if must_clear_selection {
-                proflow_propresenter::arrangement::clear_stale_selected_arrangement(presentation);
+                propresenter::arrangement::clear_stale_selected_arrangement(presentation);
             }
             if let Some(selected) = selected_arrangement.as_ref() {
                 presentation.selected_arrangement =
@@ -139,7 +139,7 @@ fn selected_native_uuid(
     presentation: &rv_data::Presentation,
     selected: &SelectedArrangement,
 ) -> Result<rv_data::Uuid, BuildServiceError> {
-    proflow_propresenter::arrangement::selectable_arrangement_by_identity(
+    propresenter::arrangement::selectable_arrangement_by_identity(
         presentation,
         selected.uuid(),
         selected.name(),
@@ -161,16 +161,15 @@ fn selected_native_uuid(
 pub(in crate::workflow::execute) fn apply_restyle_macro_policy(
     presentation: &mut rv_data::Presentation,
     policy: &RestyleMacroPolicy,
-    cache: &proflow_propresenter::macros::MacroCache,
-) -> Result<bool, proflow_propresenter::macros::MacroApplyError> {
-    use proflow_propresenter::macros::{MacroApplyError, MacroCueTarget};
+    cache: &propresenter::macros::MacroCache,
+) -> Result<bool, propresenter::macros::MacroApplyError> {
+    use propresenter::macros::{MacroApplyError, MacroCueTarget};
 
-    let traversal = proflow_propresenter::arrangement::checked_operator_cue_indices(presentation)?;
+    let traversal = propresenter::arrangement::checked_operator_cue_indices(presentation)?;
     if traversal.is_empty() {
         return Err(MacroApplyError::MissingOperatorCue);
     }
-    let selected_groups =
-        proflow_propresenter::arrangement::checked_selected_group_entries(presentation)?;
+    let selected_groups = propresenter::arrangement::checked_selected_group_entries(presentation)?;
     let mut targets = Vec::with_capacity(policy.regions().len());
     let mut target_indexes = std::collections::HashSet::new();
     for (region_index, region) in policy.regions().iter().enumerate() {
@@ -218,7 +217,7 @@ pub(in crate::workflow::execute) fn apply_restyle_macro_policy(
         ));
     }
 
-    proflow_propresenter::macros::apply_operator_macro_targets(presentation, &targets, cache)
+    propresenter::macros::apply_operator_macro_targets(presentation, &targets, cache)
 }
 
 fn resolve_selected_arrangement(
@@ -229,25 +228,22 @@ fn resolve_selected_arrangement(
         return Ok(None);
     };
     let resolved =
-        match proflow_propresenter::arrangement::selectable_arrangement_by_name(presentation, name)
-        {
+        match propresenter::arrangement::selectable_arrangement_by_name(presentation, name) {
             Ok(resolved) => resolved,
-            Err(proflow_propresenter::arrangement::ArrangementSelectionError::Unavailable) => {
+            Err(propresenter::arrangement::ArrangementSelectionError::Unavailable) => {
                 return Err(BuildServiceError::ArrangementUnavailable {
                     presentation: presentation.name.clone(),
                     arrangement: name.to_string(),
                 });
             }
-            Err(proflow_propresenter::arrangement::ArrangementSelectionError::Ambiguous {
-                matches,
-            }) => {
+            Err(propresenter::arrangement::ArrangementSelectionError::Ambiguous { matches }) => {
                 return Err(BuildServiceError::ArrangementAmbiguous {
                     presentation: presentation.name.clone(),
                     arrangement: name.to_string(),
                     matches,
                 });
             }
-            Err(proflow_propresenter::arrangement::ArrangementSelectionError::Incomplete) => {
+            Err(propresenter::arrangement::ArrangementSelectionError::Incomplete) => {
                 return Err(BuildServiceError::ArrangementIncomplete {
                     presentation: presentation.name.clone(),
                     arrangement: name.to_string(),

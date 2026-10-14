@@ -2,12 +2,12 @@
 
 use crate::paths::BuildLocations;
 use crate::project_config::ProjectConfig;
-use proflow_propresenter::background::resolve_background_image;
-use proflow_propresenter::macros::MacroCache;
-use proflow_propresenter::render::SlideTemplate;
-use proflow_propresenter::resolution::inspect_slide_size;
-use proflow_propresenter::theme::ThemeCache;
-use proflow_propresenter::{audience::PresentationDestination, unstable_native::rv_data};
+use propresenter::background::resolve_background_image;
+use propresenter::macros::MacroCache;
+use propresenter::render::SlideTemplate;
+use propresenter::resolution::inspect_slide_size;
+use propresenter::theme::ThemeCache;
+use propresenter::{audience::PresentationDestination, unstable_native::rv_data};
 
 use super::audience::ConfiguredAudienceDestinations;
 use super::{RenderAssetIssue, RenderAssetIssues, RenderAssetSnapshotError, ThemeSlideSizeProblem};

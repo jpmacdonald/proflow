@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use proflow_propresenter::library::physical_path_identity;
+use propresenter::library::physical_path_identity;
 
 use super::{digest_hex, hash_bytes};
 

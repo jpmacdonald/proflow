@@ -6,8 +6,8 @@ use crate::workflow::plan::{
     CueMacro, ItemKind, OutputKey, PlanDisposition, ReadyAction, RenderRole, RenderStyle,
     ResolvedItemPlan, ScriptureRequest, SpeakerPalette,
 };
-use proflow_propresenter::library::LibraryCatalog;
-use proflow_propresenter::unstable_native::rv_data;
+use propresenter::library::LibraryCatalog;
+use propresenter::unstable_native::rv_data;
 use prost::Message;
 use serde::Deserialize;
 use tempfile::tempdir;

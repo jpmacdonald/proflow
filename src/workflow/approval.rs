@@ -254,14 +254,12 @@ pub(super) fn plan_source_paths(
         }
         if let Some(background) = plan.background() {
             let configured = background.file().as_path();
-            let resolved = proflow_propresenter::background::resolve_background_image(
-                project_data_root,
-                configured,
-            )
-            .map_err(|error| SourceReviewError::Background {
-                path: configured.to_path_buf(),
-                message: error.to_string(),
-            })?;
+            let resolved =
+                propresenter::background::resolve_background_image(project_data_root, configured)
+                    .map_err(|error| SourceReviewError::Background {
+                    path: configured.to_path_buf(),
+                    message: error.to_string(),
+                })?;
             paths.insert(resolved);
         }
         add_bible_source_paths(plan, project_data_root, &mut paths);

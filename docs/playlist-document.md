@@ -7,7 +7,7 @@ undecided (see "Next steps").
 
 ## What it is
 
-`PlaylistDocument` (crate `proflow-propresenter`, module `playlist_document`):
+`PlaylistDocument` (crate `propresenter`, in the sibling repository `../propresenter`, module `playlist_document`):
 
 ```text
 schema_version   always PLAYLIST_DOCUMENT_SCHEMA_VERSION (1); a newtype that can hold no other value
@@ -32,12 +32,12 @@ book, chapter range, verse range and translation. Media is the list of
 background file names.
 
 The schema is generated from these types with schemars and checked in at
-`crates/propresenter/tests/fixtures/playlist-document.schema.json`. A test
+`tests/fixtures/playlist-document.schema.json` in the `propresenter` repository. A test
 fails when the generated schema differs from that file, so a shape change is a
 reviewed diff. Bump the version for any change an existing reader could
 misread (removed or retyped field, changed meaning); additive optional fields
 need no bump. Regenerate with
-`PROFLOW_BLESS_PLAYLIST_DOCUMENT_SCHEMA=1 cargo test -p proflow-propresenter --lib playlist_document`.
+`PROFLOW_BLESS_PLAYLIST_DOCUMENT_SCHEMA=1 cargo test --lib playlist_document` (run in `../propresenter`).
 
 ## Ownership
 

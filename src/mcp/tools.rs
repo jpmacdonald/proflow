@@ -5,8 +5,8 @@
 
 use std::sync::{Arc, MutexGuard};
 
-use proflow_propresenter::library::LibraryCatalog;
-use proflow_propresenter::playlist_document::playlist_document_schema;
+use propresenter::library::LibraryCatalog;
+use propresenter::playlist_document::playlist_document_schema;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::project_config::{parse_project_config_value, RawProjectConfig};
 use crate::setup;
 use crate::workflow::classify;
-use proflow_propresenter::theme::ThemeCache;
+use propresenter::theme::ThemeCache;
 
 use super::config::write_config_reviewed;
 use super::playlist::{read_playlist_document, read_playlist_err, PlaylistRequest};

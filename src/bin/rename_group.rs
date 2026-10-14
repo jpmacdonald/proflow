@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context};
-use proflow_propresenter::native_document::OpaquePresentation;
+use propresenter::native_document::OpaquePresentation;
 
 fn main() -> anyhow::Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();

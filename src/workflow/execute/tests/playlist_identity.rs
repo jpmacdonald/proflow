@@ -23,7 +23,7 @@ fn generated_item_uses_native_presentation_name_like_propresenter() {
         .review_build_request(
             reviewed_request("Reviewed Playlist"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("review generated item");
     let reviewed = expect_prepared(reviewed);
@@ -60,16 +60,16 @@ fn generated_item_uses_native_presentation_name_like_propresenter() {
     assert_eq!(indexed.file_name(), "Call to Worship");
     assert!(indexed
         .presentation_size()
-        .matches(proflow_propresenter::PresentationSize::FULL_HD));
+        .matches(propresenter::PresentationSize::FULL_HD));
     drop(catalog);
 
-    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
+    let package = propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read generated playlist");
-    let items = proflow_propresenter::package::presentation_items(package.document());
+    let items = propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "Call to Worship");
     assert_eq!(
-        proflow_propresenter::playlist::linked_presentation_filename(&items[0]).as_deref(),
+        propresenter::playlist::linked_presentation_filename(&items[0]).as_deref(),
         Some("Call to Worship.pro")
     );
 
@@ -104,7 +104,7 @@ fn unchanged_item_uses_native_presentation_name_like_propresenter() {
         .review_build_request(
             reviewed_request("Reviewed Playlist"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("review existing item");
     let result = runtime
@@ -112,9 +112,9 @@ fn unchanged_item_uses_native_presentation_name_like_propresenter() {
         .build_prepared_offline(expect_prepared(reviewed))
         .expect("build existing item");
 
-    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
-        .expect("read playlist");
-    let items = proflow_propresenter::package::presentation_items(package.document());
+    let package =
+        propresenter::package::read_playlist_package(&result.playlist_path).expect("read playlist");
+    let items = propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "Greeting");
 }

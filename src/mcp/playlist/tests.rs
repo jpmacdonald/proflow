@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use proflow_propresenter::playlist_document::{
+use propresenter::playlist_document::{
     playlist_document_schema, DocumentSource, ItemDetail, PlaylistDocumentError,
     PLAYLIST_DOCUMENT_SCHEMA_VERSION,
 };
-use proflow_propresenter::unstable_native::rv_data::{self, playlist, playlist_item};
+use propresenter::unstable_native::rv_data::{self, playlist, playlist_item};
 use prost::Message;
 
 use super::{read_playlist_document, read_playlist_err, PlaylistRequest, ReadPlaylistError};
@@ -47,7 +47,7 @@ fn roots() -> Roots {
 
 fn fixture_package() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("crates/propresenter/tests/fixtures/native/corpus/playlists")
+        .join("../propresenter/tests/fixtures/native/corpus/playlists")
         .join("native-template-library.proplaylist")
 }
 

@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use proflow_propresenter::package::{read_playlist_package, PlaylistPackage};
-use proflow_propresenter::playlist::linked_presentation_filename;
-use proflow_propresenter::SlideType;
+use propresenter::package::{read_playlist_package, PlaylistPackage};
+use propresenter::playlist::linked_presentation_filename;
+use propresenter::SlideType;
 
 #[test]
 fn portable_restyle_embeds_exact_canonical_default_files_and_final_media() {
@@ -16,7 +16,7 @@ fn portable_restyle_embeds_exact_canonical_default_files_and_final_media() {
             .review_build_request(
                 request,
                 &fixture.plans,
-                proflow_propresenter::PresentationSize::FULL_HD,
+                propresenter::PresentationSize::FULL_HD,
             )
             .expect("review portable restyle"),
     );
@@ -47,11 +47,7 @@ fn portable_receipt_records_each_missing_native_media_reference_and_warning() {
     let prepared = expect_prepared(
         runtime
             .executor()
-            .review_build_request(
-                request,
-                &[plan],
-                proflow_propresenter::PresentationSize::FULL_HD,
-            )
+            .review_build_request(request, &[plan], propresenter::PresentationSize::FULL_HD)
             .expect("review missing external media"),
     );
     let result = runtime
@@ -183,7 +179,7 @@ fn portable_fixture() -> PortableFixture {
 }
 
 fn assert_portable_presentations(package: &PlaylistPackage, fixture: &PortableFixture) {
-    let items = proflow_propresenter::package::presentation_items(package.document());
+    let items = propresenter::package::presentation_items(package.document());
     assert_eq!(items.len(), 2);
     for ((item, name), arrangement_uuid) in items
         .iter()
@@ -259,7 +255,7 @@ fn assert_exact_final_media(package: &PlaylistPackage, fixture: &PortableFixture
     let referenced_media = ["First Song.pro", "Second Song.pro"]
         .into_iter()
         .flat_map(|filename| {
-            proflow_propresenter::media::presentation_media_dependencies_from_bytes(
+            propresenter::media::presentation_media_dependencies_from_bytes(
                 package
                     .embedded_file(filename)
                     .expect("embedded presentation"),
@@ -345,7 +341,7 @@ fn portable_source_song(
         name: "Default".to_string(),
         group_identifiers: vec![group_uuid],
     }];
-    proflow_propresenter::background::add_reviewed_background_to_first_cue(
+    propresenter::background::add_reviewed_background_to_first_cue(
         &mut source,
         old_background,
         &minimal_png(1, 1),

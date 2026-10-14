@@ -7,7 +7,7 @@ use crate::paths::{BuildLocationInputs, BuildLocations, BuildLocationsError, PRO
 use crate::project_config::{LibraryName, ProjectConfig, RawProjectConfig};
 use crate::workflow::classify::{PreviewResult, PreviewSummary};
 use crate::workflow::execute::{DecisionError, OverrideAction};
-use proflow_propresenter::playlist::PlaylistExportMode;
+use propresenter::playlist::PlaylistExportMode;
 use std::path::Path;
 
 fn config_test_locations(root: &Path) -> BuildLocations {

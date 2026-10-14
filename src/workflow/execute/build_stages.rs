@@ -19,8 +19,8 @@ use crate::workflow::build_dir::{
     Rendered, Resumed, Snapshotted, Verified,
 };
 use crate::workflow::plan::ResolvedItemPlan;
-use proflow_propresenter::library::LibraryCandidates;
-use proflow_propresenter::playlist::PlaylistExportMode;
+use propresenter::library::LibraryCandidates;
+use propresenter::playlist::PlaylistExportMode;
 
 use super::overrides::EntryOverride;
 use super::request::BoundBuildRequest;

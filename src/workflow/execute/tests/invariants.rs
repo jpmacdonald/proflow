@@ -134,7 +134,7 @@ fn render_asset_snapshot_rejects_theme_slide_canvas_mismatch() {
             expected,
             problem: ThemeSlideSizeProblem::Mismatch(actual),
             ..
-        } if *expected == proflow_propresenter::PresentationSize::FULL_HD
+        } if *expected == propresenter::PresentationSize::FULL_HD
             && actual.width() == 1280
             && actual.height() == 720
     )));
@@ -178,7 +178,7 @@ fn review_rejects_render_asset_drift_before_staging_outputs() {
         .review_build_request(
             reviewed_request("Stale Review"),
             &[],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("stale native assets must fail before review staging");
 
@@ -210,7 +210,7 @@ fn prepared_build_rejects_render_asset_drift_before_commit() {
             .review_build_request(
                 reviewed_request("Stale Assets"),
                 &[generate_title_plan("pco:item:generated", test_style(None))],
-                proflow_propresenter::PresentationSize::FULL_HD,
+                propresenter::PresentationSize::FULL_HD,
             )
             .expect("prepare reviewed build"),
     );
@@ -395,7 +395,7 @@ fn review_rejects_two_generated_overrides_with_one_physical_target() {
         .review_build_request(
             request,
             &[first, second],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("two generated entries cannot share one output target");
 
@@ -446,7 +446,7 @@ fn review_rejects_edit_and_generate_for_one_physical_target() {
         .review_build_request(
             request,
             &[generated, editable],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("edit and generate cannot share one output target");
 
@@ -495,7 +495,7 @@ fn review_rejects_restyle_and_edit_for_one_physical_target() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[restyled, edited],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("restyle and edit cannot share one target");
 
@@ -540,7 +540,7 @@ fn review_rejects_generated_target_selected_as_another_entries_source() {
         .review_build_request(
             request,
             &[generated, selected],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("a generated output cannot also be another entry's source");
 
@@ -589,7 +589,7 @@ fn prepare_generated_title(runtime: &TestRuntime, playlist_name: &str) -> Prepar
             .review_build_request(
                 reviewed_request(playlist_name),
                 &[generate_title_plan("pco:item:generated", test_style(None))],
-                proflow_propresenter::PresentationSize::FULL_HD,
+                propresenter::PresentationSize::FULL_HD,
             )
             .expect("prepare reviewed build"),
     )

@@ -122,37 +122,11 @@ live-data:
     if [[ "$(uname -s)" != Darwin ]]; then skip=(--skip workflow::execute::tests::); fi; \
     {{ cargo }} test -p proflow --lib --all-features -- --ignored ${skip[@]+"${skip[@]}"}
 
-# Native ProPresenter fidelity: schema-exact codecs and an independently
-# exported playlist reconstructed through the production writer.
+# Native ProPresenter fidelity of the proflow side. Codec, package, and schema
+# fidelity gates (`just parity`, `just proto`, `just parity-corpus`,
+# `just parity-library`) live in the shared `../propresenter` repository.
 parity:
-    {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity
-    {{ cargo }} test -p proflow-propresenter --test propresenter_native_export committed_independent_portable_export_has_complete_media_and_links -- --exact
-    {{ cargo }} test -p proflow-propresenter --lib native_zip::tests::writes_native_forced_zip64_records_and_global_member_order
-    {{ cargo }} test -p proflow-propresenter --lib package::tests::native_package_reconstruction_matches_evidenced_shape
-    {{ cargo }} test -p proflow-propresenter --lib render::slide_instance::tests::every_committed_native_template_instantiates_a_closed_local_graph -- --exact
     {{ cargo }} run --quiet --features dev-tools --bin parity_smoke >/dev/null
-
-# The checked-in prost output must match the authoritative ProPresenter schema.
-proto:
-    {{ cargo }} run --manifest-path tools/proto-gen/Cargo.toml -- --check
-
-# Audit a local ProPresenter app (or raw ProCore binary) for schema drift
-# against the checked-in baseline. Requires `just proto` to have emitted the
-# descriptor set. Exits nonzero on new drift or stale baseline entries.
-schema-audit app="/Applications/ProPresenter.app":
-    {{ cargo }} run --quiet --manifest-path tools/schema-audit/Cargo.toml -- "{{ app }}"
-
-# Audit a local directory of independent native exports without making that
-# machine-specific corpus part of the normal repository gate.
-parity-corpus corpus_dir:
-    PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity live_exported_playlist_documents_round_trip_byte_exactly -- --ignored --exact --nocapture
-    PROFLOW_LIVE_PLAYLIST_EXPORT_DIR="{{ corpus_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_native_export native_export_corpus_matches_evidenced_archive_and_media_shape -- --ignored --exact --nocapture
-
-# Audit a workstation library and its raw playlist document in place. The
-# tests are read-only and deliberately stay outside deterministic CI.
-parity-library library_dir:
-    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity live_native_presentations_round_trip_byte_exactly -- --ignored --exact --nocapture
-    PROFLOW_LIVE_LIBRARY_DIR="{{ library_dir }}" {{ cargo }} test -p proflow-propresenter --test propresenter_codec_fidelity live_playlist_document_round_trips_byte_exactly -- --ignored --exact --nocapture
 
 # External 1.0 gate after importing a generated playlist into the current
 # ProPresenter release and exporting its saved-back form. Pass both thumbnail
@@ -172,4 +146,4 @@ local: fmt check clippy test
 ci: local doctest doc audit deny machete
 
 # Heavy completion gate for invariant-sensitive changes.
-deep: ci parity proto prop mutants invariants live-data
+deep: ci parity prop mutants invariants live-data

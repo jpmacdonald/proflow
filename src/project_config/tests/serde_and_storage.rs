@@ -163,7 +163,7 @@ fn presentation_size_rejects_zero_dimensions() {
         serde_json::json!({"width": 0, "height": 1080}),
         serde_json::json!({"width": 1920, "height": 0}),
     ] {
-        serde_json::from_value::<proflow_propresenter::PresentationSize>(value)
+        serde_json::from_value::<propresenter::PresentationSize>(value)
             .expect_err("zero dimensions must not deserialize");
     }
 }

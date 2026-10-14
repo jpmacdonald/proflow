@@ -14,7 +14,7 @@ fn generated_target_appearing_after_preview_is_rejected() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("review absent target");
     let reviewed = expect_prepared(reviewed);
@@ -60,7 +60,7 @@ fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("wrong-sized generated target can be repaired");
     executor
@@ -75,8 +75,8 @@ fn generated_existing_target_is_rebuilt_at_full_hd_and_preserves_uuid() {
     .expect("decode rebuilt target");
     assert_eq!(rebuilt.uuid, existing_uuid);
     assert!(
-        proflow_propresenter::resolution::inspect_presentation_size(&rebuilt)
-            .matches(proflow_propresenter::PresentationSize::FULL_HD)
+        propresenter::resolution::inspect_presentation_size(&rebuilt)
+            .matches(propresenter::PresentationSize::FULL_HD)
     );
 }
 
@@ -97,7 +97,7 @@ fn generated_absent_target_gets_one_fresh_stable_uuid() {
             .review_build_request(
                 reviewed_request(&format!("Reviewed {build}")),
                 std::slice::from_ref(&plan),
-                proflow_propresenter::PresentationSize::FULL_HD,
+                propresenter::PresentationSize::FULL_HD,
             )
             .expect("prepare generated target");
         executor
@@ -118,7 +118,7 @@ fn generated_absent_target_gets_one_fresh_stable_uuid() {
         .review_build_request(
             reviewed_request("Reviewed stable"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("prepare stable rebuild");
     executor
@@ -166,7 +166,7 @@ fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
         .review_build_request(
             reviewed_request("Edited"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("wrong-sized edit source can be repaired");
     executor
@@ -186,10 +186,8 @@ fn edited_wrong_size_target_repairs_canvas_and_preserves_native_envelope() {
         edited.ccli.as_ref().map(|ccli| ccli.author.as_str()),
         Some("Preserved author")
     );
-    assert!(
-        proflow_propresenter::resolution::inspect_presentation_size(&edited)
-            .matches(proflow_propresenter::PresentationSize::FULL_HD)
-    );
+    assert!(propresenter::resolution::inspect_presentation_size(&edited)
+        .matches(propresenter::PresentationSize::FULL_HD));
 }
 
 #[test]
@@ -203,7 +201,7 @@ fn playlist_changed_after_preview_is_rejected() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("review playlist target");
     let reviewed = expect_prepared(reviewed);
@@ -238,7 +236,7 @@ fn review_rejects_a_symlink_output_target() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("lexical symlink and physical write targets must not diverge");
 
@@ -275,12 +273,12 @@ fn reviewed_background_keeps_canonical_identity_after_symlink_retarget() {
         super::review::ReviewedRequest::offline(reviewed_request("Reviewed"))
             .expect("reviewed request"),
         vec![generate_title_plan("pco:item:main", style)],
-        proflow_propresenter::PresentationSize::FULL_HD,
+        propresenter::PresentationSize::FULL_HD,
         root.path(),
         root.path(),
         std::iter::empty(),
         std::iter::empty(),
-        proflow_propresenter::library::LibraryCandidates::empty(),
+        propresenter::library::LibraryCandidates::empty(),
     )
     .expect("capture background");
 

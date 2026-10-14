@@ -14,11 +14,11 @@ use crate::workflow::presentation_render::{
     render_source_with_native_fit, resolved_macro_regions, CombinedScripturePassage,
     PresentationSource,
 };
-use proflow_propresenter::playlist::{canonical_presentation_name, PlaylistEntry};
-use proflow_propresenter::render::RenderedPresentation;
-use proflow_propresenter::text_fit::{CueTextFitSummary, NativeTextFitOracle};
-use proflow_propresenter::unstable_native::rv_data;
-use proflow_propresenter::SlideType;
+use propresenter::playlist::{canonical_presentation_name, PlaylistEntry};
+use propresenter::render::RenderedPresentation;
+use propresenter::text_fit::{CueTextFitSummary, NativeTextFitOracle};
+use propresenter::unstable_native::rv_data;
+use propresenter::SlideType;
 
 use super::super::{captured_source_bytes, BuildServiceError, ServiceBuildExecutor};
 use super::target::{write_generated_playlist_presentation, ReviewedRenderTarget};

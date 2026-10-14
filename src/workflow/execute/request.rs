@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::planning_center::PlanSnapshot;
 use crate::project_config::{BackgroundAssetPath, BackgroundId};
-use proflow_propresenter::playlist::PlaylistExportIntent;
+use propresenter::playlist::PlaylistExportIntent;
 
 use super::overrides::{validate_request_edits, EntryOverride};
 use thiserror::Error;
