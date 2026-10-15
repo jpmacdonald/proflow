@@ -162,3 +162,10 @@ proptest.workspace = true
 default = []
 dev-tools = ["propresenter/dev-tools"]
 integration_test = []
+
+# Keep source locations in workspace backtraces without full dependency debug data.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

@@ -206,8 +206,9 @@ Project-specific targets may override these, but the default shape is:
 - Test/harness files: `<= 800` lines unless fixture-heavy and intentionally
   isolated.
 
-These are review triggers, not mechanical excuses to split one concept across
-more files.
+`just structure` checks these limits during `just local`. A size violation
+requires a semantic split, not a mechanical division of one concept.
+A necessary exception must name its reason and scope in this guide and the audit.
 
 ## Red Flags
 
@@ -266,3 +267,21 @@ Before keeping a design, answer:
 7. Did this add a wrapper layer that only renames existing behavior?
 8. Can an agent make the wrong call sequence and still compile?
 9. Can the operator-visible outcome be explained in at most three files?
+
+## Build Storage
+
+- Use one target directory per workspace. Keep build flags stable across normal verification commands.
+- Keep source locations in development backtraces. Disable full dependency debug information.
+- Keep incremental compilation enabled for active development.
+- The local development-cache budget is 8 GiB. This is a maintenance threshold, not a build-time limit.
+- Run `just cache-status` weekly or when disk space is low.
+- If development artifacts exceed the budget, run `just cache-trim` while the workspace is idle.
+- Cleanup removes development artifacts and takes Cargo's build lock. The next development build recompiles them.
+- Release artifacts remain separate. Do not run cache cleanup from compilation or verification targets.
+
+## Crate Ownership
+
+- ProPresenter schema and format code belongs to the sibling `../propresenter` repository.
+- Proflow consumes that library by path. Do not restore a local copy or local schema-generation tools.
+- Add a crate only when it enforces a dependency boundary or isolates generated code.
+- Use modules to separate concepts that share the same dependency boundary.

@@ -26,6 +26,12 @@
 //! }
 //! ```
 
+mod error;
+pub use error::BuildDirError;
+
+mod identity;
+pub use identity::{BuildInputs, BuildPlanId, InputHash};
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File};
@@ -41,81 +47,6 @@ const SEAL_FILE: &str = "stage.json";
 const SEAL_VERSION: u32 = 1;
 const REVIEW_FILE: &str = "review.toml";
 const RETIRED_DIRECTORY: &str = "retired";
-
-/// Planning Center plan identity, checked to be one safe directory name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuildPlanId(String);
-
-impl BuildPlanId {
-    /// Accept 1 to 64 ASCII letters, digits, `-`, or `_`.
-    pub fn new(value: impl Into<String>) -> Result<Self, BuildDirError> {
-        let value = value.into();
-        let safe = !value.is_empty()
-            && value.len() <= 64
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-        if safe {
-            Ok(Self(value))
-        } else {
-            Err(BuildDirError::InvalidPlanId { value })
-        }
-    }
-
-    /// Return the plan identity text.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Everything a build is derived from, as the exact bytes that were read.
-#[derive(Debug, Clone, Copy)]
-pub struct BuildInputs<'a> {
-    /// Captured Planning Center plan snapshot.
-    pub plan_snapshot: &'a [u8],
-    /// Fingerprint of the project configuration and native display assets.
-    pub render_assets: &'a [u8],
-    /// Fingerprints of the Bible corpora the build reads.
-    pub bible_corpora: &'a [u8],
-    /// Every presentation in the library the review could match, by content.
-    pub library: &'a [u8],
-    /// The operator's decisions in canonical form.
-    pub review_decisions: &'a [u8],
-}
-
-/// SHA-256 over every build input, each bound to its name and length.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InputHash([u8; 32]);
-
-impl InputHash {
-    /// Hash one set of build inputs.
-    #[must_use]
-    pub fn of(inputs: &BuildInputs<'_>) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(INPUT_HASH_DOMAIN);
-        for (name, bytes) in [
-            ("plan_snapshot", inputs.plan_snapshot),
-            ("render_assets", inputs.render_assets),
-            ("bible_corpora", inputs.bible_corpora),
-            ("library", inputs.library),
-            ("review_decisions", inputs.review_decisions),
-        ] {
-            // Name and length keep a byte from moving between two inputs
-            // without changing the hash.
-            hasher.update((name.len() as u64).to_be_bytes());
-            hasher.update(name.as_bytes());
-            hasher.update((bytes.len() as u64).to_be_bytes());
-            hasher.update(bytes);
-        }
-        Self(hasher.finalize().into())
-    }
-}
-
-impl fmt::Display for InputHash {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&hex(&self.0))
-    }
-}
 
 mod sealed {
     pub trait Sealed {}
@@ -399,54 +330,6 @@ impl BuildDir<Classified> {
         sync_directory(&self.path)?;
         Ok(self)
     }
-}
-
-/// Why a build directory operation was refused.
-#[derive(Debug, thiserror::Error)]
-pub enum BuildDirError {
-    /// The plan identity cannot name a directory.
-    #[error("plan id '{value}' must be 1-64 ASCII letters, digits, '-' or '_'")]
-    InvalidPlanId {
-        /// Rejected identity.
-        value: String,
-    },
-    /// The stage was written by an earlier run; stages are never rewritten.
-    #[error("build stage '{stage}' is already written")]
-    AlreadyWritten {
-        /// Stage directory name.
-        stage: &'static str,
-    },
-    /// A stage holds something other than regular files and directories.
-    #[error("build stage '{stage}' contains unsupported entry {path}")]
-    UnsupportedEntry {
-        /// Stage directory name.
-        stage: &'static str,
-        /// Offending entry.
-        path: PathBuf,
-    },
-    /// The inputs recorded in the snapshot stage do not hash to the name of
-    /// the directory that holds them.
-    #[error("build directory {path} is not named by the inputs recorded in it")]
-    InputsMismatch {
-        /// Build directory whose name and recorded inputs disagree.
-        path: PathBuf,
-    },
-    /// A stage's files differ from what its seal recorded.
-    #[error("build stage '{stage}' does not match its seal: {detail}")]
-    SealMismatch {
-        /// Stage directory name.
-        stage: &'static str,
-        /// What differs.
-        detail: String,
-    },
-    /// Reading or writing the build directory failed.
-    #[error("build directory I/O failed at {path}: {source}")]
-    Io {
-        /// Path the operation touched.
-        path: PathBuf,
-        /// Underlying failure.
-        source: io::Error,
-    },
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]

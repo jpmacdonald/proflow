@@ -15,19 +15,22 @@
 //! and the rename. Environments that permit external writers during a build need
 //! an advisory lock above this transaction boundary to eliminate that race.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+mod commit;
+
+mod file_io;
+use file_io::exported_path;
+#[cfg(test)]
+use file_io::fingerprint_file;
+use file_io::{
+    concurrent_change_error, fingerprint_bytes, fingerprint_regular_file, read_optional,
+    remove_pending_stages, rollback_file,
+};
+
+use std::fs::{self, OpenOptions};
+use std::io;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use super::approval::{OutputManifest, OutputReviewError, PhysicalPath, ReviewedOutput};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileFingerprint {
-    length: u64,
-    sha256: [u8; 32],
-}
 
 #[derive(Debug)]
 struct StagedFile {
@@ -92,27 +95,6 @@ pub(crate) struct ExportedOutput {
 
 const ARTIFACTS_DIRECTORY: &str = "artifacts";
 const ORIGINALS_DIRECTORY: &str = "originals";
-
-fn exported_path(directory: &Path, kind: &str, index: usize) -> PathBuf {
-    directory.join(kind).join(format!("{index:03}"))
-}
-
-impl StagedArtifact {
-    /// Final reviewed target represented by the staging file.
-    pub(crate) fn target(&self) -> &Path {
-        &self.target
-    }
-
-    /// Exact staged byte length.
-    pub(crate) const fn length(&self) -> u64 {
-        self.length
-    }
-
-    /// SHA-256 of the exact staged bytes.
-    pub(crate) const fn sha256(&self) -> [u8; 32] {
-        self.sha256
-    }
-}
 
 impl BuildFileTransaction {
     /// Consume the exact reviewed output state before rendering begins.
@@ -264,376 +246,28 @@ impl BuildFileTransaction {
     }
 }
 
-impl PreparedFileTransaction {
-    /// Exact target fingerprints captured by [`BuildFileTransaction::seal`].
-    ///
-    /// This deliberately reports the frozen `prepared` values instead of
-    /// rereading staging paths. Receipt verification can therefore prove that
-    /// the committable transaction is the same artifact set whose evidence was
-    /// serialized, without opening another time-of-check/time-of-use window.
-    pub(crate) fn sealed_artifacts(&self) -> Vec<StagedArtifact> {
-        self.files
-            .iter()
-            .map(|file| StagedArtifact {
-                target: file.reviewed_path.requested_path().to_path_buf(),
-                length: file.prepared.length,
-                sha256: file.prepared.sha256,
-            })
-            .collect()
-    }
-
-    /// Copy every sealed artifact, and the bytes it will replace, into
-    /// `directory`, in commit order.
-    pub(crate) fn export(&self, directory: &Path) -> io::Result<Vec<ExportedOutput>> {
-        fs::create_dir(directory.join(ARTIFACTS_DIRECTORY))?;
-        fs::create_dir(directory.join(ORIGINALS_DIRECTORY))?;
-        self.files
-            .iter()
-            .enumerate()
-            .map(|(index, file)| {
-                let bytes = fs::read(&file.staged)?;
-                if fingerprint_bytes(&bytes)? != file.prepared {
-                    return Err(io::Error::other(format!(
-                        "prepared build artifact changed after preview: {}",
-                        file.reviewed_path.requested_path().display()
-                    )));
-                }
-                fs::write(exported_path(directory, ARTIFACTS_DIRECTORY, index), bytes)?;
-                if let Some(original) = &file.original {
-                    fs::write(
-                        exported_path(directory, ORIGINALS_DIRECTORY, index),
-                        original,
-                    )?;
-                }
-                Ok(ExportedOutput {
-                    target: file.reviewed_path.requested_path().to_path_buf(),
-                    length: file.prepared.length,
-                    sha256: crate::workflow::build_dir::hex(&file.prepared.sha256),
-                    replaces_existing: file.original.is_some(),
-                })
-            })
-            .collect()
-    }
-
-    /// Stage an exported artifact set again, beside its live targets.
-    ///
-    /// This goes through the same reviewed-output checks as a first render:
-    /// each target must still hold exactly the bytes recorded for it, and the
-    /// restaged bytes must match the fingerprints in `outputs`.
-    pub(crate) fn restage(
-        directory: &Path,
-        outputs: &[ExportedOutput],
-    ) -> Result<Self, OutputReviewError> {
-        let stage_error = |target: &Path, source: io::Error| OutputReviewError::Stage {
-            path: target.to_path_buf(),
-            source,
-        };
-        let recorded = outputs
-            .iter()
-            .enumerate()
-            .map(|(index, output)| {
-                let original = output
-                    .replaces_existing
-                    .then(|| fs::read(exported_path(directory, ORIGINALS_DIRECTORY, index)))
-                    .transpose()
-                    .map_err(|source| stage_error(&output.target, source))?;
-                Ok((output.target.clone(), original))
-            })
-            .collect::<Result<Vec<_>, OutputReviewError>>()?;
-        let mut transaction =
-            BuildFileTransaction::from_reviewed(OutputManifest::recorded(recorded)?);
-        for (index, output) in outputs.iter().enumerate() {
-            let staged = transaction.stage_reviewed(&output.target)?;
-            fs::copy(
-                exported_path(directory, ARTIFACTS_DIRECTORY, index),
-                &staged,
-            )
-            .map_err(|source| stage_error(&output.target, source))?;
-        }
-        let prepared = transaction.seal()?;
-        for (file, output) in prepared.files.iter().zip(outputs) {
-            if file.prepared.length != output.length
-                || crate::workflow::build_dir::hex(&file.prepared.sha256) != output.sha256
-            {
-                return Err(stage_error(
-                    &output.target,
-                    io::Error::other("rendered artifact does not match its recorded fingerprint"),
-                ));
-            }
-        }
-        Ok(prepared)
-    }
-
-    /// Read exact sealed bytes for native presentation targets.
-    ///
-    /// The returned bytes are fingerprint-checked against the sealed state.
-    /// Commit repeats that check, so any later staging-file edit aborts before
-    /// replacing a live target.
-    pub(crate) fn presentation_artifacts(&self) -> io::Result<Vec<(PathBuf, Vec<u8>)>> {
-        self.files
-            .iter()
-            .filter(|file| {
-                file.reviewed_path
-                    .requested_path()
-                    .extension()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("pro"))
-            })
-            .map(|file| {
-                let bytes = fs::read(&file.staged)?;
-                if fingerprint_bytes(&bytes)? != file.prepared {
-                    return Err(io::Error::other(format!(
-                        "prepared build artifact changed after preview: {}",
-                        file.reviewed_path.requested_path().display()
-                    )));
-                }
-                Ok((file.reviewed_path.requested_path().to_path_buf(), bytes))
-            })
-            .collect()
-    }
-
-    /// Commit in reservation order. Callers reserve the playlist last.
-    pub(crate) fn commit(self) -> io::Result<Vec<PathBuf>> {
-        #[cfg(test)]
-        {
-            self.commit_inner(None)
-        }
-        #[cfg(not(test))]
-        {
-            self.commit_inner()
-        }
-    }
-
-    fn commit_inner(
-        mut self,
-        #[cfg(test)] mut before_recheck: Option<BeforeRecheck<'_>>,
-    ) -> io::Result<Vec<PathBuf>> {
-        self.verify_targets_unchanged()?;
-        self.verify_staged_unchanged()?;
-
-        for committed in 0..self.files.len() {
-            #[cfg(test)]
-            {
-                let target = self.files[committed].reviewed_path.requested_path();
-                if let Some(before_recheck) = before_recheck.as_mut() {
-                    if let Err(error) = before_recheck(committed, target) {
-                        return Err(self.commit_failure(committed, error));
-                    }
-                }
-            }
-            if let Err(error) = self.verify_target_unchanged(committed) {
-                return Err(self.commit_failure(committed, error));
-            }
-            if let Err(error) = self.verify_staged_file_unchanged(committed) {
-                return Err(self.commit_failure(committed, error));
-            }
-            if let Err(error) = fs::rename(
-                &self.files[committed].staged,
-                self.files[committed].reviewed_path.requested_path(),
-            ) {
-                return Err(self.commit_failure(committed, error));
-            }
-            self.files[committed].installed = Some(self.files[committed].prepared);
-        }
-
-        let targets = self
-            .files
-            .iter()
-            .map(|file| file.reviewed_path.requested_path().to_path_buf())
-            .collect();
-        self.files.clear();
-        Ok(targets)
-    }
-
-    #[cfg(test)]
-    fn commit_with_before_recheck(
-        self,
-        mut before_recheck: impl FnMut(usize, &Path) -> io::Result<()>,
-    ) -> io::Result<Vec<PathBuf>> {
-        self.commit_inner(Some(&mut before_recheck))
-    }
-
-    fn verify_targets_unchanged(&self) -> io::Result<()> {
-        for index in 0..self.files.len() {
-            self.verify_target_unchanged(index)?;
-        }
-        Ok(())
-    }
-
-    fn verify_staged_unchanged(&self) -> io::Result<()> {
-        for index in 0..self.files.len() {
-            self.verify_staged_file_unchanged(index)?;
-        }
-        Ok(())
-    }
-
-    fn verify_staged_file_unchanged(&self, index: usize) -> io::Result<()> {
-        let file = &self.files[index];
-        let actual = fingerprint_regular_file(&file.staged)?;
-        if actual != file.prepared {
-            return Err(io::Error::other(format!(
-                "prepared build artifact changed after preview: {}",
-                file.reviewed_path.requested_path().display()
-            )));
-        }
-        Ok(())
-    }
-
-    fn verify_target_unchanged(&self, index: usize) -> io::Result<()> {
-        let file = &self.files[index];
-        if file.reviewed_path.verify_identity().is_err() {
-            return Err(concurrent_change_error(file.reviewed_path.requested_path()));
-        }
-        let current = read_optional(file.reviewed_path.as_path())?;
-        if current != file.original {
-            return Err(concurrent_change_error(file.reviewed_path.requested_path()));
-        }
-        Ok(())
-    }
-
-    fn commit_failure(&self, committed: usize, error: io::Error) -> io::Error {
-        match self.rollback_prefix(committed) {
-            Ok(()) => error,
-            Err(rollback) => io::Error::other(format!(
-                "commit failed: {error}; rollback also failed: {rollback}"
-            )),
-        }
-    }
-
-    fn rollback_prefix(&self, committed: usize) -> io::Result<()> {
-        let mut first_error = None;
-        for file in self.files[..committed].iter().rev() {
-            if let Err(error) = rollback_file(file) {
-                if first_error.is_none() {
-                    first_error = Some(error);
-                }
-            }
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-}
-
-impl Drop for BuildFileTransaction {
-    fn drop(&mut self) {
-        for reviewed in &self.outputs {
-            if let Some(staged) = &reviewed.staged {
-                let _ = fs::remove_file(&staged.path);
-            }
-        }
-    }
-}
-
-impl Drop for StagedFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.staged);
-    }
-}
-
-fn remove_pending_stages(outputs: impl IntoIterator<Item = PendingReviewedOutput>) {
-    for reviewed in outputs {
-        if let Some(staged) = reviewed.staged {
-            let _ = fs::remove_file(staged.path);
-        }
-    }
-}
-
-fn rollback_file(file: &StagedFile) -> io::Result<()> {
-    let installed = file.installed.ok_or_else(|| {
-        io::Error::other(format!(
-            "cannot roll back '{}' without installed-byte state",
-            file.reviewed_path.requested_path().display()
-        ))
-    })?;
-    let current = fingerprint_file(file.reviewed_path.requested_path())?;
-    if current != installed {
-        return Err(concurrent_change_error(file.reviewed_path.requested_path()));
-    }
-
-    file.original.as_ref().map_or_else(
-        || fs::remove_file(file.reviewed_path.requested_path()),
-        |bytes| atomic_restore(file.reviewed_path.requested_path(), bytes),
-    )
-}
-
-fn fingerprint_file(path: &Path) -> io::Result<FileFingerprint> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let length = io::copy(&mut file, &mut hasher)?;
-    Ok(FileFingerprint {
-        length,
-        sha256: hasher.finalize().into(),
-    })
-}
-
-fn fingerprint_regular_file(path: &Path) -> io::Result<FileFingerprint> {
-    ensure_regular_file(path)?;
-    let fingerprint = fingerprint_file(path)?;
-    ensure_regular_file(path)?;
-    Ok(fingerprint)
-}
-
-fn ensure_regular_file(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        return Err(io::Error::other(format!(
-            "staged build artifact is a symlink: {}",
-            path.display()
-        )));
-    }
-    if !metadata.is_file() {
-        return Err(io::Error::other(format!(
-            "staged build artifact is not a regular file: {}",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn fingerprint_bytes(bytes: &[u8]) -> io::Result<FileFingerprint> {
-    let length = u64::try_from(bytes.len())
-        .map_err(|_| io::Error::other("build artifact is too large to fingerprint"))?;
-    Ok(FileFingerprint {
-        length,
-        sha256: Sha256::digest(bytes).into(),
-    })
-}
-
-fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-fn concurrent_change_error(target: &Path) -> io::Error {
-    io::Error::other(format!(
-        "build output target changed concurrently: {}",
-        target.display()
-    ))
-}
-
-fn atomic_restore(target: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    let filename = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact");
-    let staged = parent.join(format!(
-        ".{filename}.proflow-restore-{}",
-        uuid::Uuid::new_v4()
-    ));
-    let result = (|| {
-        let mut file = File::create(&staged)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&staged, target)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(staged);
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileFingerprint {
+    length: u64,
+    sha256: [u8; 32],
+}
+
+impl StagedArtifact {
+    /// Final reviewed target represented by the staging file.
+    pub(crate) fn target(&self) -> &Path {
+        &self.target
+    }
+
+    /// Exact staged byte length.
+    pub(crate) const fn length(&self) -> u64 {
+        self.length
+    }
+
+    /// SHA-256 of the exact staged bytes.
+    pub(crate) const fn sha256(&self) -> [u8; 32] {
+        self.sha256
+    }
+}

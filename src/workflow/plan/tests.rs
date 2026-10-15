@@ -3,7 +3,7 @@
 use crate::project_config::MacroName;
 use std::collections::BTreeMap;
 
-use super::item::OutputKeyError;
+use super::output_key::OutputKeyError;
 use super::*;
 use propresenter::SlideType;
 
