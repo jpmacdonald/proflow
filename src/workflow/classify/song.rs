@@ -143,12 +143,21 @@ fn use_existing_song_action(
         SongLibraryMatch::Resolved(path) => {
             resolved_song_action(path, arrangement, restyle, file_index)
         }
-        SongLibraryMatch::Candidate(path) => (
-            PlanDisposition::NeedsReview(ReviewContext::song_candidate(song_action(
-                path, arrangement.name().map(str::to_string), restyle,
-            ))),
-            format!("Possible library match requires an explicit file selection: {path}"),
-        ),
+        // The candidate carries the arrangement the file resolves to, so
+        // confirming it never names an arrangement the file lacks.
+        SongLibraryMatch::Candidate(path) => {
+            match resolved_song_action(path, arrangement, restyle, file_index) {
+                (PlanDisposition::Ready(action), _) => (
+                    PlanDisposition::NeedsReview(ReviewContext::song_candidate(action)),
+                    format!("Possible library match requires an explicit file selection: {path}"),
+                ),
+                // Choosing one of the file's arrangements confirms the file too.
+                (unresolved, reason) => (
+                    unresolved,
+                    format!("Possible library match {path}: {reason}"),
+                ),
+            }
+        }
         SongLibraryMatch::Ambiguous(paths) => (
             PlanDisposition::NeedsReview(ReviewContext::file_choices(paths)),
             "Song title matches multiple library files; select the intended file explicitly".to_string(),

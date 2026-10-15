@@ -153,15 +153,15 @@ pub enum BuildServiceError {
         item: String,
     },
     /// Rendering or packaging one plan item failed.
-    #[error("{title} ({output_key}): {source}")]
+    #[error("{title} ({output_key}): {failure}")]
     Item {
         /// Stable identity of the item.
         output_key: String,
         /// The item's Planning Center title.
         title: String,
-        /// What went wrong for it.
-        #[source]
-        source: Box<Self>,
+        /// What went wrong for it. Shown in the message, not chained as a
+        /// source, so a printed error chain names it once.
+        failure: Box<Self>,
     },
     /// The plan's recorded decisions could not be read or applied.
     #[error(transparent)]
@@ -441,7 +441,7 @@ impl BuildServiceError {
     #[must_use]
     pub fn cause(&self) -> &Self {
         match self {
-            Self::Item { source, .. } => source.cause(),
+            Self::Item { failure, .. } => failure.cause(),
             other => other,
         }
     }

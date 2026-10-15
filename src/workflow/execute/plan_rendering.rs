@@ -44,10 +44,10 @@ impl ServiceBuildExecutor<'_> {
         let mut rendered = RenderedService::new(transaction, text_fit.contract().clone());
         for plan in plans {
             // Whatever goes wrong for one item, the failure says which item.
-            let for_item = |source: BuildServiceError| BuildServiceError::Item {
+            let for_item = |failure: BuildServiceError| BuildServiceError::Item {
                 output_key: plan.output_key.to_string(),
                 title: plan.pco_title.clone(),
-                source: Box::new(source),
+                failure: Box::new(failure),
             };
             let background = reviewed_background(plan, backgrounds, sources).map_err(for_item)?;
             let output = self

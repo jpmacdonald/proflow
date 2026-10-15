@@ -19,6 +19,27 @@ fn song_runtime(root: &Path, files: &[(&str, &[Arrangement<'_>])]) -> TestRuntim
     runtime
 }
 
+/// A runtime whose song rule names no file, so the library search decides.
+fn searched_song_runtime(root: &Path, file: &str, arrangements: &[Arrangement<'_>]) -> TestRuntime {
+    let mut runtime = song_runtime(root, &[(file, arrangements)]);
+    let config = serde_json::json!({
+        "version": 4,
+        "presentation_types": {
+            "song": {
+                "kind": "song",
+                "content_source": "song",
+                "output_strategy": "preserve_existing"
+            }
+        },
+        "item_rules": [{ "id": "song", "match": { "category": "song" }, "use_type": "song" }]
+    });
+    runtime.replace_config(
+        crate::project_config::parse_project_config_str(&config.to_string())
+            .expect("song config should parse"),
+    );
+    runtime
+}
+
 fn review_song(
     runtime: &TestRuntime,
     request: BuildRequest,
@@ -134,6 +155,81 @@ fn an_unavailable_arrangement_offers_the_arrangements_the_file_defines() {
     );
     assert!(resolved.open_decisions().is_empty());
     assert_eq!(resolved.plans()[0].arrangement(), Some("Full"));
+}
+
+#[test]
+fn a_possible_match_is_offered_with_the_arrangement_the_file_resolves_to() {
+    // Regression: the candidate carried Planning Center's 'Default
+    // Arrangement' verbatim, and taking it failed the build because the file
+    // calls its arrangement 'Default'.
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = searched_song_runtime(
+        root.path(),
+        "This Is Amazing Grace.pro",
+        &[("Default", Some("11111111-1111-4111-8111-111111111111"))],
+    );
+
+    let review = review_song(
+        &runtime,
+        reviewed_request("Decided"),
+        Some("Default Arrangement"),
+    );
+    let [decision] = review
+        .open_decisions()
+        .try_into()
+        .expect("one open decision");
+    assert_eq!(decision.kind, DecisionKind::WhichFile);
+    let [confirm, _skip] = decision.options.as_slice() else {
+        panic!("the file and leaving it out: {:?}", summaries(&decision));
+    };
+    assert!(
+        confirm.summary.ends_with("with arrangement 'Default'"),
+        "{}",
+        confirm.summary
+    );
+
+    let resolved = review_song(
+        &runtime,
+        decided(&runtime, &decision, &confirm.choice),
+        Some("Default Arrangement"),
+    );
+    assert!(resolved.open_decisions().is_empty());
+    assert_eq!(resolved.plans()[0].arrangement(), Some("Default"));
+}
+
+#[test]
+fn a_possible_match_whose_arrangement_is_unavailable_asks_for_one_of_its_arrangements() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let runtime = searched_song_runtime(
+        root.path(),
+        "This Is Amazing Grace.pro",
+        &[
+            ("Short", Some("11111111-1111-4111-8111-111111111111")),
+            ("Full", Some("22222222-2222-4222-8222-222222222222")),
+        ],
+    );
+
+    let review = review_song(&runtime, reviewed_request("Decided"), Some("Evening"));
+    let [decision] = review
+        .open_decisions()
+        .try_into()
+        .expect("one open decision");
+    assert_eq!(decision.kind, DecisionKind::WhichArrangement);
+    assert_eq!(
+        summaries(&decision),
+        [
+            "use arrangement 'Short'",
+            "use arrangement 'Full'",
+            "leave it out of the playlist"
+        ]
+    );
+    let resolved = review_song(
+        &runtime,
+        decided(&runtime, &decision, &decision.options[0].choice),
+        Some("Evening"),
+    );
+    assert!(resolved.open_decisions().is_empty());
+    assert_eq!(resolved.plans()[0].arrangement(), Some("Short"));
 }
 
 #[test]
