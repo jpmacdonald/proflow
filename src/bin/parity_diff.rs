@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use proflow_propresenter::package::{
+use propresenter::package::{
     compare_playlist_packages, embedded_presentation_structures, infer_archive_shape,
     presentation_items, read_playlist_package, EmbeddedPresentationStructure, PlaylistArchiveShape,
     PlaylistItemSummary, PlaylistPackageComparison,

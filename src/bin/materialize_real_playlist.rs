@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use proflow_propresenter::live::materialize_live_playlist;
+use propresenter::live::materialize_live_playlist;
 
 fn main() -> ExitCode {
     match run() {

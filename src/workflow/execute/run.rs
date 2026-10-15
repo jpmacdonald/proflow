@@ -5,8 +5,8 @@ use crate::workflow::build_dir::{BuildDir, Classified, Rendered, Verified};
 use crate::workflow::report::BuildServiceResult;
 use crate::workflow::transaction::BuildFileTransaction;
 use crate::workflow::transaction::PreparedFileTransaction;
-use proflow_propresenter::library::{LibraryCatalog, PreparedLibraryUpdate};
-use proflow_propresenter::text_fit::FontProgramSnapshot;
+use propresenter::library::{LibraryCatalog, PreparedLibraryUpdate};
+use propresenter::text_fit::FontProgramSnapshot;
 
 use super::build_stages::ReviewedDecisions;
 use super::receipt::{
@@ -46,7 +46,7 @@ impl ServiceBuildExecutor<'_> {
             reviewed.sources(),
             transaction,
         )?;
-        let expected_playlist_path = proflow_propresenter::playlist::playlist_output_path(
+        let expected_playlist_path = propresenter::playlist::playlist_output_path(
             self.render_assets.locations().playlist_output(),
             &bound_request.playlist_name,
         );

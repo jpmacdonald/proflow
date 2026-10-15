@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use thiserror::Error;
 
-use proflow_propresenter::groups::GroupCatalog;
-use proflow_propresenter::library::LibraryCatalog;
-use proflow_propresenter::playlist::PlaylistMetadata;
+use propresenter::groups::GroupCatalog;
+use propresenter::library::LibraryCatalog;
+use propresenter::playlist::PlaylistMetadata;
 
 use crate::bible::{BibleCorpusError, BibleCorpusSnapshot};
 use crate::config::Config;

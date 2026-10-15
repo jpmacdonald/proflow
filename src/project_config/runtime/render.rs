@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::identity::{MacroName, NameRejection, ThemeSlideName};
 use crate::project_config::{BackgroundAssetPath, BackgroundId};
-use proflow_propresenter::presentation_spec::{CueRoleId, PresentationSpecError};
+use propresenter::presentation_spec::{CueRoleId, PresentationSpecError};
 
 /// A background identifier resolved to the exact project asset used by a plan.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

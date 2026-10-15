@@ -11,7 +11,7 @@ use crate::workflow::plan::{
     ExistingTransform, OutputKey, PlanDisposition, ReadyAction, RenderStyle, ResolvedItemPlan,
     ReviewContext,
 };
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 
 pub(super) enum StaticPolicy {
     Review,

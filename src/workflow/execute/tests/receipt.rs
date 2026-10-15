@@ -25,7 +25,7 @@ fn receipt_commits_exact_source_artifact_and_structure_evidence() {
                 .review_build_request(
                     reviewed_request("Receipt Evidence"),
                     &[library, generated],
-                    proflow_propresenter::PresentationSize::FULL_HD,
+                    propresenter::PresentationSize::FULL_HD,
                 )
                 .expect("prepare reviewed build"),
         ))
@@ -275,7 +275,7 @@ fn receipt_target_drift_after_review_aborts_the_whole_build() {
             .review_build_request(
                 reviewed_request("Receipt Drift"),
                 &[],
-                proflow_propresenter::PresentationSize::FULL_HD,
+                propresenter::PresentationSize::FULL_HD,
             )
             .expect("prepare reviewed build"),
     );
@@ -320,7 +320,7 @@ fn final_presentation_reference_diagnostics_block_preparation() {
         .review_build_request(
             reviewed_request("Invalid Structure"),
             &[use_existing_plan("pco:item:dangling", source)],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("dangling presentation references must block preparation");
 

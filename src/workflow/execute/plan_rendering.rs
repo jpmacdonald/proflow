@@ -8,9 +8,9 @@ use crate::workflow::plan::{
     PlanDisposition, ReadyAction, RenderStyle, ResolvedItemPlan, ScriptureContent,
 };
 use crate::workflow::transaction::BuildFileTransaction;
-use proflow_propresenter::playlist::{PlaylistEntry, PlaylistError};
-use proflow_propresenter::text_fit::NativeTextFitOracle;
-use proflow_propresenter::PresentationSize;
+use propresenter::playlist::{PlaylistEntry, PlaylistError};
+use propresenter::text_fit::NativeTextFitOracle;
+use propresenter::PresentationSize;
 
 use super::presentation_output::{ReviewedBackgroundAsset, ReviewedRenderTarget};
 use super::rendered_service::{
@@ -210,7 +210,7 @@ impl ServiceBuildExecutor<'_> {
                 output_key: plan.output_key.to_string(),
             }
         })?;
-        let final_presentation = proflow_propresenter::deserialize::decode_presentation_bytes(
+        let final_presentation = propresenter::deserialize::decode_presentation_bytes(
             final_bytes,
             playlist_entry.presentation_path(),
         )?;

@@ -7,7 +7,7 @@ use super::request::RequestError;
 use super::request::{canonical_presentation_source, validate_identity, validate_path_identity};
 use crate::project_config::{BackgroundAssetPath, BackgroundId};
 use crate::workflow::plan::{ReadyAction, ResolvedBackground, ResolvedItemPlan};
-use proflow_propresenter::SlideType;
+use propresenter::SlideType;
 
 /// Per-entry override applied during service build execution.
 ///

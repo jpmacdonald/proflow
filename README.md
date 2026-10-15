@@ -218,9 +218,10 @@ parse -> normalize -> plan -> render -> validate -> export
 - `src/workstation.rs` is the one composition root. It loads credentials,
   project config, Bible corpora, the library catalog, and display assets as a
   unit, and performs the Planning Center reads around the executor.
-- `crates/propresenter/` is the `proflow-propresenter` crate. It owns native
-  formats, rendering, arrangements, media discovery, text fit, and package
-  serialization, and it cannot depend on workflow or project policy.
+- The `propresenter` crate (sibling repository `../propresenter`, shared with
+  pew) owns native formats, rendering, arrangements, media discovery, text fit,
+  and package serialization, and it cannot depend on workflow or project
+  policy. Clone it next to this repository; proflow depends on it by path.
 - `src/mcp/` exposes the workflow without owning domain policy.
 - `src/setup/` reports installed asset facts.
 

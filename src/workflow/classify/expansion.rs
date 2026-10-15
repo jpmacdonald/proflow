@@ -12,7 +12,7 @@ use crate::workflow::classify_matching::strip_speaker;
 use crate::workflow::plan::{
     ItemKind, OutputKey, PlanDisposition, ResolvedItemPlan, ReviewContext,
 };
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn process_expansion(

@@ -3,8 +3,8 @@
 use super::*;
 use crate::workflow::execute::{DecisionKind, DecisionOption};
 use crate::workflow::report::{BuildEntryAction, BuildServiceEntry};
-use proflow_propresenter::playlist::PlaylistExportMode;
-use proflow_propresenter::text_fit::TextFitContractSummary;
+use propresenter::playlist::PlaylistExportMode;
+use propresenter::text_fit::TextFitContractSummary;
 
 fn parse(line: &str) -> Result<Invocation, UsageError> {
     Invocation::parse(line.split_whitespace().map(ToString::to_string))

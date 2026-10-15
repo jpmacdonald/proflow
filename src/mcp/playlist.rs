@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use proflow_propresenter::playlist_document::{
+use propresenter::playlist_document::{
     read_library_playlist_document, read_package_playlist_document, PlaylistDocument,
     PlaylistDocumentError,
 };

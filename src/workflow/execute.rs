@@ -19,20 +19,20 @@ use super::report::BuildServiceResult;
 use crate::bible::{BibleCorpusError, BibleCorpusSnapshot};
 use crate::planning_center::identity::PlanIdentityError;
 use crate::planning_center::{PlanCaptureError, PlanFreshnessError, PlanLookup, PlanSnapshot};
-use proflow_propresenter::arrangement::RetainOperatorCuesError;
-use proflow_propresenter::background::{
+use propresenter::arrangement::RetainOperatorCuesError;
+use propresenter::background::{
     ArrangementBackgroundError, BackgroundImageError, OperatorEntryBackgroundError,
 };
-use proflow_propresenter::deserialize::ProPresenterError;
-use proflow_propresenter::generated_document::GeneratedPresentationError;
-use proflow_propresenter::library::{LibraryCatalog, LibraryCatalogError};
-use proflow_propresenter::macros::MacroApplyError;
-use proflow_propresenter::playlist::{
+use propresenter::deserialize::ProPresenterError;
+use propresenter::generated_document::GeneratedPresentationError;
+use propresenter::library::{LibraryCatalog, LibraryCatalogError};
+use propresenter::macros::MacroApplyError;
+use propresenter::playlist::{
     canonical_presentation_name, CanonicalPresentationNameError, PlaylistError, PlaylistMetadata,
     SelectedArrangementError,
 };
-use proflow_propresenter::serialize::SerializeError;
-use proflow_propresenter::text_fit::FontProgramFreshnessError;
+use propresenter::serialize::SerializeError;
+use propresenter::text_fit::FontProgramFreshnessError;
 
 mod build_stages;
 mod decision_options;
@@ -77,7 +77,7 @@ use self::request::BoundBuildRequest;
 #[cfg(test)]
 use super::plan::{ItemKind, PlanDisposition, ReadyAction, RenderStyle, ResolvedBackground};
 #[cfg(test)]
-use proflow_propresenter::unstable_native::rv_data;
+use propresenter::unstable_native::rv_data;
 #[cfg(test)]
 use uuid::Uuid;
 
@@ -244,7 +244,7 @@ pub enum BuildServiceError {
         /// Stable reviewed output identity.
         output_key: String,
         /// Exact semantic reference diagnostics from the final bytes.
-        diagnostics: Vec<proflow_propresenter::inspection::PresentationReferenceDiagnostic>,
+        diagnostics: Vec<propresenter::inspection::PresentationReferenceDiagnostic>,
     },
     /// Exact final native bytes violate the semantic contract derived from the
     /// reviewed plan.
@@ -258,7 +258,7 @@ pub enum BuildServiceError {
     },
     /// Existing native bytes cannot be represented exactly enough to edit.
     #[error(transparent)]
-    NativeEdit(#[from] proflow_propresenter::native_document::NativeEditError),
+    NativeEdit(#[from] propresenter::native_document::NativeEditError),
     /// A checked playlist arrangement could not produce an exact effective
     /// operator traversal for receipt evidence.
     #[error("could not derive effective playlist traversal for '{output_key}': {source}")]
@@ -267,7 +267,7 @@ pub enum BuildServiceError {
         output_key: String,
         /// Native arrangement/group/cue traversal failure.
         #[source]
-        source: proflow_propresenter::arrangement::OperatorTraversalError,
+        source: propresenter::arrangement::OperatorTraversalError,
     },
     /// Receipt traversal could not bind normalized playlist arrangement
     /// identity back to the exact native UUID spelling.
@@ -279,7 +279,7 @@ pub enum BuildServiceError {
         arrangement: String,
         /// Native arrangement identity failure.
         #[source]
-        source: proflow_propresenter::arrangement::ArrangementSelectionError,
+        source: propresenter::arrangement::ArrangementSelectionError,
     },
     /// A presentation-producing plan emitted no exact bytes for evidence.
     #[error("final playlist entry for '{output_key}' has no embedded presentation bytes")]
@@ -350,7 +350,7 @@ pub enum BuildServiceError {
     MacroApply(#[from] MacroApplyError),
     /// A legacy presentation could not be normalized to the configured canvas.
     #[error(transparent)]
-    PresentationResize(#[from] proflow_propresenter::resolution::PresentationResizeError),
+    PresentationResize(#[from] propresenter::resolution::PresentationResizeError),
     /// A checked presentation specification could not be rendered.
     #[error(transparent)]
     PresentationRender(#[from] PresentationRenderError),
@@ -390,7 +390,7 @@ pub enum BuildServiceError {
         /// Stable reviewed output identity.
         output_key: String,
         /// Project-owned required dimensions.
-        expected: proflow_propresenter::PresentationSize,
+        expected: propresenter::PresentationSize,
         /// First concrete mismatch found.
         actual: String,
     },

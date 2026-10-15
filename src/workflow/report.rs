@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::workflow::ExpectedPresentationContract;
-use proflow_propresenter::inspection::PresentationStructureSummary;
-use proflow_propresenter::playlist::PlaylistExportMode;
-use proflow_propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
+use propresenter::inspection::PresentationStructureSummary;
+use propresenter::playlist::PlaylistExportMode;
+use propresenter::text_fit::{CueTextFitSummary, TextFitContractSummary};
 
 /// What the build did for one plan entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

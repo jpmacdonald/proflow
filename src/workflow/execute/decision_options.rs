@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use crate::workflow::plan::{ReadyAction, ResolvedItemPlan};
-use proflow_propresenter::library::{LibraryArrangement, LibraryCatalog};
+use propresenter::library::{LibraryArrangement, LibraryCatalog};
 
 use super::decisions::{DecisionChoice, DecisionKind, DecisionOption, EntryOverrideAction};
 use super::overrides::{apply_override, EntryOverride};

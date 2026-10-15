@@ -13,7 +13,7 @@ use crate::workflow::plan::{
     BackgroundTransform, CueTransform, ExistingTransform, MacroTransform, OutputKey,
     PlanDisposition, ReadyAction, ResolvedItemPlan,
 };
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 #[test]

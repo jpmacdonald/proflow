@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::classify_matching::strip_speaker;
 use crate::project_config::DescriptionParserKind;
-use proflow_propresenter::text_flow::TextFlowSegment;
+use propresenter::text_flow::TextFlowSegment;
 /// Semantic speaker for one parsed text run.
 ///
 /// Runtime macros and editor colors are selected from this role. They are

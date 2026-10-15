@@ -126,11 +126,7 @@ fn review_rejects_override_with_wrong_size_before_approval() {
 
     let error = runtime
         .executor()
-        .review_build_request(
-            request,
-            &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
-        )
+        .review_build_request(request, &[plan], propresenter::PresentationSize::FULL_HD)
         .expect_err("the override must be refused");
     assert!(matches!(
         error.cause(),
@@ -166,11 +162,7 @@ fn review_rejects_override_with_missing_arrangement_before_approval() {
 
     let error = runtime
         .executor()
-        .review_build_request(
-            request,
-            &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
-        )
+        .review_build_request(request, &[plan], propresenter::PresentationSize::FULL_HD)
         .expect_err("the override must be refused");
     assert!(matches!(
         error.cause(),
@@ -214,7 +206,7 @@ fn unresolved_plan_cannot_cross_the_prepared_build_boundary() {
         .review_build_request(
             reviewed_request("Blocked"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("capture unresolved review");
 
@@ -245,7 +237,7 @@ fn unresolved_proposal_does_not_capture_executable_sources() {
         .review_build_request(
             reviewed_request("Blocked"),
             &[plan],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("unresolved proposals are diagnostic, not executable");
 

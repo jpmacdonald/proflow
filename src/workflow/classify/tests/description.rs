@@ -5,7 +5,7 @@ use crate::project_config::{MacroName, ThemeSlideName};
 use crate::workflow::classify::{build_plan, PreviewEntry};
 use crate::workflow::description_parser::{ParsedContent, ParsedSegment, SpeakerRole};
 use crate::workflow::plan::{CueMacro, PlanDisposition, ReadyAction, RenderRole};
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 #[test]

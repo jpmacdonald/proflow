@@ -15,7 +15,7 @@ fn changed_reviewed_source_is_rejected_before_commit() {
         .review_build_request(
             reviewed_request("Reviewed"),
             &[use_existing_plan("pco:item:main", source.clone())],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("capture reviewed request");
     let reviewed = expect_prepared(reviewed);
@@ -52,7 +52,7 @@ fn source_drift_while_waiting_for_catalog_lock_is_rejected() {
         .review_build_request(
             reviewed_request("Catalog Wait"),
             &[use_existing_plan("pco:item:main", source.clone())],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("capture reviewed request");
     let reviewed = expect_prepared(reviewed);
@@ -95,7 +95,7 @@ fn reviewed_build_uses_bound_identity_without_refetch() {
                 "pco:item:main",
                 PlanDisposition::NeedsReview(ReviewContext::new(None)),
             )],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("review bound request");
     let reviewed = expect_prepared(reviewed);
@@ -133,11 +133,7 @@ fn additional_portable_media_is_canonicalized_and_embedded() {
         archive_path: Some("extras/background.png".to_string()),
     }]);
     let reviewed = executor
-        .review_build_request(
-            request,
-            &[],
-            proflow_propresenter::PresentationSize::FULL_HD,
-        )
+        .review_build_request(request, &[], propresenter::PresentationSize::FULL_HD)
         .expect("additional media is a supported portable package member");
     let reviewed = expect_prepared(reviewed);
     let canonical = media.canonicalize().expect("canonical media path");
@@ -152,7 +148,7 @@ fn additional_portable_media_is_canonicalized_and_embedded() {
     let result = executor
         .build_prepared_offline(reviewed)
         .expect("commit portable package");
-    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
+    let package = propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read portable package");
     assert_eq!(result.media_asset_count, 1);
     assert_eq!(
@@ -210,7 +206,7 @@ fn portable_review_captures_managed_background() {
                 "pco:item:main",
                 test_style(Some(test_background("default"))),
             )],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("capture portable background");
     let reviewed = expect_prepared(reviewed);
@@ -254,7 +250,7 @@ fn portable_review_rejects_custom_identity_for_managed_background() {
                 "pco:item:main",
                 test_style(Some(test_background("default"))),
             )],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect_err("managed media keeps its native archive identity");
 
@@ -328,7 +324,7 @@ fn portable_review_prefers_show_relative_theme_media_over_stored_absolute_path()
         .review_build_request(
             request,
             &[generate_title_plan("pco:item:main", test_style(None))],
-            proflow_propresenter::PresentationSize::FULL_HD,
+            propresenter::PresentationSize::FULL_HD,
         )
         .expect("capture theme media");
     let reviewed = expect_prepared(reviewed);
@@ -355,7 +351,7 @@ fn assert_show_relative_export(
     canonical: &Path,
     stale_media: &Path,
 ) {
-    let package = proflow_propresenter::package::read_playlist_package(&result.playlist_path)
+    let package = propresenter::package::read_playlist_package(&result.playlist_path)
         .expect("read portable theme package");
     let canonical_string = canonical.display().to_string();
     assert_eq!(
@@ -375,7 +371,7 @@ fn assert_show_relative_export(
         .embedded_file_details()
         .find(|member| member.is_presentation)
         .expect("embedded generated presentation");
-    let dependencies = proflow_propresenter::media::presentation_media_dependencies_from_bytes(
+    let dependencies = propresenter::media::presentation_media_dependencies_from_bytes(
         package
             .embedded_file(&presentation_member.name)
             .expect("embedded generated presentation bytes"),
@@ -386,7 +382,7 @@ fn assert_show_relative_export(
         dependencies[0].source(),
         format!("file://{}", stale_media.display())
     );
-    let proflow_propresenter::media::MediaDependencyResolution::Available(resolved) =
+    let propresenter::media::MediaDependencyResolution::Available(resolved) =
         dependencies[0].resolve(Some(runtime.locations().propresenter_root()))
     else {
         panic!("ROOT_SHOW locator did not resolve to available media");

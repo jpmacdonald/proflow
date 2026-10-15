@@ -3,7 +3,7 @@ use crate::project_config::parse_project_config_str;
 use crate::project_config::PresentationTypeKey;
 use crate::workflow::classify::build_plan;
 use crate::workflow::plan::ReadyAction;
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 use tempfile::tempdir;
 
 #[test]

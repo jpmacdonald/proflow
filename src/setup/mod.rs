@@ -13,10 +13,10 @@ use crate::project_config::{
     ContentSourceKind, DisplayBindingConfig, ItemKind, OutputStrategy, PresentationTypeConfig,
     ProjectConfig, ServiceGroupConfig, SpeakerColorConfig,
 };
-use proflow_propresenter::groups::GroupCatalog;
-use proflow_propresenter::library::LibraryCatalog;
-use proflow_propresenter::macros::{MacroCache, MacroSummary};
-use proflow_propresenter::theme::ThemeCache;
+use propresenter::groups::GroupCatalog;
+use propresenter::library::LibraryCatalog;
+use propresenter::macros::{MacroCache, MacroSummary};
+use propresenter::theme::ThemeCache;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AssetCatalog {
@@ -315,9 +315,7 @@ mod tests {
 
     use super::*;
     use crate::project_config::parse_project_config_str;
-    use proflow_propresenter::unstable_native::rv_data::{
-        self, action, CollectionElementType, Uuid,
-    };
+    use propresenter::unstable_native::rv_data::{self, action, CollectionElementType, Uuid};
     use prost::Message;
     use std::path::{Path, PathBuf};
 
@@ -432,7 +430,7 @@ mod tests {
         assert_eq!(catalog.macro_summaries[0].name, "Song");
         assert_eq!(
             catalog.macro_summaries[0].actions[0],
-            proflow_propresenter::macros::MacroActionSummary {
+            propresenter::macros::MacroActionSummary {
                 action_type: "audience_look".to_string(),
                 target: Some("Song Look".to_string()),
             }

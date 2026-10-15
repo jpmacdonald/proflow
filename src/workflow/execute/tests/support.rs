@@ -141,7 +141,7 @@ pub(super) fn presentation_with_size(name: &str, width: f64, height: f64) -> rv_
 
 pub(super) fn fixture_template_slide() -> rv_data::PresentationSlide {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("crates/propresenter/tests/fixtures/native/templates/scripture-template.pro");
+        .join("../propresenter/tests/fixtures/native/templates/scripture-template.pro");
     let bytes = std::fs::read(path).expect("read template fixture");
     let presentation = rv_data::Presentation::decode(bytes.as_slice()).expect("decode fixture");
     presentation
@@ -278,7 +278,7 @@ pub(super) fn prepare_empty(runtime: &TestRuntime, playlist_name: &str) -> Prepa
             .review_build_request(
                 reviewed_request(playlist_name),
                 &[],
-                proflow_propresenter::PresentationSize::FULL_HD,
+                propresenter::PresentationSize::FULL_HD,
             )
             .expect("review an empty plan"),
     )

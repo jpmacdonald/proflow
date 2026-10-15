@@ -7,7 +7,7 @@ use crate::project_config::{
     CueTransform, MacroTransform, RenderRole, RenderStyle, RestyleMacroSelector,
 };
 use crate::workflow::description_parser::SpeakerRole;
-use proflow_propresenter::PresentationSize;
+use propresenter::PresentationSize;
 
 /// Native presentation properties promised by one reviewed semantic plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

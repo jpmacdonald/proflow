@@ -31,7 +31,7 @@ use crate::project_config::{
     ExistingSource, PresentationPolicy, ProjectConfig, ResolvedPresentationType, ReviewPolicy,
     RuleAction,
 };
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 
 /// Build typed workflow plans for a set of Planning Center items.
 pub fn build_plan(
@@ -170,7 +170,7 @@ fn audit_existing_transform_capabilities(
 }
 
 fn transform_traversal_problem(
-    capabilities: &proflow_propresenter::library::LibraryTransformCapabilities,
+    capabilities: &propresenter::library::LibraryTransformCapabilities,
     arrangement: Option<&str>,
     transform: &crate::workflow::plan::ExistingTransform,
 ) -> Option<String> {
@@ -293,7 +293,7 @@ fn audit_mutable_presentation_target_collisions(entries: &mut [ResolvedItemPlan]
                 | ReadyAction::GenerateScripture { .. }
                 | ReadyAction::GenerateTitle { .. },
             ) => {
-                let name = match proflow_propresenter::playlist::canonical_presentation_name(
+                let name = match propresenter::playlist::canonical_presentation_name(
                     &plan.playlist_name,
                     plan.slide_type(),
                 ) {
@@ -353,7 +353,7 @@ fn audit_mutable_presentation_target_collisions(entries: &mut [ResolvedItemPlan]
 
 fn audit_selected_presentation_sizes(
     entries: &mut [ResolvedItemPlan],
-    expected: proflow_propresenter::PresentationSize,
+    expected: propresenter::PresentationSize,
     file_index: Option<&LibraryCatalog>,
 ) {
     let Some(file_index) = file_index else {

@@ -9,7 +9,7 @@ use crate::workflow::library_search::{resolve_exact_library_file, ExactLibraryFi
 use crate::workflow::plan::{
     OutputKey, PlanDisposition, ReadyAction, ResolvedItemPlan, ReviewContext,
 };
-use proflow_propresenter::library::LibraryCatalog;
+use propresenter::library::LibraryCatalog;
 
 pub(super) fn ensure_required_playlist_items(
     entries: &mut Vec<ResolvedItemPlan>,

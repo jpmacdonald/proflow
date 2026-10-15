@@ -11,11 +11,11 @@ use crate::planning_center::{PlanRevisionError, PlanSnapshot};
 use crate::workflow::approval::SourceManifest;
 use crate::workflow::report::BuildServiceEntry;
 use crate::workflow::transaction::{PreparedFileTransaction, StagedArtifact};
-use proflow_propresenter::playlist::{PlaylistExportMode, PlaylistMetadata};
-use proflow_propresenter::text_fit::TextFitContractSummary;
+use propresenter::playlist::{PlaylistExportMode, PlaylistMetadata};
+use propresenter::text_fit::TextFitContractSummary;
 
 use super::RenderAssetFingerprint;
-use proflow_propresenter::playlist::PlaylistExportEvidence;
+use propresenter::playlist::PlaylistExportEvidence;
 
 const RECEIPT_SCHEMA: &str = "proflow.build-receipt.v3";
 const RECEIPT_SUFFIX: &str = ".proflow-build.json";

@@ -35,9 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::paths::expand_user_path;
 use crate::project_config::{BackgroundAssetPath, BackgroundId, ProjectConfig};
 use crate::workflow::plan::ResolvedBackground;
-use proflow_propresenter::playlist::{
-    PlaylistExportIntent, PlaylistExportMode, PlaylistMediaAsset,
-};
+use propresenter::playlist::{PlaylistExportIntent, PlaylistExportMode, PlaylistMediaAsset};
 
 use super::overrides::{EntryOverride, OverrideAction, OverrideSlideType};
 use super::request::BuildRequest;

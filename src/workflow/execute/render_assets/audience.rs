@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use crate::paths::BuildLocations;
 use crate::project_config::ProjectConfig;
-use proflow_propresenter::audience::{
+use propresenter::audience::{
     AudienceDestinationResolver, AudienceLookDestinations, AudienceWorkspaceLoadError,
 };
-use proflow_propresenter::macros::MacroCache;
+use propresenter::macros::MacroCache;
 
 use super::RenderAssetIssue;
 

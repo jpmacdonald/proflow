@@ -13,11 +13,9 @@ use crate::workflow::description_parser::{ParsedContent, ParsedSegment, SpeakerR
 use crate::workflow::plan::{
     CueMacro, OutputKey, PlanSemanticsError, RenderRole, ReviewContext, ScriptureContent,
 };
-use proflow_propresenter::playlist::{
-    playlist_output_path, PlaylistExportIntent, PlaylistMediaAsset,
-};
-use proflow_propresenter::theme::ThemeCacheLoadError;
-use proflow_propresenter::SlideType;
+use propresenter::playlist::{playlist_output_path, PlaylistExportIntent, PlaylistMediaAsset};
+use propresenter::theme::ThemeCacheLoadError;
+use propresenter::SlideType;
 
 mod support;
 use support::*;

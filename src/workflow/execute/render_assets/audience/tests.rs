@@ -13,9 +13,9 @@ use crate::project_config::{
     PresentationTypeConfig, ProjectConfig, RawProjectConfig, RestyleMacroConfig,
     RestyleMacroRegionConfig, RestyleMacroSelectorConfig,
 };
-use proflow_propresenter::audience::PresentationDestination;
-use proflow_propresenter::theme::ThemeCache;
-use proflow_propresenter::unstable_native::rv_data::{
+use propresenter::audience::PresentationDestination;
+use propresenter::theme::ThemeCache;
+use propresenter::unstable_native::rv_data::{
     self, action, action::ActionTypeData, macros_document, pro_audience_look::ProScreenLook,
     pro_presenter_screen, template, Action, CollectionElementType, ProAudienceLook,
     ProPresenterScreen, ProPresenterWorkspace, Url,
@@ -156,7 +156,7 @@ fn configured_dangling_look_becomes_one_typed_render_asset_issue() {
         issues.as_slice(),
         [super::super::RenderAssetIssue::AudienceDestination {
             name,
-            source: proflow_propresenter::audience::AudienceDestinationError::DanglingAudienceLook { .. },
+            source: propresenter::audience::AudienceDestinationError::DanglingAudienceLook { .. },
         }] if name == "Song"
     ));
 }
@@ -197,7 +197,7 @@ fn implicit_role_rejects_an_audience_theme_without_one_text_destination() {
             role,
             name,
             screen_name,
-            source: proflow_propresenter::render::TemplateSlotError::AmbiguousDefaultSlot {
+            source: propresenter::render::TemplateSlotError::AmbiguousDefaultSlot {
                 count: 0
             },
             ..
@@ -230,7 +230,7 @@ fn single_field_role_uses_the_unique_audience_text_destination_regardless_of_nam
         [super::super::RenderAssetIssue::AudienceTextBinding {
             role,
             name,
-            source: proflow_propresenter::render::TemplateSlotError::AmbiguousDefaultSlot {
+            source: propresenter::render::TemplateSlotError::AmbiguousDefaultSlot {
                 count: 2
             },
             ..
@@ -264,7 +264,7 @@ fn render_asset_snapshot_rejects_an_incompatible_audience_text_binding() {
                 [super::super::RenderAssetIssue::AudienceTextBinding {
                     role,
                     name,
-                    source: proflow_propresenter::render::TemplateSlotError::AmbiguousDefaultSlot {
+                    source: propresenter::render::TemplateSlotError::AmbiguousDefaultSlot {
                         count: 0
                     },
                     ..
