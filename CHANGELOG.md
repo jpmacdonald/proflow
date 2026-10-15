@@ -8,7 +8,7 @@ Dates are the day the work landed on `main`.
 
 ## Unreleased
 
-### Shared ProPresenter library (branch `shared-propresenter`)
+### Shared ProPresenter library (merged 2026-10-14)
 
 - `crates/propresenter` (`proflow-propresenter`), `tools/proto-gen`, and
   `tools/schema-audit` moved to the sibling repository `../propresenter`
@@ -16,6 +16,27 @@ Dates are the day the work landed on `main`.
   path. `just proto`, `just schema-audit`, and the codec/package fidelity
   recipes now live there; `docs/schema-audit.md` and
   `docs/text-fit-strategy.md` moved with them.
+- Unfinished: `../propresenter` needs one fix that is written and tested but
+  not committed. A presentation with no arrangement has no group entries
+  (`checked_selected_group_entries`), so the hymn rule's macros fail on
+  unarranged hymn files ("macro region 0 is unavailable"). The patch makes the
+  entries follow cue-group file order, like `checked_operator_cue_indices`.
+  It sits uncommitted in the server's `~/Projects/propresenter` clone and
+  passes that repository's `just local`. The same patch is applied in a
+  separate build copy on the Mac (`~/propresenter`).
+- Unfinished: the Mac's local branch `codex/rust-hygiene` (`9017c85`, module
+  and build hygiene on top of the extraction) is not pushed or merged.
+
+### Fixed (2026-10-14)
+
+- A possible song match carried Planning Center's arrangement name verbatim,
+  so hymns were offered 'Default Arrangement' when the file names it
+  'Default' (or has none), and taking that option failed the build. The
+  candidate now resolves its arrangement against the file. When the file
+  lacks the arrangement, the question asks for one the file has.
+- An item's render failure printed its cause twice under the CLI.
+- Plans 91172659 and 91172669 (October 18, 9am and 10:30) were built and
+  committed into the Mac's local library copy.
 
 ### State as of 2026-10-10
 
