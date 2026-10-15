@@ -16,16 +16,14 @@ Dates are the day the work landed on `main`.
   path. `just proto`, `just schema-audit`, and the codec/package fidelity
   recipes now live there; `docs/schema-audit.md` and
   `docs/text-fit-strategy.md` moved with them.
-- Unfinished: `../propresenter` needs one fix that is written and tested but
-  not committed. A presentation with no arrangement has no group entries
-  (`checked_selected_group_entries`), so the hymn rule's macros fail on
-  unarranged hymn files ("macro region 0 is unavailable"). The patch makes the
-  entries follow cue-group file order, like `checked_operator_cue_indices`.
-  It sits uncommitted in the server's `~/Projects/propresenter` clone and
-  passes that repository's `just local`. The same patch is applied in a
-  separate build copy on the Mac (`~/propresenter`).
-- Unfinished: the Mac's local branch `codex/rust-hygiene` (`9017c85`, module
-  and build hygiene on top of the extraction) is not pushed or merged.
+- `../propresenter` `c1fc788`: a presentation with no arrangement lists its
+  group entries in cue-group file order, like `checked_operator_cue_indices`,
+  so the hymn rule's macros apply to unarranged hymn files.
+- Module and build hygiene (`codex/rust-hygiene`) merged on 2026-10-14:
+  `just local` now runs `just structure` (`scripts/audit_structure.py`), which
+  needs `python3`. The server has none, so run it there as
+  `nix shell nixpkgs#python3 -c nix develop ~/Projects/nix-config#rust -c just local`.
+  `just local`: 541 tests pass on the server.
 
 ### Fixed (2026-10-14)
 
